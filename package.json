@@ -1,0 +1,15 @@
+{
+  "name": "rainroji",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A rainy Japanese backstreet in 3D, drawn like an anime background.",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "shots": "node tools/shots.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "three": "0.186.0"
+  }
+}
