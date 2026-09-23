@@ -26,7 +26,7 @@ export class FSQuad {
   }
 }
 
-const FS_VERT = /* glsl */ `
+export const FS_VERT = /* glsl */ `
 varying vec2 vUv;
 void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -219,10 +219,12 @@ export function makeBlurMaterial() {
 }
 
 export class GroundReflection {
-  constructor(renderer) {
+  // mips: mipmap the sharp copy, for when it is much larger than the blurred one (captures)
+  constructor(renderer, { mips = false } = {}) {
     this.renderer = renderer;
     const opt = { type: THREE.HalfFloatType };
-    this.rt = new THREE.WebGLRenderTarget(4, 4, { ...opt, samples: 2 });
+    const sharp = mips ? { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter } : {};
+    this.rt = new THREE.WebGLRenderTarget(4, 4, { ...opt, ...sharp, samples: 2 });
     this.rtA = new THREE.WebGLRenderTarget(4, 4, opt);
     this.rtB = new THREE.WebGLRenderTarget(4, 4, opt);
     this.cam = new THREE.PerspectiveCamera();
@@ -233,11 +235,14 @@ export class GroundReflection {
     this.q = new THREE.Vector4();
     this.bias = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
   }
-  setSize(w, h) {
+  // w,h: the view size (the sharp reflection is rendered at half of it);
+  // bw,bh: optional explicit size of the blurred copy (sets how soft the smear is)
+  setSize(w, h, bw, bh) {
     const rw = Math.max(4, Math.floor(w * 0.5)), rh = Math.max(4, Math.floor(h * 0.5));
     this.rt.setSize(rw, rh);
-    this.rtA.setSize(Math.floor(rw / 2), Math.floor(rh / 2));
-    this.rtB.setSize(Math.floor(rw / 2), Math.floor(rh / 2));
+    const qw = Math.max(4, bw || Math.floor(rw / 2)), qh = Math.max(4, bh || Math.floor(rh / 2));
+    this.rtA.setSize(qw, qh);
+    this.rtB.setSize(qw, qh);
   }
   update(scene, camera, hide) {
     const r = this.renderer;
@@ -311,6 +316,12 @@ export class GroundReflection {
     U.uReflBlur.value = this.rtA.texture;
     U.uReflOn.value = 1;
   }
+  dispose() {
+    this.rt.dispose();
+    this.rtA.dispose();
+    this.rtB.dispose();
+    this.blur.material.dispose();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +353,10 @@ uniform sampler2D tB3;
 uniform vec2 uRes;
 uniform float uTime;
 uniform float uFade;
+// tiled rendering: where this tile sits in the full image (bloom, vignette, grain are global)
+uniform vec2 uTileOffset;
+uniform vec2 uTileScale;
+uniform vec2 uFullRes;
 uniform vec3 uFadeColor;
 uniform float uDebugNaN;
 varying vec2 vUv;
@@ -354,7 +369,8 @@ void main(){
   vec3 c = texture(tColor, vUv).rgb;
   bool bad = any(isnan(c)) || any(isinf(c));
   if (bad) c = uDebugNaN > 0.5 ? vec3(4.0, 0.0, 4.0) : vec3(0.5);
-  vec3 b = texture(tB1, vUv).rgb * 0.45 + texture(tB2, vUv).rgb * 0.4 + texture(tB3, vUv).rgb * 0.35;
+  vec2 fuv = uTileOffset + vUv * uTileScale;
+  vec3 b = texture(tB1, fuv).rgb * 0.45 + texture(tB2, fuv).rgb * 0.4 + texture(tB3, fuv).rgb * 0.35;
   c += b * 0.6;
   // soft shoulder
   vec3 x = max(c - 0.78, 0.0);
@@ -364,11 +380,11 @@ void main(){
   c = mix(c, c * vec3(0.93, 0.98, 1.07), (1.0 - smoothstep(0.0, 0.45, l)) * 0.6);
   c = mix(vec3(l), c, 1.06);
   // vignette
-  vec2 q = vUv - 0.5;
-  q.x *= uRes.x / uRes.y;
+  vec2 q = fuv - 0.5;
+  q.x *= uFullRes.x / uFullRes.y;
   c *= 1.0 - smoothstep(0.35, 1.25, length(q)) * 0.28;
   vec3 s = toSRGB(c);
-  s += (hash(vUv * uRes + fract(uTime) * 91.0) - 0.5) / 255.0 * 2.0;
+  s += (hash(fuv * uFullRes + fract(uTime) * 91.0) - 0.5) / 255.0 * 2.0;
   s = mix(uFadeColor, s, uFade);
   gl_FragColor = vec4(s, 1.0);
 }`;
@@ -388,6 +404,7 @@ export class Post {
         uniforms: {
           tColor: { value: null }, tB1: { value: null }, tB2: { value: null }, tB3: { value: null },
           uRes: { value: new THREE.Vector2() }, uTime: U.uTime, uFade: { value: 0 },
+          uTileOffset: { value: new THREE.Vector2(0, 0) }, uTileScale: { value: new THREE.Vector2(1, 1) }, uFullRes: { value: new THREE.Vector2(1, 1) },
           uFadeColor: { value: new THREE.Color(0.72, 0.75, 0.78) },
           uDebugNaN: { value: /[?&]nan/.test(location.search) ? 1 : 0 },
         },
@@ -409,9 +426,9 @@ export class Post {
     }
     this.comp.material.uniforms.uRes.value.set(w, h);
   }
-  render(fade) {
+  // bright pass + blur/downsample chain (reads this.main)
+  bloom() {
     const r = this.renderer;
-    // bright pass into level 0, then blur/downsample chain
     let src = this.main.texture;
     for (let i = 0; i < 3; i++) {
       const A = this.b[i * 2], B = this.b[i * 2 + 1];
@@ -432,12 +449,32 @@ export class Post {
       this.blur.render(r, A);
       src = A.texture;
     }
+  }
+  // grade + bloom + vignette into target (null = screen). tile: { offset, scale, fullRes }
+  composite(target, colorTex, fade, tile) {
     const u = this.comp.material.uniforms;
-    u.tColor.value = this.main.texture;
+    u.tColor.value = colorTex || this.main.texture;
     u.tB1.value = this.b[0].texture;
     u.tB2.value = this.b[2].texture;
     u.tB3.value = this.b[4].texture;
     u.uFade.value = fade;
-    this.comp.render(r, null);
+    if (tile) {
+      u.uTileOffset.value.set(...tile.offset);
+      u.uTileScale.value.set(...tile.scale);
+      u.uFullRes.value.set(...tile.fullRes);
+    } else {
+      u.uTileOffset.value.set(0, 0);
+      u.uTileScale.value.set(1, 1);
+      u.uFullRes.value.copy(u.uRes.value);
+    }
+    this.comp.render(this.renderer, target);
+  }
+  render(fade) {
+    this.bloom();
+    this.composite(null, null, fade);
+  }
+  dispose() {
+    this.main.dispose();
+    for (const b of this.b) b.dispose();
   }
 }

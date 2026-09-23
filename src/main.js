@@ -4,9 +4,10 @@ import { makeSky } from './sky.js';
 import { SkyOcclusion, RainMap, GroundReflection, Post, LAYER_OCC } from './render.js';
 import { buildWorld } from './world/index.js';
 import { makeRain } from './fx/rain.js';
-import { makeSoundToggle } from './ui.js';
+import { makeSoundToggle, makeShotButton } from './ui.js';
 import { Emitter } from './builder.js';
 import { makeGhostCamera } from './camera.js';
+import { makeCapture } from './capture.js';
 
 export function start({ audio } = {}) {
   const params = new URLSearchParams(location.search);
@@ -48,7 +49,12 @@ export function start({ audio } = {}) {
 
   // --- sizing ----------------------------------------------------------------
   let W = 0, H = 0;
+  let capturing = false, resizeLater = false;
   function resize() {
+    if (capturing) {
+      resizeLater = true;
+      return;
+    }
     const w = shot ? +(params.get('w') || 1600) : window.innerWidth;
     const h = shot ? +(params.get('h') || 900) : window.innerHeight;
     renderer.setPixelRatio(pixelRatio);
@@ -69,9 +75,6 @@ export function start({ audio } = {}) {
   resize();
   window.addEventListener('resize', resize);
 
-  // --- sound toggle -------------------------------------------------------------
-  if (audio && !shot) makeSoundToggle(audio);
-
   // --- loop -----------------------------------------------------------------------
   const clock = new THREE.Timer();
   let t = +(params.get('t') || 0);
@@ -83,12 +86,37 @@ export function start({ audio } = {}) {
   if (params.has('noglow') && world.glowMesh) world.glowMesh.visible = false;
   if (params.has('norefl')) refl.update = () => { U.uReflOn.value = 0; };
 
+  // --- high-resolution capture of the current frame (time stands still meanwhile) ---
+  const capture = makeCapture({ renderer, scene, camera, post, refl, rain, hide: hideInRefl.filter(Boolean) });
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches;
+  const smallGPU = coarse || (navigator.deviceMemory && navigator.deviceMemory < 4);
+  async function takeShot(opts = {}) {
+    if (capturing) return null;
+    capturing = true;
+    try {
+      return await capture({ long: +params.get('cap') || 3840, ss: 2, tile: smallGPU ? 512 : 768, reflScale: smallGPU ? 0.5 : 0.75, ...opts });
+    } finally {
+      capturing = false;
+      if (resizeLater) {
+        resizeLater = false;
+        resize();
+      }
+    }
+  }
+
+  // --- small corner buttons ----------------------------------------------------------
+  if (!shot) {
+    if (audio) makeSoundToggle(audio);
+    makeShotButton(takeShot);
+  }
+
   function stepCamera(dt) {
     rig.update(dt);
   }
 
   function frame(ts) {
     clock.update(ts);
+    if (capturing) return;
     const dt = Math.min(clock.getDelta(), 0.1);
     t += dt;
     U.uTime.value = t;
@@ -136,6 +164,7 @@ export function start({ audio } = {}) {
     };
     window.__world = world;
     window.THREE_Vector3 = THREE.Vector3;
+    window.__capture = takeShot;
     // headless camera simulation (no rendering) for control tests
     window.__sim = {
       camera,

@@ -38,6 +38,8 @@
 
 **环绕视角**：视角围绕前方的一个中心点转，像把模型拿在手里看。拖动 = 绕中心旋转，滚轮 / 双指捏合 = 缩放，右键拖动 / 双指拖动 = 平移，双击 = 把点到的位置设为新的中心并滑过去，WASD / 摇杆 = 带着中心一起在地面上移动。镜头同样不会穿进房子。
 
+**截图**：右下角最上面的相机按钮（电脑上按 P）随时截取当前画面。画面会定格，按 4K（长边 3840 像素，手机竖屏就是 3840 高）重新渲染一遍：分块渲染，每块 2×2 超采样再叠加 4× MSAA，在线性光下降采样；地面反射、泛光、暗角和颗粒按整张图统一计算，所以拼接处没有接缝；远处的天空遮蔽也用完整算法。完成后自动下载 PNG（`rainroji-日期-时间.png`），并在角落弹出预览卡片，可以再次保存、点开原图，支持的手机上还能直接分享（iPhone 可在分享菜单里存到相册，或长按预览图保存）。
+
 镜头只随你的输入移动，没有任何自动的“弹簧臂”或回弹，所以不会突然切换画面。
 碰撞：房屋、屋顶、石垣高台、站台、海堤等注册为实体（`ctx.solid`），镜头是半径 0.35 m 的球，每 0.2 m 分步推出；地面、运河水面、海面托住镜头。
 `node tools/camtest.mjs` / `node tools/touchtest.mjs` 用无头浏览器在两种模式下模拟飞行、撞墙、潜入运河桥下、绕房子旋转、缩放、平移、双击滑行和各种触屏手势，检查镜头有没有被碰撞“弹”走、视角有没有突跳、有没有穿进房子，以及手势方向是否正确。
@@ -74,8 +76,10 @@ node tools/build.mjs          # dist/dev.html、rainroji-single.html、site/
 node tools/shots.mjs dist/dev.html start,harbour,station   # 按预设视角截图（dist/shots/）
 node tools/shotat.mjs dist/dev.html out 960 540 'name:x,y,z:tx,ty,tz[:t]'   # 任意位置/时间截图
 node tools/camtest.mjs && node tools/touchtest.mjs            # 镜头与触屏测试
+node tools/capturetest.mjs dist/dev.html start 1280          # 截图：分块 vs 整张渲染对比，检查接缝
+# dist/dev.html?cap=1280：截图按钮改为输出长边 1280（测试用）
 # dist/dev.html?stats&audit：打印顶点数，并检查道具之间、道具与房子之间、地块之间有没有重叠
 python3 tools/prep_audio.py   # 重新下载并处理 site/audio/ 的素材（需要 numpy、imageio-ffmpeg）
 ```
 
-源码结构：`src/main.js`（渲染循环）、`src/camera.js`（幽灵镜头）、`src/shaders.js`（toon / 玻璃材质）、`src/render.js`（天空遮蔽、反射、后期）、`src/world/*`（岛的生成：`layout.js` 海岸线与道路，`terrain.js` 地形/海/树林，`coast.js` 海堤/港口/船，`rail.js` 铁路/车站/隧道/跨海桥，`shops.js` 店铺室内，`fields.js` 稻田/沙滩，`movers.js` 车、船、海鸥）、`src/fx/*`（雨、光晕）、`src/audio/*`（两套声音）。
+源码结构：`src/main.js`（渲染循环）、`src/camera.js`（幽灵镜头）、`src/capture.js`（高清截图）、`src/shaders.js`（toon / 玻璃材质）、`src/render.js`（天空遮蔽、反射、后期）、`src/world/*`（岛的生成：`layout.js` 海岸线与道路，`terrain.js` 地形/海/树林，`coast.js` 海堤/港口/船，`rail.js` 铁路/车站/隧道/跨海桥，`shops.js` 店铺室内，`fields.js` 稻田/沙滩，`movers.js` 车、船、海鸥）、`src/fx/*`（雨、光晕）、`src/audio/*`（两套声音）。

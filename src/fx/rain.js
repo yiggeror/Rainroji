@@ -386,5 +386,10 @@ export function makeRain(scene, world) {
       mid.material.uniforms.uPix.value = pix;
       void dt;
     },
+    // world-space size of one pixel at 1 m (for renders at a resolution other than the canvas)
+    setPix(pix) {
+      near.material.uniforms.uPix.value = pix;
+      mid.material.uniforms.uPix.value = pix;
+    },
   };
 }

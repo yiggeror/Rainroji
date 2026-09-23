@@ -49,6 +49,8 @@ export const U = {
   // lighthouses (x red, y white), boat mast lamps (z), spare (w)
   uBlink: { value: new THREE.Vector4(1, 1, 1, 1) },
   uCheap: { value: 0 },
+  // beyond this distance sky visibility uses a cheap estimate (raised for captures)
+  uSkyFar: { value: 230 },
 };
 
 // ---------------------------------------------------------------------------
@@ -140,11 +142,12 @@ uniform float uSkyBias[${NUM_SKY}];
 uniform vec2 uSkyTile;
 uniform float uSkyOn;
 uniform float uCheap;
+uniform float uSkyFar;
 
 float skyVisibility(vec3 wp, vec3 n){
   if (uSkyOn < 0.5) return 1.0;
   // the reflection pass and far-away pixels don't need the full 12-tap estimate
-  if (uCheap > 0.5 || length(wp - cameraPosition) > 230.0) return 0.82 + 0.18 * n.y;
+  if (uCheap > 0.5 || length(wp - cameraPosition) > uSkyFar) return 0.82 + 0.18 * n.y;
   float sum = 0.0, wsum = 0.0;
   vec3 p = wp + n * 0.12;
   for (int i = 0; i < ${NUM_SKY}; i++){
