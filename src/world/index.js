@@ -13,7 +13,7 @@ import { buildPaddies, buildBeach } from './fields.js';
 import { detached, oldHouse } from './house.js';
 import { apartment, cornerShop, closedShop, workshop, mansion, parkingLot, field, park, vacant, shrine, fishMarket, coopOffice, boatShed } from './buildings.js';
 import { buildPoles } from './poles.js';
-import { buildRail, buildTrain, railY } from './rail.js';
+import { buildRail, buildTrain, railY, TRAIN } from './rail.js';
 import { buildCanal } from './canal.js';
 import { buildDistant } from './distant.js';
 import { makeMovers } from './movers.js';
@@ -363,10 +363,39 @@ export function buildWorld(scene, renderer) {
     group.add(pivot);
     return { pivot, arm, dir: g.dir };
   });
-  const trainDef = buildTrain(ctx);
-  const train = new THREE.Mesh(trainDef.geo, toon);
-  train.frustumCulled = false;
-  group.add(train);
+  // the train: four cars, each placed on the rails at its own bogies
+  const trainDef = buildTrain();
+  const glassMat = makeGlassMaterial();
+  const cars = trainDef.cars.map((c) => {
+    const m = new THREE.Mesh(c.geo, toon);
+    m.matrixAutoUpdate = false;
+    m.frustumCulled = false;
+    const g = new THREE.Mesh(c.glass, glassMat);
+    g.renderOrder = 2;
+    g.frustumCulled = false;
+    m.add(g);
+    m.visible = false;
+    group.add(m);
+    return m;
+  });
+  const _X = new THREE.Vector3(), _Y = new THREE.Vector3(), _Z = new THREE.Vector3();
+  // head: x of the leading end, dir: +1 east / -1 west
+  function placeTrain(head, dir, track) {
+    const { L, gap } = TRAIN;
+    for (let k = 0; k < cars.length; k++) {
+      const m = cars[k];
+      const center = head - dir * ((cars.length - 1 - k) * (L + gap) + L / 2);
+      const xf = center + dir * (L / 2 - 2.5), xb = center - dir * (L / 2 - 2.5);
+      const yf = railY(xf), yb = railY(xb);
+      _X.set(xf - xb, yf - yb, 0).normalize();
+      _Z.set(0, 0, dir);
+      _Y.crossVectors(_Z, _X).normalize();
+      m.matrix.makeBasis(_X, _Y, _Z).setPosition(center, (yf + yb) / 2, track);
+      m.matrixWorldNeedsUpdate = true;
+      // hidden once deep in the tunnel or far out in the mist
+      m.visible = center > RAIL.portal - L && center < 760;
+    }
+  }
 
   // glows (lamp halos)
   const glows = makeGlows(scene, ctx.glows);
@@ -407,8 +436,11 @@ export function buildWorld(scene, renderer) {
   function makeRun(dir, x0, v0, xStop, a1, dwell, a2, v2, xEnd) {
     const bd = (v0 * v0) / (2 * a1);
     const xb = xStop - dir * bd;
-    const T1 = Math.abs(xb - x0) / v0, T2 = v0 / a1, T3 = dwell, T4 = v2 / a2, d4 = (v2 * v2) / (2 * a2);
-    const T5 = Math.max(0, (Math.abs(xEnd - xStop) - d4) / v2);
+    const T1 = Math.abs(xb - x0) / v0, T2 = v0 / a1, T3 = dwell;
+    const dist = Math.abs(xEnd - xStop), d4full = (v2 * v2) / (2 * a2);
+    const T4 = dist <= d4full ? Math.sqrt((2 * dist) / a2) : v2 / a2;
+    const d4 = Math.min(dist, d4full);
+    const T5 = Math.max(0, (dist - d4) / v2);
     const total = T1 + T2 + T3 + T4 + T5;
     const at = (t) => {
       if (t < T1) return { x: x0 + dir * v0 * t, v: v0 };
@@ -423,14 +455,17 @@ export function buildWorld(scene, renderer) {
     };
     return { dir, total, at, track: dir < 0 ? RAIL.tracks[0] : RAIL.tracks[1] };
   }
-  const runW = makeRun(-1, 720, 16, RAIL.platform[0] - 0.3, 0.8, 24, 0.75, 13, RAIL.portal - 330);
-  const runE = makeRun(1, RAIL.portal - 300, 12, RAIL.platform[1] + 0.2, 0.8, 24, 0.7, 16, 720);
-  const GAP = 14;
-  const PERIOD = runW.total + runE.total + GAP * 2;
+  // westbound: appears out of the mist on the sea bridge, stops, and is gone once
+  // the last car is inside the tunnel. Eastbound: from the tunnel mouth to the mist.
+  const runW = makeRun(-1, 430, 16, RAIL.platform[0] - 0.3, 0.8, 24, 0.75, 13, RAIL.portal - LEN - 4);
+  const runE = makeRun(1, RAIL.portal - 1, 10, RAIL.platform[1] + 0.2, 0.8, 24, 0.7, 16, 430 + LEN);
+  // quiet gaps: ~25 s with no train in sight (the far ends of the runs are in the mist)
+  const GAP_AFTER_W = 25, GAP_AFTER_E = 13;
+  const PERIOD = runW.total + GAP_AFTER_W + runE.total + GAP_AFTER_E;
   function trainAt(t) {
     let u = ((t % PERIOD) + PERIOD) % PERIOD;
     if (u < runW.total) return { run: runW, ...runW.at(u) };
-    u -= runW.total + GAP;
+    u -= runW.total + GAP_AFTER_W;
     if (u >= 0 && u < runE.total) return { run: runE, ...runE.at(u) };
     return null;
   }
@@ -448,25 +483,14 @@ export function buildWorld(scene, renderer) {
   function updateTrain(t, dt) {
     const s = trainAt(t);
     if (s) {
-      const dir = s.run.dir, head = s.x, tail = head - dir * LEN;
-      const mid = (head + tail) / 2;
-      const y = railY(mid) - 0.2 + 0.2;
-      if (dir > 0) {
-        train.position.set(head - LEN, y, s.run.track);
-        train.rotation.set(0, 0, Math.atan2(railY(head) - railY(tail), LEN));
-      } else {
-        train.position.set(head + LEN, y, s.run.track);
-        train.rotation.set(0, Math.PI, Math.atan2(railY(tail) - railY(head), LEN));
-      }
-      // hidden once it is deep in the tunnel or lost in the fog
-      train.visible = Math.max(head, tail) > RAIL.portal - 150 && Math.min(head, tail) < 760;
-      train.updateMatrix();
-      train.updateMatrixWorld();
+      const dir = s.run.dir, head = s.x;
+      placeTrain(head, dir, s.run.track);
+      const active = cars.some((c) => c.visible);
       dynLights[1].p.set(head + dir * 6, railY(head) + 1.3, s.run.track);
-      dynLights[1].intensity = train.visible && head > RAIL.portal - 10 && head < 420 ? 1.2 : 0;
-      state.train = { x: head, dir, active: train.visible, z: s.run.track, v: s.v, stopped: !!s.stopped };
+      dynLights[1].intensity = active && head > RAIL.portal - 10 && head < 420 ? 1.2 : 0;
+      state.train = { x: head, dir, active, z: s.run.track, v: s.v, stopped: !!s.stopped };
     } else {
-      train.visible = false;
+      for (const c of cars) c.visible = false;
       dynLights[1].intensity = 0;
       state.train = { x: 9999, dir: 1, active: false };
     }

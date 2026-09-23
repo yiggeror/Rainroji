@@ -118,7 +118,7 @@ export function buildBeach(ctx, H, boats) {
     if (h < -0.2) continue;
     n++;
     ctx.chunk(x, z);
-    pine(ctx, x, h, z, { h: rng.range(6, 10.5), lean: [rng.range(-1.2, 1.2), rng.range(0.4, 2.2)] });
+    pine(ctx, x, h, z, { h: rng.range(8.5, 14), lean: [rng.range(-1.2, 1.2), rng.range(-2.2, -0.4)] });
     if (rng.chance(0.3)) bush(ctx, x + rng.range(-2, 2), h, z + rng.range(-2, 2), rng.range(0.4, 0.8), { color: '#557a3e' });
   }
   // net drying racks and two boats hauled up the beach

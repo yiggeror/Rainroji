@@ -443,33 +443,54 @@ export function sugi(ctx, x, y, z, o = {}) {
   }
 }
 
-// Black pine (kuromatsu) of the beach grove: leaning trunk, flat layered crowns
+// Black pine (kuromatsu) of the beach grove: a tall, bare, gently twisting trunk
+// leaning away from the sea wind, and an irregular crown of overlapping needle
+// masses (not flat bonsai pads) gathered at the top.
 export function pine(ctx, x, y, z, o = {}) {
   const E = ctx.E, rng = ctx.rng;
-  const h = o.h || rng.range(6, 10);
+  const h = o.h || rng.range(9, 14);
   const lean = o.lean || [rng.range(-1.5, 1.5), rng.range(-1.5, 1.5)];
-  // a gently snaking trunk leaning away from the sea wind
   const pts = [];
-  for (let i = 0; i <= 5; i++) {
-    const t = i / 5;
-    const wob = Math.sin(t * 5 + x) * 0.25 * t;
-    pts.push([x + lean[0] * t * t + wob, y - 0.2 + h * t, z + lean[1] * t * t + wob * 0.5]);
+  const ph = rng.range(0, 6);
+  for (let i = 0; i <= 7; i++) {
+    const t = i / 7;
+    const wob = Math.sin(t * 4.2 + ph) * 0.35 * t;
+    pts.push([x + lean[0] * t * t + wob, y - 0.2 + h * t, z + lean[1] * t * t + wob * 0.6]);
   }
-  E.with({ color: col('#6b5646'), pat: PAT.WOOD, gloss: 0.1, weather: 0.3 }, () => E.tube(pts, pts.map((_, i) => h * (0.024 - i * 0.0032)), 6));
-  const leafCol = o.color || rng.pick(['#3f6540', '#3a5f3c', '#46693f']);
-  const n = rng.int(4, 6);
+  E.with({ color: col('#5f4c3e'), pat: PAT.WOOD, gloss: 0.1, weather: 0.3 }, () => E.tube(pts, pts.map((_, i) => h * (0.026 - i * 0.0026)), 7));
+  const leafCol = o.color || rng.pick(['#35573c', '#3a5d3f', '#2f513a']);
+  const top = pts[7];
+  const masses = [];
+  // the leader: one or two big masses at the top
+  masses.push({ at: 7, a: 0, reach: 0, r: rng.range(1.9, 2.6), up: 0.35 });
+  if (rng.chance(0.6)) masses.push({ at: 7, a: rng.range(0, 6.3), reach: rng.range(1.0, 1.6), r: rng.range(1.4, 1.9), up: 0 });
+  // side branches along the upper trunk, reaching out and slightly down
+  const n = rng.int(4, 7);
   for (let i = 0; i < n; i++) {
-    const t = 0.5 + (i / (n - 1)) * 0.5;
-    const k = Math.min(4, Math.floor(t * 5));
-    const p = pts[k];
-    const a = rng.range(0, Math.PI * 2);
-    const reach = rng.range(0.8, 2.0) * (1.1 - t * 0.5);
-    const cx = p[0] + Math.cos(a) * reach, cz = p[2] + Math.sin(a) * reach;
-    const cy = y + h * t + rng.range(-0.2, 0.3);
-    const r = rng.range(1.0, 1.7) * (1.15 - t * 0.35);
-    E.with({ color: col('#4d3e33'), pat: PAT.WOOD, gloss: 0.1 }, () => E.tube([[p[0], cy - 0.25, p[2]], [(p[0] + cx) / 2, cy + 0.1, (p[2] + cz) / 2], [cx, cy, cz]], [0.07, 0.05, 0.03], 4));
-    // flat pad of needles: a thin dark core with lighter needle cards on top
-    E.with({ color: col(leafCol).multiplyScalar(0.62), pat: PAT.LEAF, gloss: 0.05 }, () => E.geom(blobGeometry(), new THREE.Matrix4().compose(new THREE.Vector3(cx, cy + 0.05, cz), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, a, 0)), new THREE.Vector3(r * 0.85, r * 0.2, r * 0.75))));
-    clump(ctx, cx, cy + 0.18, cz, r * 1.05, r * 0.26, r * 0.95, { tile: 'small', color: leafCol, size: 0.5, n: Math.round(r * 22), sway: 0.05, bend: 0.35 });
+    const at = Math.min(6, 4 + Math.floor((i / n) * 3.2));
+    masses.push({ at, a: rng.range(0, 6.3), reach: rng.range(1.2, 2.8) * (1 - (at - 4) * 0.12), r: rng.range(1.1, 1.8), up: rng.range(-0.4, 0.2) });
   }
+  const g = blobGeometry();
+  for (const m of masses) {
+    const p = pts[m.at];
+    const cx = p[0] + Math.cos(m.a) * m.reach, cz = p[2] + Math.sin(m.a) * m.reach;
+    const cy = p[1] + m.up + (m.at === 7 ? 0.2 : 0);
+    if (m.reach > 0.3) {
+      // the branch, bending down a little then up to the mass
+      E.with({ color: col('#4d3e33'), pat: PAT.WOOD, gloss: 0.1 }, () => E.tube([[p[0], p[1] - 0.1, p[2]], [(p[0] + cx) / 2, cy - 0.25, (p[2] + cz) / 2], [cx, cy - 0.1, cz]], [0.09, 0.06, 0.035], 5));
+    }
+    // each mass = a few overlapping tufts, so the outline is ragged, not a ball
+    const outer = new THREE.Vector3(cx, cy, cz);
+    const tufts = m.r > 1.6 ? 4 : 3;
+    for (let q = 0; q < tufts; q++) {
+      const ta = m.a + (q / tufts) * Math.PI * 2 + rng.range(-0.5, 0.5);
+      const tr = q === 0 ? 0 : m.r * rng.range(0.35, 0.6);
+      const tx = cx + Math.cos(ta) * tr, tz = cz + Math.sin(ta) * tr, ty = cy + rng.range(-0.25, 0.3) * m.r * 0.5;
+      const rr = m.r * (q === 0 ? 0.75 : rng.range(0.5, 0.65));
+      const rx = rr * rng.range(0.95, 1.2), ry = rr * rng.range(0.55, 0.75), rz = rr * rng.range(0.9, 1.15);
+      E.with({ color: col(leafCol).multiplyScalar(0.55), pat: PAT.LEAF, gloss: 0.05 }, () => E.geom(g, new THREE.Matrix4().compose(new THREE.Vector3(tx, ty, tz), new THREE.Quaternion().setFromEuler(new THREE.Euler(rng.range(-0.3, 0.3), ta, rng.range(-0.3, 0.3))), new THREE.Vector3(rx * 0.62, ry * 0.6, rz * 0.62))));
+      clump(ctx, tx, ty + ry * 0.1, tz, rx, ry, rz, { tile: 'small', color: leafCol, size: Math.min(1.1, 0.55 + rr * 0.35), n: Math.round(rr * rr * 10 + 12), sway: 0.05, bend: 0.55, outer });
+    }
+  }
+  void top;
 }

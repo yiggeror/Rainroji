@@ -43,7 +43,10 @@ function report(name, before, after) {
   let maxJump = 0;
   for (let i = 1; i < path_.length; i++) maxJump = Math.max(maxJump, d(path_[i].pos, path_[i - 1].pos));
   const turned = Math.acos(Math.min(1, before.dir[0] * after.dir[0] + before.dir[1] * after.dir[1] + before.dir[2] * after.dir[2])) * 57.3;
-  console.log(name.padEnd(26), JSON.stringify({ moved: +d(before.pos, after.pos).toFixed(2), turnedDeg: +turned.toFixed(1), end: fmt(after.pos), maxStep: +maxJump.toFixed(2) }));
+  // + = looked up / turned right
+  const pitchDeg = (Math.asin(after.dir[1]) - Math.asin(before.dir[1])) * 57.3;
+  const yawRight = before.dir[0] * after.dir[2] - before.dir[2] * after.dir[0] > 0 ? 'right' : 'left';
+  console.log(name.padEnd(26), JSON.stringify({ moved: +d(before.pos, after.pos).toFixed(2), turnedDeg: +turned.toFixed(1), pitchDeg: +pitchDeg.toFixed(1), turn: turned > 1 ? yawRight : '-', end: fmt(after.pos), maxStep: +maxJump.toFixed(2) }));
   path_ = [];
 }
 const joy = await page.evaluate(() => { const e = document.querySelector('.rr-joy'); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
@@ -51,7 +54,13 @@ console.log('joystick', joy ? 'present' : 'MISSING');
 
 await reset(); let b = await state();
 await gesture(30, (t) => [[150 + 120 * t, 300]]);
-report('one finger look', b, await state());
+report('free: swipe right', b, await state());
+await reset(); b = await state();
+await gesture(30, (t) => [[195, 420 - 150 * t]]);
+report('free: swipe up', b, await state());
+await reset(); b = await state();
+await gesture(30, (t) => [[195, 270 + 150 * t]]);
+report('free: swipe down', b, await state());
 
 await reset(); b = await state();
 await gesture(30, (t) => [[195 - 40 - 80 * t, 300], [195 + 40 + 80 * t, 300]]);
@@ -71,6 +80,14 @@ for (let k = 0; k < 2; k++) {
 path_.push(...(await steps(180)));
 report('double tap (glide)', b, await state());
 
+await page.evaluate(() => window.__sim.rig.setMode('orbit'));
+await reset(); b = await state();
+await gesture(40, (t) => [[120 + 150 * t, 300]]);
+report('orbit: swipe right', b, await state());
+await reset(); b = await state();
+await gesture(30, (t) => [[195 - 40 - 80 * t, 300], [195 + 40 + 80 * t, 300]]);
+report('orbit: pinch apart (zoom)', b, await state());
+await page.evaluate(() => window.__sim.rig.setMode('free'));
 if (joy) {
   await reset(); b = await state();
   await gesture(120, (t) => [[joy[0], joy[1] - Math.min(1, t * 4) * 38]]);

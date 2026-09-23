@@ -26,6 +26,11 @@ const S = {
   'pan right-drag': { frames: 300, act: 'if (i === 0) r.panStart(160, 90); const k = Math.min(1, i / 12); r.pan(-3 * k, 0.5 * k)' },
   'glide to centre': { frames: 240, act: 'if (i === 0) r.glideTo(160, 100)' },
   'stairs up to terrace': { start: [[-20, 1.6, 0], [-40, 5, 0]], frames: 480, act: "r.keys.add('KeyW')" },
+  'orbit: drag around 360': { mode: 'orbit', frames: 600, act: 'r.orbitDrag(3, Math.sin(i / 50) * 1.5)' },
+  'orbit: around a house': { mode: 'orbit', start: [[14, 3, -9], [9.5, 2, -9.5]], frames: 600, act: 'r.orbitDrag(4, 0)' },
+  'orbit: zoom in and out': { mode: 'orbit', frames: 400, act: 'r.dolly(i < 200 ? 0.6 : -1.2)' },
+  'orbit: pan + keys': { mode: 'orbit', frames: 400, act: "if (i === 0) r.panStart(160, 90); r.pan(2, 0); r.keys.add('KeyW')" },
+  'orbit: glide to centre': { mode: 'orbit', frames: 240, act: 'if (i === 0) r.glideTo(160, 100)' },
   'random stress': { frames: 3600, act: `
     const k = ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','ShiftLeft'];
     if (i % 45 === 0) { r.keys.clear(); for (const c of k) if (Math.random() < 0.3) r.keys.add(c); }
@@ -38,6 +43,7 @@ for (const [name, sc] of Object.entries(S)) {
     const Sm = window.__sim, W = window.__world;
     const v = W.views.start;
     const st = sc.start || [v.pos, v.target];
+    Sm.rig.setMode(sc.mode || 'free');
     Sm.reset(st[0], st[1]);
     const act = new Function('r', 'i', sc.act);
     const out = [];
@@ -47,22 +53,26 @@ for (const [name, sc] of Object.entries(S)) {
     for (let i = 0; i < 60; i++) out.push(Sm.step(1 / 60));
     const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
     const steps = out.map((o, i) => (i ? d(o.pos, out[i - 1].pos) : 0));
-    let jumps = 0, maxStep = 0, inside = 0, maxAccel = 0;
+    // a jump = the camera moved further than the input asked for (a collision pop / teleport),
+    // or the view direction snapped by more than 8 degrees in one frame
+    let jumps = 0, maxStep = 0, inside = 0, maxExtra = 0, maxTurn = 0;
     const P = new window.THREE_Vector3();
-    for (let i = 2; i < out.length; i++) {
+    for (let i = 1; i < out.length; i++) {
       maxStep = Math.max(maxStep, steps[i]);
-      // a jump: a step much larger than the steps around it (velocity is smoothed)
-      const ref = Math.max(steps[i - 1], steps[i - 2], 0.02);
-      const acc = steps[i] - ref;
-      maxAccel = Math.max(maxAccel, acc);
-      if (acc > 0.25) jumps++;
+      const extra = out[i].actual - out[i].intended;
+      maxExtra = Math.max(maxExtra, extra);
+      const a = out[i - 1].dir, b = out[i].dir;
+      const turn = Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) * 57.3;
+      maxTurn = Math.max(maxTurn, turn);
+      if (extra > 0.3 || turn > 8) jumps++;
       P.set(...out[i].pos);
       if (W.inside(P)) inside++;
     }
     const e = out[out.length - 1];
-    return { jumps, maxStep: +maxStep.toFixed(2), maxAccel: +maxAccel.toFixed(2), inside, end: e.pos.map((x) => +x.toFixed(1)) };
+    return { jumps, maxStep: +maxStep.toFixed(2), maxExtra: +maxExtra.toFixed(2), maxTurnDeg: +maxTurn.toFixed(1), inside, end: e.pos.map((x) => +x.toFixed(1)) };
   }, [sc]);
   if (res.jumps || res.inside) bad++;
+  if (sc.mode) await page.evaluate(() => window.__sim.rig.setMode('free'));
   console.log(name.padEnd(30), JSON.stringify(res));
 }
 console.log(bad ? `FAILED scenarios: ${bad}` : 'all clean');

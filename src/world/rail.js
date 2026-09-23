@@ -279,87 +279,242 @@ export function buildRail(ctx) {
   void rng;
 }
 
-// Commuter train as its own mesh, built once
-export function buildTrain(ctx) {
+// ---------------------------------------------------------------------------
+// Commuter EMU (4 cars, stainless with a green band). Each car is its own
+// geometry so it can sit on the rails at its own bogies (the line climbs onto
+// the sea bridge). Local frame per car: x along the car (-L/2..L/2), y = 0 at
+// the rail head, z across. cab: +1 = driving cab at +x, -1 = at -x, 0 = none.
+// Windows are real openings with a lit interior behind clear glass.
+// ---------------------------------------------------------------------------
+export const TRAIN = { cars: 4, L: 19.5, gap: 0.5, W: 2.9, H: 3.65 };
+const STRAP_RING = new THREE.TorusGeometry(0.055, 0.01, 4, 10);
+TRAIN.length = TRAIN.cars * (TRAIN.L + TRAIN.gap) - TRAIN.gap;
+
+function buildCar(cab, pantograph) {
   const E = new Emitter();
-  const sink = new Sink('train');
+  const sink = new Sink('car'), glass = new Sink('carGlass');
   E.sink = sink;
-  const rng = ctx.rng;
-  const cars = 4, L = 19.5, gap = 0.5, W = 2.9, H = 3.65;
-  const body = col('#cfd2d6');
-  const stripe = col('#2f8f5a');
-  for (let c = 0; c < cars; c++) {
-    const x0 = c * (L + gap);
-    E.with({ color: body, pat: PAT.PLAIN, gloss: 0.8, weather: 0 }, () => {
-      E.box(x0, 0.95, -W / 2, x0 + L, H, W / 2);
-    });
-    // roof
-    E.with({ color: col('#9ea2a6'), pat: PAT.PLAIN, gloss: 0.5 }, () => {
-      E.box(x0 + 0.2, H, -W / 2 + 0.25, x0 + L - 0.2, H + 0.18, W / 2 - 0.25);
-      for (let k = 0; k < 3; k++) E.box(x0 + 3 + k * 6, H + 0.18, -0.5, x0 + 4.4 + k * 6, H + 0.42, 0.5);
-    });
-    E.with({ color: stripe, pat: PAT.PLAIN, gloss: 0.6 }, () => {
-      E.box(x0, 2.05, -W / 2 - 0.005, x0 + L, 2.25, W / 2 + 0.005, { py: true, ny: true });
-      E.box(x0, H - 0.22, -W / 2 - 0.005, x0 + L, H - 0.12, W / 2 + 0.005, { py: true, ny: true });
-    });
-    for (const s of [-1, 1]) {
-      // windows (lit interior) and doors
-      for (let k = 0; k < 4; k++) {
-        const dx = x0 + 1.6 + k * 5.0;
-        E.with({ color: col('#e8ecef'), pat: PAT.EMIT, emit: 1.1 }, () => {
-          const wx0 = dx + 1.35, wx1 = dx + 3.9;
-          if (k < 3 || true) {
-            const z = s * (W / 2 + 0.008);
-            const a = [wx0, 2.35, z], b = [wx1, 2.35, z], cc = [wx1, 3.15, z], d = [wx0, 3.15, z];
-            if (s > 0) E.quad(a, b, cc, d, null, [0, 0, 1]);
-            else E.quad(b, a, d, cc, null, [0, 0, -1]);
+  const { L, W, H } = TRAIN;
+  const hw = W / 2, x0 = -L / 2, x1 = L / 2;
+  const FL = 1.12, CE = 3.28; // interior floor / ceiling
+  const WB = 2.3, WT = 3.12; // window bottom / top
+  const IN = 0.3;
+  const body = { color: col('#cdd1d5'), pat: PAT.PLAIN, gloss: 0.75, weather: 0 };
+  const inner = { color: col('#dcd8cc'), pat: PAT.PLAIN, gloss: 0.2, emit: IN, weather: 0 };
+  const doors = [-7.5, -2.5, 2.5, 7.5];
+  const DW = 0.66; // half door width
+  // window openings along the side (x ranges)
+  const cabLen = 1.9;
+  const ea = cab < 0 ? x0 + cabLen : x0 + 0.35, eb = cab > 0 ? x1 - cabLen : x1 - 0.35;
+  const wins = [];
+  const addSpan = (a, b) => {
+    if (b - a < 0.6) return;
+    if (b - a > 2.2) {
+      const m = (a + b) / 2;
+      wins.push([a, m - 0.05], [m + 0.05, b]);
+    } else wins.push([a, b]);
+  };
+  addSpan(ea + 0.25, doors[0] - DW - 0.35);
+  for (let i = 0; i < doors.length - 1; i++) addSpan(doors[i] + DW + 0.35, doors[i + 1] - DW - 0.35);
+  addSpan(doors[3] + DW + 0.35, eb - 0.25);
+
+  for (const s of [-1, 1]) {
+    const zo = s * hw, zi = s * (hw - 0.06);
+    const face = [0, 0, s], faceIn = [0, 0, -s];
+    const wall = (a, b, y0, y1) => {
+      E.with(body, () => quadF(E, [a, y0, zo], [b, y0, zo], [b, y1, zo], [a, y1, zo], null, face));
+      E.with(inner, () => quadF(E, [a, Math.max(y0, FL), zi], [b, Math.max(y0, FL), zi], [b, Math.min(y1, CE), zi], [a, Math.min(y1, CE), zi], null, faceIn));
+    };
+    // solid wall = the car side minus doors (and minus windows in the window band)
+    const minus = (ranges, holes) => {
+      let out = ranges;
+      for (const [ha, hb] of holes) {
+        const next = [];
+        for (const [a, b] of out) {
+          if (hb <= a || ha >= b) next.push([a, b]);
+          else {
+            if (ha > a) next.push([a, ha]);
+            if (hb < b) next.push([hb, b]);
           }
-        });
-        E.with({ color: col('#9aa0a6'), pat: PAT.METAL, gloss: 0.8 }, () => {
-          const z = s * (W / 2 + 0.004);
-          E.box(dx - 0.65, 1.0, z - 0.004, dx + 0.65, 3.2, z + 0.004);
-        });
-        E.with({ color: col('#dde6ea'), pat: PAT.EMIT, emit: 0.9 }, () => {
-          const z = s * (W / 2 + 0.01);
-          for (const ox of [-0.35, 0.35]) {
-            const a = [dx + ox - 0.22, 2.2, z], b = [dx + ox + 0.22, 2.2, z], cc = [dx + ox + 0.22, 3.0, z], d = [dx + ox - 0.22, 3.0, z];
-            if (s > 0) E.quad(a, b, cc, d, null, [0, 0, 1]);
-            else E.quad(b, a, d, cc, null, [0, 0, -1]);
-          }
+        }
+        out = next;
+      }
+      return out;
+    };
+    const doorHoles = doors.map((dx) => [dx - DW, dx + DW]);
+    wall(x0, x1, 0.95, 1.0);
+    for (const [a, b] of minus([[x0, x1]], doorHoles)) wall(a, b, 1.0, WB);
+    for (const [a, b] of minus([[x0, x1]], [...doorHoles, ...wins])) wall(a, b, WB, WT);
+    wall(x0, x1, WT, H);
+    for (const [a, b] of wins) {
+      // reveals (window frame depth) + glass
+      E.with({ color: col('#9ea3a8'), pat: PAT.METAL, gloss: 0.6, emit: 0.1 }, () => {
+        quadF(E, [a, WB, zo], [b, WB, zo], [b, WB, zi], [a, WB, zi], null, [0, 1, 0]);
+        quadF(E, [a, WT, zo], [b, WT, zo], [b, WT, zi], [a, WT, zi], null, [0, -1, 0]);
+        quadF(E, [a, WB, zo], [a, WT, zo], [a, WT, zi], [a, WB, zi], null, [1, 0, 0]);
+        quadF(E, [b, WB, zo], [b, WT, zo], [b, WT, zi], [b, WB, zi], null, [-1, 0, 0]);
+      });
+      E.sink = glass;
+      E.quad([a, WB, s * (hw - 0.02)], [b, WB, s * (hw - 0.02)], [b, WT, s * (hw - 0.02)], [a, WT, s * (hw - 0.02)], [0, 0, (b - a) / 2, 0, (b - a) / 2, (WT - WB) / 2, 0, (WT - WB) / 2], [0, 0, s]);
+      E.sink = sink;
+    }
+    // band stripes: green under the windows, thin green at the cant rail
+    E.with({ color: col('#2e8b57'), pat: PAT.PLAIN, gloss: 0.6 }, () => {
+      for (const [a, b] of minus([[x0, x1]], doorHoles)) quadF(E, [a, 2.08, zo + s * 0.004], [b, 2.08, zo + s * 0.004], [b, 2.26, zo + s * 0.004], [a, 2.26, zo + s * 0.004], null, face);
+      quadF(E, [x0, 3.36, zo + s * 0.004], [x1, 3.36, zo + s * 0.004], [x1, 3.42, zo + s * 0.004], [x0, 3.42, zo + s * 0.004], null, face);
+    });
+    // doors: two stainless leaves, each with a real window you can look through
+    const zd = zo + s * 0.012;
+    for (const dx of doors) {
+      for (const [la, lb] of [[dx - DW, dx - 0.012], [dx + 0.012, dx + DW]]) {
+        const wa = (la + lb) / 2 - 0.2, wb = (la + lb) / 2 + 0.2, wy0 = 2.15, wy1 = 3.0;
+        const pieces = [[la, lb, 1.0, wy0], [la, lb, wy1, 3.2], [la, wa, wy0, wy1], [wb, lb, wy0, wy1]];
+        for (const [a, b, y0, y1] of pieces) {
+          E.with({ color: col('#bfc4c8'), pat: PAT.METAL, gloss: 0.8 }, () => quadF(E, [a, y0, zd], [b, y0, zd], [b, y1, zd], [a, y1, zd], null, face));
+          E.with({ color: col('#d8d5cc'), pat: PAT.PLAIN, emit: IN, gloss: 0.4 }, () => quadF(E, [a, Math.max(y0, FL), zi], [b, Math.max(y0, FL), zi], [b, y1, zi], [a, y1, zi], null, faceIn));
+        }
+        E.sink = glass;
+        E.quad([wa, wy0, zo], [wb, wy0, zo], [wb, wy1, zo], [wa, wy1, zo], [0, 0, 0.2, 0, 0.2, 0.42, 0, 0.42], [0, 0, s]);
+        E.sink = sink;
+        E.with({ color: col('#8d9296'), pat: PAT.METAL, gloss: 0.5 }, () => {
+          quadF(E, [wa, wy0, zd], [wb, wy0, zd], [wb, wy0, zi], [wa, wy0, zi], null, [0, 1, 0]);
+          quadF(E, [wa, wy1, zd], [wb, wy1, zd], [wb, wy1, zi], [wa, wy1, zi], null, [0, -1, 0]);
         });
       }
-    }
-    // bogies & skirt
-    E.with({ color: col('#2c2e30'), pat: PAT.PLAIN, gloss: 0.3 }, () => {
-      E.box(x0 + 0.5, 0.35, -W / 2 + 0.2, x0 + L - 0.5, 0.95, W / 2 - 0.2);
-      for (const bx of [x0 + 2.5, x0 + L - 2.5]) E.box(bx - 1.3, 0.12, -1.25, bx + 1.3, 0.75, 1.25);
-    });
-    // pantograph on car 2
-    if (c === 1) {
-      E.with({ color: col('#3a3c3e'), pat: PAT.METAL, gloss: 0.4 }, () => {
-        E.beam([x0 + 8, H + 0.2, 0], [x0 + 9, H + 1.1, 0], 0.05);
-        E.beam([x0 + 10, H + 0.2, 0], [x0 + 9, H + 1.1, 0], 0.05);
-        E.box(x0 + 8.9, H + 1.1, -0.9, x0 + 9.1, H + 1.16, 0.9);
+      // door frame seams + the gap between the leaves
+      E.with({ color: col('#5f6468'), pat: PAT.PLAIN, gloss: 0.4 }, () => {
+        E.box(dx - DW - 0.03, 1.0, zo - s * 0.002, dx - DW, 3.22, zo + s * 0.016);
+        E.box(dx + DW, 1.0, zo - s * 0.002, dx + DW + 0.03, 3.22, zo + s * 0.016);
+        E.box(dx - DW - 0.03, 3.2, zo - s * 0.002, dx + DW + 0.03, 3.23, zo + s * 0.016);
+        E.box(dx - 0.012, 1.0, zo - s * 0.002, dx + 0.012, 3.2, zo + s * 0.014);
+      });
+      E.with({ color: col('#e2b92c'), pat: PAT.PLAIN, emit: IN }, () => E.box(dx - DW, FL, zi - s * 0.5, dx + DW, FL + 0.005, zi));
+      // grab poles beside the door
+      E.with({ color: col('#c9ccce'), pat: PAT.METAL, gloss: 0.9, emit: 0.2 }, () => {
+        for (const ox of [-DW - 0.28, DW + 0.28]) E.cyl(dx + ox, FL, zi - s * 0.28, 0.02, CE - FL, 6, false);
       });
     }
-    // ends: front cab on first and last car
-    for (const end of c === 0 ? [0] : c === cars - 1 ? [1] : []) {
-      const ex = end === 0 ? x0 : x0 + L;
-      const sgn = end === 0 ? -1 : 1;
-      E.with({ color: col('#1f2a33'), pat: PAT.PLAIN, gloss: 0.95 }, () => {
-        const a = [ex + sgn * 0.01, 2.3, -W / 2 + 0.25], b = [ex + sgn * 0.01, 2.3, W / 2 - 0.25], cc = [ex + sgn * 0.01, 3.25, W / 2 - 0.25], d = [ex + sgn * 0.01, 3.25, -W / 2 + 0.25];
-        if (sgn > 0) E.quad(a, b, cc, d, null, [1, 0, 0]);
-        else E.quad(b, a, d, cc, null, [-1, 0, 0]);
+    // long bench seats between the doors (blue moquette), the end ones in priority colours
+    const benches = [];
+    benches.push([ea + 0.15, doors[0] - DW - 0.35, true]);
+    for (let i = 0; i < 3; i++) benches.push([doors[i] + DW + 0.35, doors[i + 1] - DW - 0.35, false]);
+    benches.push([doors[3] + DW + 0.35, eb - 0.15, true]);
+    for (const [a, b, prio] of benches) {
+      if (b - a < 0.8) continue;
+      const seat = col(prio ? '#c26a3a' : '#35589a');
+      E.with({ color: col('#8f959a'), pat: PAT.METAL, gloss: 0.5, emit: IN * 0.6 }, () => E.box(a, FL, zi - s * 0.5, b, FL + 0.3, zi, { ny: true }));
+      E.with({ color: seat, pat: PAT.PLAIN, gloss: 0.15, emit: IN * 0.8 }, () => {
+        E.box(a + 0.03, FL + 0.3, zi - s * 0.52, b - 0.03, FL + 0.45, zi, { ny: true });
+        E.box(a + 0.03, FL + 0.45, zi - s * 0.13, b - 0.03, WB - 0.08, zi, { ny: true });
       });
-      E.with({ color: col('#fff8e0'), pat: PAT.EMIT, emit: 3.0 }, () => {
-        for (const s of [-1, 1]) E.box(ex + sgn * 0.02 - 0.02, 1.35, s * 1.0 - 0.15, ex + sgn * 0.02 + 0.02, 1.55, s * 1.0 + 0.15);
-      });
-      E.with({ color: col('#ffb24a'), pat: PAT.EMIT, emit: 1.5 }, () => E.box(ex + sgn * 0.02 - 0.02, 3.35, -0.6, ex + sgn * 0.02 + 0.02, 3.55, 0.6));
+      // seat dividers (standing poles in the middle of long benches)
+      if (b - a > 3) E.with({ color: col('#c9ccce'), pat: PAT.METAL, gloss: 0.9, emit: 0.2 }, () => E.cyl((a + b) / 2, FL + 0.45, zi - s * 0.5, 0.018, CE - FL - 0.45, 6, false));
+      // luggage rack above the seats
+      E.with({ color: col('#aeb3b7'), pat: PAT.GRATE, gloss: 0.5, emit: IN * 0.5 }, () => E.box(a, WT + 0.02, zi - s * 0.34, b, WT + 0.04, zi));
+      // hand straps hanging from a rail in front of the rack
+      E.with({ color: col('#c9ccce'), pat: PAT.METAL, gloss: 0.9, emit: 0.2 }, () => E.box(a, 2.98, zi - s * 0.46, b, 3.0, zi - s * 0.44));
+      for (let hx = a + 0.25; hx < b - 0.15; hx += 0.42) {
+        E.with({ color: col('#e8e6de'), pat: PAT.PLAIN, emit: IN * 0.7 }, () => E.box(hx - 0.012, 2.72, zi - s * 0.455, hx + 0.012, 2.98, zi - s * 0.445));
+        E.with({ color: col(prio ? '#e0b030' : '#f2f1ec'), pat: PAT.PLAIN, emit: IN * 0.7 }, () => E.geom(STRAP_RING, new THREE.Matrix4().makeTranslation(hx, 2.665, zi - s * 0.45)));
+      }
+      // advertising frames above the windows
+      for (let ax = a + 0.2; ax < b - 0.7; ax += 0.95) {
+        E.with({ color: col(['#f2d7a0', '#c9e0f0', '#f0c8c8', '#d8ecd0'][Math.floor(Math.abs(ax * 7)) % 4]), pat: PAT.PLAIN, emit: IN * 0.9 }, () => quadF(E, [ax, 3.08, zi - s * 0.36], [ax + 0.75, 3.08, zi - s * 0.36], [ax + 0.75, 3.24, zi - s * 0.3], [ax, 3.24, zi - s * 0.3], null, [0, -0.3, -s]));
+      }
     }
   }
-  void rng;
-  const geo = sink.toGeometry();
-  return { geo, length: cars * (L + gap) - gap };
+  // floor, ceiling with light strips, end walls with gangway doors
+  E.with({ color: col('#8d8a80'), pat: PAT.PLAIN, gloss: 0.3, emit: IN * 0.7 }, () => quadF(E, [x0, FL, -hw], [x1, FL, -hw], [x1, FL, hw], [x0, FL, hw], null, [0, 1, 0]));
+  E.with({ color: col('#f1f0eb'), pat: PAT.PLAIN, emit: IN * 1.1 }, () => quadF(E, [x0, CE, -hw], [x1, CE, -hw], [x1, CE, hw], [x0, CE, hw], null, [0, -1, 0]));
+  E.with({ color: col('#fbf8ee'), pat: PAT.EMIT, emit: 1.25 }, () => {
+    for (const z of [-0.55, 0.55]) E.box(x0 + 0.5, CE - 0.04, z - 0.07, x1 - 0.5, CE, z + 0.07, { py: true });
+  });
+  for (const [ex, sg] of [[x0 + 0.02, 1], [x1 - 0.02, -1]]) {
+    if ((sg > 0 && cab < 0) || (sg < 0 && cab > 0)) continue;
+    E.with({ color: col('#dcd8cc'), pat: PAT.PLAIN, emit: IN }, () => quadF(E, [ex, FL, -hw], [ex, FL, hw], [ex, CE, hw], [ex, CE, -hw], null, [sg, 0, 0]));
+    E.with({ color: col('#a7abaf'), pat: PAT.METAL, gloss: 0.6, emit: IN * 0.6 }, () => E.box(ex - 0.01, FL, -0.45, ex + 0.01, 3.0, 0.45));
+    E.with({ color: col('#2a3138'), pat: PAT.PLAIN, gloss: 0.9, emit: 0.3 }, () => E.box(ex - 0.015, 2.1, -0.25, ex + 0.015, 2.85, 0.25));
+    // gangway bellows to the next car (outside)
+    const gx = sg > 0 ? x0 : x1;
+    E.with({ color: col('#2c2e30'), pat: PAT.PLAIN, gloss: 0.2 }, () => E.box(gx - 0.25, 1.0, -0.6, gx + 0.25, 3.05, 0.6));
+  }
+  // end walls outside (the ends between cars)
+  E.with(body, () => {
+    for (const [ex, sg] of [[x0, -1], [x1, 1]]) {
+      if ((sg < 0 && cab < 0) || (sg > 0 && cab > 0)) continue;
+      quadF(E, [ex, 0.95, -hw], [ex, 0.95, hw], [ex, H, hw], [ex, H, -hw], null, [sg, 0, 0]);
+    }
+  });
+  // roof: slightly domed, with AC units and conduits
+  E.with({ color: col('#a3a8ad'), pat: PAT.PLAIN, gloss: 0.5, weather: 0.1 }, () => {
+    quadF(E, [x0, H, -hw], [x1, H, -hw], [x1, H + 0.14, -hw + 0.5], [x0, H + 0.14, -hw + 0.5], null, [0, 1, -0.3]);
+    quadF(E, [x0, H + 0.14, hw - 0.5], [x1, H + 0.14, hw - 0.5], [x1, H, hw], [x0, H, hw], null, [0, 1, 0.3]);
+    quadF(E, [x0, H + 0.14, -hw + 0.5], [x1, H + 0.14, -hw + 0.5], [x1, H + 0.14, hw - 0.5], [x0, H + 0.14, hw - 0.5], null, [0, 1, 0]);
+  });
+  E.with({ color: col('#c3c7ca'), pat: PAT.METAL, gloss: 0.5 }, () => {
+    for (const ax of [-5.5, 5.5]) E.box(ax - 1.4, H + 0.14, -0.8, ax + 1.4, H + 0.55, 0.8);
+  });
+  E.with({ color: col('#34383b'), pat: PAT.GRATE, gloss: 0.3 }, () => {
+    for (const ax of [-5.5, 5.5]) E.box(ax - 1.1, H + 0.555, -0.55, ax + 1.1, H + 0.56, 0.55);
+  });
+  if (pantograph) {
+    E.with({ color: col('#3a3c3e'), pat: PAT.METAL, gloss: 0.4 }, () => {
+      E.box(-1.0, H + 0.14, -0.7, 1.0, H + 0.3, 0.7);
+      E.beam([-0.9, H + 0.3, 0], [0, H + 1.25, 0], 0.05);
+      E.beam([0.9, H + 0.3, 0], [0, H + 1.25, 0], 0.05);
+      E.box(-0.12, H + 1.25, -0.85, 0.12, H + 1.31, 0.85);
+    });
+  }
+  // underframe: skirt, equipment boxes, bogies with wheels
+  E.with({ color: col('#2e3134'), pat: PAT.PLAIN, gloss: 0.3 }, () => {
+    E.box(x0 + 0.4, 0.55, -hw + 0.15, x1 - 0.4, 0.95, hw - 0.15, { py: true });
+    for (const ex of [-4.5, -1.5, 2.2, 4.8]) E.box(ex - 1.0, 0.42, -1.1, ex + 1.0, 0.56, 1.1);
+    for (const bx of [x0 + 2.5, x1 - 2.5]) {
+      E.box(bx - 1.25, 0.25, -1.2, bx + 1.25, 0.62, 1.2);
+      for (const wx of [-0.95, 0.95]) for (const wz of [-0.72, 0.72]) E.frameM(new THREE.Matrix4().makeRotationX(Math.PI / 2).setPosition(bx + wx, 0.43, wz), () => E.cyl(0, -0.07, 0, 0.43, 0.14, 12));
+    }
+  });
+  // --- driving cab ---------------------------------------------------------------------------
+  if (cab) {
+    const cx = cab > 0 ? x1 : x0, sg = cab;
+    const fx = cx + sg * 0.02;
+    E.with(body, () => {
+      quadF(E, [cx, 0.95, -hw], [cx, 0.95, hw], [cx, 2.2, hw], [cx, 2.2, -hw], null, [sg, 0, 0]);
+      quadF(E, [cx, 3.45, -hw], [cx, 3.45, hw], [cx, H, hw], [cx, H, -hw], null, [sg, 0, 0]);
+    });
+    // the driver's side window
+    E.with({ color: col('#1c242b'), pat: PAT.PLAIN, gloss: 0.97 }, () => {
+      for (const s of [-1, 1]) quadF(E, [cx - sg * 1.5, 2.3, s * (hw + 0.006)], [cx - sg * 0.4, 2.3, s * (hw + 0.006)], [cx - sg * 0.4, 3.1, s * (hw + 0.006)], [cx - sg * 1.5, 3.1, s * (hw + 0.006)], null, [0, 0, s]);
+    });
+    // big black windshield band with the destination display and the number
+    E.with({ color: col('#1c242b'), pat: PAT.PLAIN, gloss: 0.97 }, () => quadF(E, [fx, 2.2, -hw + 0.08], [fx, 2.2, hw - 0.08], [fx, 3.45, hw - 0.08], [fx, 3.45, -hw + 0.08], null, [sg, 0, 0]));
+    E.with({ color: col('#ff9c2a'), pat: PAT.EMIT, emit: 1.7 }, () => E.box(fx - 0.01, 3.1, -0.62, fx + 0.01, 3.34, 0.62));
+    E.with({ color: col('#dfe8ee'), pat: PAT.EMIT, emit: 0.9 }, () => E.box(fx - 0.01, 3.14, hw - 0.62, fx + 0.01, 3.3, hw - 0.2));
+    E.with({ color: col('#2e8b57'), pat: PAT.PLAIN, gloss: 0.6 }, () => E.box(fx - 0.012, 1.95, -hw, fx + 0.012, 2.2, hw));
+    // wipers
+    E.with({ color: col('#0e0f10'), pat: PAT.PLAIN }, () => {
+      for (const z of [-0.7, 0.55]) E.beam([fx + sg * 0.02, 2.3, z], [fx + sg * 0.02, 2.95, z + 0.25], 0.03, 0.02);
+    });
+    // headlights (lit on the leading end) and tail lights (lit on the trailing end)
+    const lead = cab > 0;
+    for (const z of [-1.0, 1.0]) {
+      E.with({ color: col(lead ? '#fff8e6' : '#3a2a28'), pat: lead ? PAT.EMIT : PAT.PLAIN, emit: lead ? 3.2 : 0, gloss: 0.9 }, () => E.box(fx - 0.02, 1.35, z - 0.2, fx + 0.03, 1.6, z + 0.02 * sg));
+      E.with({ color: col(lead ? '#5a2020' : '#ff2a1a'), pat: lead ? PAT.PLAIN : PAT.EMIT, emit: lead ? 0 : 2.6, gloss: 0.9 }, () => E.box(fx - 0.02, 1.35, z + (z > 0 ? -0.42 : 0.24), fx + 0.03, 1.55, z + (z > 0 ? -0.26 : 0.4)));
+    }
+    // skirt / snow plough, coupler
+    E.with({ color: col('#3a3d40'), pat: PAT.METAL, gloss: 0.4 }, () => {
+      quadF(E, [cx + sg * 0.05, 0.95, -hw + 0.2], [cx + sg * 0.05, 0.95, hw - 0.2], [cx + sg * 0.35, 0.25, hw - 0.45], [cx + sg * 0.35, 0.25, -hw + 0.45], null, [sg, -0.4, 0]);
+      E.box(cx, 0.6, -0.12, cx + sg * 0.55, 0.85, 0.12);
+    });
+  }
+  return { geo: sink.toGeometry(), glass: glass.toGeometry() };
+}
+
+export function buildTrain() {
+  return {
+    cars: [buildCar(-1, false), buildCar(0, true), buildCar(0, false), buildCar(1, false)],
+    length: TRAIN.length,
+  };
 }
 
 // ---------------------------------------------------------------------------

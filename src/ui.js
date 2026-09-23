@@ -36,7 +36,7 @@ export function makeSoundToggle(audio) {
   const hint = document.createElement('div');
   hint.className = 'rr-hint';
   const touch = matchMedia('(pointer:coarse)').matches;
-  hint.textContent = touch ? '拖动环顾 · 左下摇杆飞行 · 双指前后/平移 · 双击前往' : '拖动环顾 · WASD 飞行 · E/Q 升降 · 滚轮前后 · 右键平移 · 双击前往';
+  hint.textContent = touch ? '拖动环顾 · 摇杆移动 · 双击前往 · 右下小按钮切换环绕视角' : '拖动环顾 · WASD 飞行 · E/Q 升降 · 滚轮前后 · 双击前往 · V 切换环绕视角';
   document.body.appendChild(hint);
   setTimeout(() => (hint.style.opacity = '0'), 6500);
   setTimeout(() => hint.remove(), 9500);

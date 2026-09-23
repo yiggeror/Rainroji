@@ -43,7 +43,7 @@ export function start({ audio } = {}) {
 
   // --- camera & controls ------------------------------------------------------
   const view = world.views[params.get('view') || 'start'] || world.views.start;
-  const rig = makeGhostCamera({ camera, world, dom: renderer.domElement });
+  const rig = makeGhostCamera({ camera, world, dom: renderer.domElement, ui: !shot });
   rig.reset(view.pos, view.target);
 
   // --- sizing ----------------------------------------------------------------
@@ -148,7 +148,7 @@ export function start({ audio } = {}) {
         stepCamera(dt);
         const d = new THREE.Vector3();
         camera.getWorldDirection(d);
-        return { pos: camera.position.toArray(), dir: d.toArray() };
+        return { pos: camera.position.toArray(), dir: d.toArray(), intended: rig.stats.intended, actual: rig.stats.actual };
       },
     };
     window.__ready = true;
