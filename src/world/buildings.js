@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { PAT } from '../builder.js';
 import { col, clamp } from '../util.js';
-import { windowUnit, door, facades, gableRoof, hipRoof, shedRoof, flatRoof, downPipe, balcony, quadF } from './parts.js';
+import { windowUnit, door, facades, gableRoof, hipRoof, shedRoof, flatRoof, downPipe, balcony, canopy, quadF } from './parts.js';
 import { acUnit, meterBox, gasMeter, shed, bicycle, car, blockWall, fence, meshFence, vendingMachine, postBox, crates, bench, umbrella, wheelStop, signPost, garbageStation } from './props.js';
 import { tree, bush, hedge, hydrangea, potPlant, weeds, grass, clump } from './plants.js';
 import { lotBase, slab, wallMat, ROOFS } from './house.js';
+import { shopFront } from './shops.js';
 import { quv } from './atlas.js';
 
 const lowOf = (lot) => Math.abs(lot.level) < 0.05;
@@ -85,7 +86,7 @@ export function apartment(ctx, lot, opts = {}) {
     E.box(sx, base + fh - 0.15, zTop - 1.0, sx + 1.0, base + fh, zTop);
   });
   // bicycles under the corridor
-  for (let i = 0; i < rng.int(3, 6); i++) bicycle(ctx, x0 + 1.0 + i * 0.55, 0.04, z1 + corrD + 0.8, Math.PI / 2 + rng.range(-0.2, 0.2), { lean: rng.range(0.03, 0.1) });
+  for (let i = 0; i < rng.int(3, 6); i++) bicycle(ctx, x0 + 3.2 + i * 0.66, 0.04, z1 + corrD + 1.0, Math.PI / 2 + rng.range(-0.12, 0.12), { lean: rng.range(0.03, 0.1) });
   // back balconies
   facades(ctx, x0, z0, x1, z1, 0, (len, side) => {
     if (side === 'back') {
@@ -123,23 +124,25 @@ export function cornerShop(ctx, lot) {
   const x0 = -lw / 2 + 0.2, x1 = x0 + W, z1 = -1.6, z0 = z1 - D;
   const base = 0.15, fh1 = 3.1, fh2 = 2.7, ye = base + fh1 + fh2;
   lotBase(ctx, lot, { groundCol: '#8f8d88' });
-  ctx.solid(x0 - 0.4, 0, z0 - 0.4, x1 + 0.4, ye + 1.8, z1 + 0.2);
+  ctx.solid(x0 - 0.2, 0, z0 - 0.2, x1 + 0.2, ye + 0.3, z1 + 0.2);
   ctx.dropPoints.push(ctx.toWorld(x0 + 0.3, ye - 0.4, z1 + 0.05));
   slab(ctx, -lw / 2, z1, lw / 2, 0, 0.05, '#aaa79f', true);
   const wm = { color: col('#d6cdb9'), pat: PAT.MORTAR, gloss: 0.08, weather: 0.9, grad: [0, ye, 0.82] };
-  E.with({ color: col('#8a8781'), pat: PAT.TILE, param: 0.1, gloss: 0.2 }, () => E.box(x0, 0, z0, x1, base + 0.5, z1, { ny: true }));
-  E.with(wm, () => E.box(x0, base + 0.5, z0, x1, ye, z1, { ny: true }));
-  // shop front: big glass with interior
+  // ground floor: side and back walls (the front is the shop, open to look into)
+  E.with({ color: col('#8a8781'), pat: PAT.TILE, param: 0.1, gloss: 0.2 }, () => {
+    E.box(x0, 0, z0, x0 + 0.12, base + 0.5, z1, { ny: true });
+    E.box(x1 - 0.12, 0, z0, x1, base + 0.5, z1, { ny: true });
+    E.box(x0, 0, z0, x1, base + 0.5, z0 + 0.12, { ny: true });
+  });
+  E.with(wm, () => {
+    E.box(x0, base + 0.5, z0, x0 + 0.12, base + fh1, z1, { ny: true });
+    E.box(x1 - 0.12, base + 0.5, z0, x1, base + fh1, z1, { ny: true });
+    E.box(x0, base + 0.5, z0, x1, base + fh1, z0 + 0.12, { ny: true });
+    E.box(x0, base + fh1, z0, x1, ye, z1, { ny: true });
+  });
+  // shop front: a real, lit interior behind clear glass
   E.frame(x0, 0, z1, 0, () => {
-    const gw = W - 2.6;
-    E.with({ color: col('#fff6e8'), pat: PAT.GLASS, param: 5, emit: 1, weather: 0.37, ex1: gw, ex2: 2.25 }, () =>
-      E.quad([0.3, base + 0.5, 0.02], [0.3 + gw, base + 0.5, 0.02], [0.3 + gw, base + 2.75, 0.02], [0.3, base + 2.75, 0.02], [0, 0, gw, 0, gw, 2.25, 0, 2.25], [0, 0, 1]),
-    );
-    E.with({ color: col('#9a9d9e'), pat: PAT.METAL, gloss: 0.5 }, () => {
-      for (let x = 0.3; x <= 0.3 + gw + 0.01; x += gw / 4) E.box(x - 0.04, base + 0.5, 0, x + 0.04, base + 2.75, 0.08);
-      E.box(0.25, base + 2.75, 0, 0.35 + gw, base + 2.85, 0.08);
-      E.box(0.25, base + 0.45, 0, 0.35 + gw, base + 0.55, 0.1);
-    });
+    shopFront(ctx, W, D - 0.12, base + fh1 - 0.2, 'grocery', { frame: '#9a9d9e' });
     // shutter box
     E.with({ color: col('#a9abab'), pat: PAT.SHUTTER, gloss: 0.3 }, () => E.box(0.2, base + 2.85, 0, W - 0.2, base + 3.15, 0.3));
     // awning (striped tent)
@@ -150,9 +153,6 @@ export function cornerShop(ctx, lot) {
       quadF(E, [0.1, ay - 0.02, 0.3], [0.1 + aw, ay - 0.02, 0.3], [0.1 + aw, ay - 0.67, ad], [0.1, ay - 0.67, ad], [0, 0, aw, 0, aw, 1.2, 0, 1.2], [0, -1, -0.5]);
     });
     for (let x = 0.3; x < aw; x += rng.range(0.25, 0.6)) ctx.drip(x, ay - 0.97, ad + 0.02);
-    // interior glow onto the street
-    ctx.addLight(ctx.toWorld(W / 2, 1.5, 1.2), '#ffe8c6', 7.5, 1.0, 1);
-    ctx.glows.push({ p: ctx.toWorld(W / 2, 1.6, 0.3), color: col('#ffe6c2'), size: 3.0, strength: 0.12 });
     // sign board
     const sr = ctx.atlasRects.shopsign;
     const sw = Math.min(W - 1.0, 5.6), sh = sw * 0.156, sx0 = 0.5;
@@ -188,8 +188,8 @@ export function cornerShop(ctx, lot) {
     if (side === 'front') downPipe(ctx, W - 0.1, ye - 0.3, 0, '#8c8f90');
   });
   // vending machines along the corner side, facing the cross street (+x local)
-  for (let i = 0; i < 3; i++) vendingMachine(ctx, lw / 2 - 0.25 - 0.36, 0.05, -0.8 - i * 1.05, Math.PI / 2, i % 3);
-  postBox(ctx, lw / 2 - 0.35, 0.05, 0.3, Math.PI / 2);
+  for (let i = 0; i < 3; i++) vendingMachine(ctx, lw / 2 - 0.44, 0.05, -2.3 - i * 1.05, Math.PI / 2, i % 3);
+  postBox(ctx, lw / 2 - 0.5, 0.05, -1.05, Math.PI / 2);
   umbrella(ctx, -lw / 2 + 0.4, 0.05, -1.1, 0.4);
   hipRoof(ctx, x0, z0, x1, z1, ye, { kind: 'kawara', color: col('#56606b'), pitch: 0.42, ov: 0.55, edge: '#e3ded2', gutterCol: '#8c8f90' });
   // back yard
@@ -322,7 +322,7 @@ export function mansion(ctx, lot, opts = {}) {
     E.box(x0 + 1.5, ye, z0 + 1.5, x0 + 3.5, ye + 1.6, z0 + 3.5);
   });
   E.with({ color: col('#9ea8ae'), pat: PAT.METAL, gloss: 0.4 }, () => E.cyl(x0 + 2.5, ye + 1.6, z0 + 2.5, 0.8, 1.4, 12));
-  for (let i = 0; i < 6; i++) bicycle(ctx, -lw / 2 + 1 + i * 0.5, 0.05, -1.2, Math.PI / 2 + rng.range(-0.1, 0.1));
+  for (let i = 0; i < 5; i++) bicycle(ctx, -lw / 2 + 1 + i * 0.66, 0.05, -1.3, Math.PI / 2 + rng.range(-0.08, 0.08));
   hedge(ctx, lw / 2 - 4.5, lw / 2 - 0.4, -0.4, 0.9, 0.5);
 }
 
@@ -564,3 +564,118 @@ void hipRoof;
 void fence;
 void hydrangea;
 void potPlant;
+
+// ---------------------------------------------------------------------------
+// Harbour: fish market shed (open sides), co-op office, boat shed
+// Lot frame: z = 0 at the road, -z towards the quay.
+// ---------------------------------------------------------------------------
+export function fishMarket(ctx, lot) {
+  const E = ctx.E, rng = ctx.rng;
+  const lw = lot.w, ld = lot.depth;
+  const x0 = -lw / 2 + 0.6, x1 = lw / 2 - 0.6, z1 = -0.6, z0 = -ld + 0.3;
+  const H = 5.2;
+  ctx.inSink('ground', () => E.with({ color: col('#9c9a93'), pat: PAT.CONCRETE, gloss: 0.55, weather: 0 }, () => E.quad([-lw / 2, 0.015, 0], [lw / 2, 0.015, 0], [lw / 2, 0.015, -ld], [-lw / 2, 0.015, -ld], [-lw / 2, 0, lw / 2, 0, lw / 2, ld, -lw / 2, ld], [0, 1, 0])));
+  // columns
+  E.with({ color: col('#7f8a8e'), pat: PAT.METAL, gloss: 0.45, weather: 0.5 }, () => {
+    for (let x = x0; x <= x1 + 0.01; x += (x1 - x0) / Math.round((x1 - x0) / 5.5)) {
+      for (const z of [z0, z1]) E.box(x - 0.12, 0, z - 0.12, x + 0.12, H, z + 0.12, { ny: true });
+    }
+    E.box(x0 - 0.15, H - 0.35, z0 - 0.15, x1 + 0.15, H, z0 + 0.15);
+    E.box(x0 - 0.15, H - 0.35, z1 - 0.15, x1 + 0.15, H, z1 + 0.15);
+  });
+  gableRoof(ctx, x0, z0, x1, z1, H, { kind: 'metal', color: col('#5b6f78'), pitch: 0.18, ov: 1.2, og: 0.6, edge: '#c9c9c4', soffit: '#9aa0a2', gutterCol: '#8c8f90' });
+  // long fluorescent tubes, some on (early morning auction is over, a few stay lit)
+  for (let x = x0 + 2; x < x1 - 1; x += 4) {
+    const on = rng.chance(0.55);
+    E.with({ color: col(on ? '#eef6ff' : '#d6d8d6'), pat: on ? PAT.EMIT : PAT.PLAIN, emit: on ? 1.6 : 0 }, () => E.box(x - 0.8, H - 0.55, (z0 + z1) / 2 - 0.05, x + 0.8, H - 0.5, (z0 + z1) / 2 + 0.05));
+    if (on) ctx.addLight(ctx.toWorld(x, H - 1.2, (z0 + z1) / 2), '#e8f0ff', 6, 0.45);
+  }
+  // stacks of blue and white fish boxes, a hose reel, a scale
+  for (let i = 0; i < 9; i++) {
+    const bx = rng.range(x0 + 1, x1 - 1), bz = rng.range(z0 + 1, z1 - 1);
+    const n = rng.int(2, 6);
+    const c = rng.pick(['#2f6fb5', '#2f6fb5', '#e9ecee', '#3d8f6a', '#f0c030']);
+    E.with({ color: col(c), pat: PAT.PLAIN, gloss: 0.5 }, () => {
+      for (let k = 0; k < n; k++) E.box(bx - 0.35, k * 0.22, bz - 0.25, bx + 0.35, k * 0.22 + 0.2, bz + 0.25);
+    });
+  }
+  E.with({ color: col('#c9c7bf'), pat: PAT.METAL, gloss: 0.6 }, () => {
+    const sx = x1 - 3, sz = z1 - 2;
+    E.box(sx - 0.6, 0, sz - 0.5, sx + 0.6, 0.12, sz + 0.5);
+    E.box(sx - 0.05, 0.12, sz + 0.45, sx + 0.05, 1.2, sz + 0.5);
+    E.box(sx - 0.25, 1.0, sz + 0.5, sx + 0.25, 1.35, sz + 0.55);
+  });
+  E.with({ color: col('#3a7a4a'), pat: PAT.PLAIN, gloss: 0.4 }, () => E.tube([[x0 + 1, 1.2, z1 - 0.3], [x0 + 1.5, 0.05, z1 - 1.2], [x0 + 4, 0.03, z1 - 1.5], [x0 + 6, 0.03, z0 + 2]], 0.03, 4));
+  // sign facing the road
+  const R = ctx.atlasRects;
+  ctx.inSink('atlas', () => E.with({ color: col('#ffffff'), pat: PAT.PLAIN, gloss: 0.3, weather: 0 }, () => E.quad([-2.6, H - 1.6, z1 + 0.14], [2.6, H - 1.6, z1 + 0.14], [2.6, H - 0.35, z1 + 0.14], [-2.6, H - 0.35, z1 + 0.14], quv(R.fishmkt), [0, 0, 1])));
+  for (let x = x0; x < x1; x += rng.range(0.6, 1.2)) {
+    ctx.drip(x, H - 1.2 * 0.18 - 0.05, z1 + 1.25);
+    ctx.drip(x, H - 1.2 * 0.18 - 0.05, z0 - 1.25);
+  }
+}
+
+export function coopOffice(ctx, lot) {
+  const E = ctx.E, rng = ctx.rng;
+  const lw = lot.w, ld = lot.depth;
+  const W = lw - 1.6, D = Math.min(ld - 2.2, 8);
+  const x0 = -W / 2, x1 = W / 2, z1 = -1.2, z0 = z1 - D;
+  const base = 0.25, fh = 3.0, ye = base + fh * 2;
+  lotBase(ctx, lot, { groundCol: '#9a978f' });
+  ctx.solid(x0 - 0.2, 0, z0 - 0.2, x1 + 0.2, ye + 0.1, z1 + 0.2);
+  const tile = { color: col('#cfcabd'), pat: PAT.TILE, param: 0.08, gloss: 0.15, weather: 0.8, grad: [0, ye, 0.8] };
+  E.with(tile, () => E.box(x0, 0, z0, x1, ye, z1, { ny: true }));
+  E.frame(x0, 0, z1, 0, () => {
+    door(ctx, 1.4, base, 1.6, 2.2, { style: 'slide', color: '#8d9496', lit: true });
+    for (let x = 3.2; x < W - 0.8; x += 2.2) windowUnit(ctx, x, base + 0.9, 1.5, 1.3, { frame: '#9a9d9e', lit: rng.chance(0.6), curtain: 3 });
+    for (let x = 1.3; x < W - 0.8; x += 2.2) windowUnit(ctx, x, base + fh + 0.9, 1.5, 1.3, { frame: '#9a9d9e', lit: rng.chance(0.3), curtain: 3 });
+    const R = ctx.atlasRects;
+    ctx.inSink('atlas', () => E.with({ color: col('#ffffff'), pat: PAT.PLAIN, gloss: 0.3, weather: 0 }, () => E.quad([0.4, base + fh - 0.3, 0.05], [Math.min(W - 0.4, 6.8), base + fh - 0.3, 0.05], [Math.min(W - 0.4, 6.8), base + fh + 0.55, 0.05], [0.4, base + fh + 0.55, 0.05], quv(R.gyokyo), [0, 0, 1])));
+    canopy(ctx, 1.4, base + 2.45, 2.4, 1.1, '#d8d6cf');
+    ctx.addLight(ctx.toWorld(1.4, 2.2, 1.2), '#fff0d8', 4.5, 0.7);
+  });
+  facades(ctx, x0, z0, x1, z1, 0, (len, side) => {
+    if (side === 'front') return;
+    for (let f = 0; f < 2; f++) for (let x = 1.2; x < len - 0.8; x += 2.6) windowUnit(ctx, x, base + f * fh + 1.0, 1.2, 1.1, { frame: '#9a9d9e', lit: rng.chance(0.25), curtain: rng.pick([3, 4]) });
+    if (side === 'back') acUnit(ctx, len * 0.3, 0.12, { pipeH: 2 });
+    downPipe(ctx, 0.15, ye - 0.1, 0, '#8c8f90');
+  });
+  flatRoof(ctx, x0, z0, x1, z1, ye, { wall: tile, parapet: 0.6 });
+  // flag pole and a bicycle
+  E.with({ color: col('#dcdad4'), pat: PAT.METAL, gloss: 0.5 }, () => E.cyl(x1 + 0.4, 0, -0.5, 0.05, 8, 8));
+  bicycle(ctx, x0 - 0.3, 0.02, -0.8, 0.1);
+}
+
+export function boatShed(ctx, lot) {
+  const E = ctx.E, rng = ctx.rng;
+  const lw = lot.w, ld = lot.depth;
+  const x0 = -lw / 2 + 0.5, x1 = lw / 2 - 0.5, z1 = -0.8, z0 = -ld + 0.4;
+  const H = 5.6;
+  ctx.inSink('ground', () => E.with({ color: col('#8f8d86'), pat: PAT.CONCRETE, gloss: 0.5, weather: 0 }, () => E.quad([-lw / 2, 0.015, 0], [lw / 2, 0.015, 0], [lw / 2, 0.015, -ld], [-lw / 2, 0.015, -ld], [-lw / 2, 0, lw / 2, 0, lw / 2, ld, -lw / 2, ld], [0, 1, 0])));
+  const wc = col(rng.pick(['#8fa0a3', '#a9a28f', '#7f9a8f']));
+  const wall = { color: wc, pat: PAT.CORR, gloss: 0.45, weather: 0.9, grad: [0, H, 0.75] };
+  // three walls; the quay side (-z) is a big open door with the shutter half up
+  E.with(wall, () => {
+    E.box(x0, 0, z1 - 0.1, x1, H, z1, { ny: true });
+    E.box(x0, 0, z0, x0 + 0.1, H, z1, { ny: true });
+    E.box(x1 - 0.1, 0, z0, x1, H, z1, { ny: true });
+    E.box(x0, 3.6, z0, x1, H, z0 + 0.1, { ny: true });
+  });
+  E.with({ color: col('#8d9190'), pat: PAT.SHUTTER, gloss: 0.4 }, () => E.box(x0 + 0.2, 3.2, z0 - 0.02, x1 - 0.2, 3.6, z0 + 0.08));
+  gableRoof(ctx, x0, z0, x1, z1, H, { kind: 'metal', color: col('#6b4f45'), pitch: 0.28, ov: 0.35, og: 0.3, edge: '#8a8580', ridgeX: false, gutter: false, wall });
+  ctx.solid(x0 - 0.05, 0, z1 - 0.15, x1 + 0.05, H, z1 + 0.05);
+  ctx.solid(x0 - 0.05, 0, z0, x0 + 0.15, H, z1);
+  ctx.solid(x1 - 0.15, 0, z0, x1 + 0.05, H, z1);
+  // inside: a small boat on a cradle, a lamp, oil drums
+  E.with({ color: col('#3a3d40'), pat: PAT.METAL }, () => {
+    for (const x of [-1.6, 1.6]) E.box(x - 0.1, 0, (z0 + z1) / 2 - 1.2, x + 0.1, 0.6, (z0 + z1) / 2 + 1.2);
+  });
+  ctx.boatsInShed = ctx.boatsInShed || [];
+  ctx.boatsInShed.push(ctx.toWorld(0, 1.0, (z0 + z1) / 2));
+  E.with({ color: col('#fff1d8'), pat: PAT.EMIT, emit: 1.4 }, () => E.box(-0.4, H - 0.4, (z0 + z1) / 2 - 0.05, 0.4, H - 0.35, (z0 + z1) / 2 + 0.05));
+  ctx.addLight(ctx.toWorld(0, H - 1, (z0 + z1) / 2), '#ffe8c8', 6, 0.6);
+  E.with({ color: col('#b43a2a'), pat: PAT.RUST, gloss: 0.4 }, () => {
+    E.cyl(x1 - 0.8, 0, z1 - 0.8, 0.29, 0.88, 12);
+    E.cyl(x1 - 1.45, 0, z1 - 0.8, 0.29, 0.88, 12);
+  });
+}

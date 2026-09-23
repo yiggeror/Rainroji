@@ -18,10 +18,8 @@ await page.waitForFunction(() => window.__ready === true, null, { timeout: 60000
 const cdp = await ctx.newCDPSession(page);
 
 const state = () => page.evaluate(() => {
-  const S = window.__sim;
-  const r = S.step(1 / 60);
-  const dist = Math.hypot(...r.orbit.map((v, i) => v - r.target[i]));
-  return { ...r, dist };
+  const r = window.__sim.step(1 / 60);
+  return r;
 });
 const steps = (n) => page.evaluate((n) => {
   const S = window.__sim, out = [];
@@ -34,8 +32,7 @@ const fmt = (a) => a.map((x) => +x.toFixed(2));
 let path_ = [];
 async function gesture(frames, at) {
   for (let i = 0; i <= frames; i++) {
-    const pts = at(i / frames);
-    await touch(i === 0 ? 'touchStart' : 'touchMove', pts);
+    await touch(i === 0 ? 'touchStart' : 'touchMove', at(i / frames));
     path_.push(...(await steps(1)));
   }
   await touch('touchEnd', []);
@@ -44,38 +41,39 @@ async function gesture(frames, at) {
 function report(name, before, after) {
   const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   let maxJump = 0;
-  for (let i = 1; i < path_.length; i++) maxJump = Math.max(maxJump, d(path_[i].render, path_[i - 1].render));
-  console.log(name.padEnd(26), JSON.stringify({ orbitBefore: fmt(before.orbit), orbitAfter: fmt(after.orbit), targetAfter: fmt(after.target), dist: [+before.dist.toFixed(2), +after.dist.toFixed(2)], maxRenderStep: +maxJump.toFixed(2) }));
+  for (let i = 1; i < path_.length; i++) maxJump = Math.max(maxJump, d(path_[i].pos, path_[i - 1].pos));
+  const turned = Math.acos(Math.min(1, before.dir[0] * after.dir[0] + before.dir[1] * after.dir[1] + before.dir[2] * after.dir[2])) * 57.3;
+  console.log(name.padEnd(26), JSON.stringify({ moved: +d(before.pos, after.pos).toFixed(2), turnedDeg: +turned.toFixed(1), end: fmt(after.pos), maxStep: +maxJump.toFixed(2) }));
   path_ = [];
 }
+const joy = await page.evaluate(() => { const e = document.querySelector('.rr-joy'); if (!e) return null; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+console.log('joystick', joy ? 'present' : 'MISSING');
 
-// one finger drag -> rotate
 await reset(); let b = await state();
-await gesture(30, (t) => [[200 + 120 * t, 400]]);
-report('one finger rotate', b, await state());
+await gesture(30, (t) => [[150 + 120 * t, 300]]);
+report('one finger look', b, await state());
 
-// pinch out -> zoom in, pinch in -> zoom out
 await reset(); b = await state();
-await gesture(30, (t) => [[195 - 40 - 80 * t, 400], [195 + 40 + 80 * t, 400]]);
-report('pinch apart (zoom in)', b, await state());
-await reset(); b = await state();
-await gesture(30, (t) => [[195 - 120 + 80 * t, 400], [195 + 120 - 80 * t, 400]]);
-report('pinch together (zoom out)', b, await state());
+await gesture(30, (t) => [[195 - 40 - 80 * t, 300], [195 + 40 + 80 * t, 300]]);
+report('pinch apart (forward)', b, await state());
 
-// two finger drag -> pan
 await reset(); b = await state();
-await gesture(30, (t) => [[150, 400 - 150 * t], [240, 400 - 150 * t]]);
+await gesture(30, (t) => [[150, 300 - 120 * t], [240, 300 - 120 * t]]);
 report('two finger drag (pan)', b, await state());
 
-// double tap on the road ahead -> walk there
 await reset(); b = await state();
 for (let k = 0; k < 2; k++) {
-  await touch('touchStart', [[195, 360]]);
+  await touch('touchStart', [[195, 330]]);
   path_.push(...(await steps(3)));
   await touch('touchEnd', []);
   path_.push(...(await steps(k ? 1 : 6)));
 }
 path_.push(...(await steps(180)));
-report('double tap on road', b, await state());
+report('double tap (glide)', b, await state());
 
+if (joy) {
+  await reset(); b = await state();
+  await gesture(120, (t) => [[joy[0], joy[1] - Math.min(1, t * 4) * 38]]);
+  report('joystick forward', b, await state());
+}
 await browser.close();

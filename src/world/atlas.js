@@ -6,12 +6,14 @@ const FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo","
 const FONT_M = '"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP","IPAMincho","IPAGothic",serif';
 
 export class Atlas {
-  constructor(size = 2048) {
+  constructor(size = 2048, height = size) {
     this.size = size;
+    this.height = height;
     this.canvas = document.createElement('canvas');
-    this.canvas.width = this.canvas.height = size;
+    this.canvas.width = size;
+    this.canvas.height = height;
     this.ctx = this.canvas.getContext('2d');
-    this.ctx.clearRect(0, 0, size, size);
+    this.ctx.clearRect(0, 0, size, height);
     this.x = 0;
     this.y = 0;
     this.rowH = 0;
@@ -36,8 +38,9 @@ export class Atlas {
     c.clip();
     draw(c, w, h);
     c.restore();
-    const S = this.size;
-    const r = { u0: (x + 0.5) / S, u1: (x + w - 0.5) / S, v0: 1 - (y + h - 0.5) / S, v1: 1 - (y + 0.5) / S, w, h };
+    const S = this.size, SH = this.height;
+    if (y + h > SH) console.warn('[rainroji] atlas overflow at', name);
+    const r = { u0: (x + 0.5) / S, u1: (x + w - 0.5) / S, v0: 1 - (y + h - 0.5) / SH, v1: 1 - (y + 0.5) / SH, w, h };
     this.rects[name] = r;
     return r;
   }
@@ -445,5 +448,228 @@ export function paintAtlas(A, rng) {
     }
     c.restore();
   });
+
+  // ---- station, harbour and the new shops ---------------------------------------
+  A.add('ekimei', 512, 170, (c, w, h) => {
+    c.fillStyle = '#f7f7f3';
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = '#1d3f6e';
+    c.fillRect(0, 0, w, 8);
+    c.fillStyle = '#2f8f5a';
+    c.fillRect(0, 112, w, 16);
+    c.fillStyle = '#1c1e22';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.font = `bold 62px ${FONT}`;
+    c.fillText('あめのうら', w / 2, 52);
+    c.font = `bold 22px ${FONT}`;
+    c.fillText('雨ノ浦  AMENOURA', w / 2, 94);
+    c.font = `bold 20px ${FONT}`;
+    c.textAlign = 'left';
+    c.fillText('◀ みさき', 14, 150);
+    c.textAlign = 'right';
+    c.fillText('はまだ ▶', w - 14, 150);
+  });
+  A.add('stationsign', 384, 96, (c, w, h) => {
+    c.fillStyle = '#1d3f6e';
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = '#fff';
+    c.font = `bold 56px ${FONT_M}`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('雨ノ浦駅', w / 2, h / 2 + 3);
+  });
+  const board = (name, w, h, bg, fg, text, size, font = FONT, extra) =>
+    A.add(name, w, h, (c) => {
+      c.fillStyle = bg;
+      c.fillRect(0, 0, w, h);
+      if (extra) extra(c, w, h);
+      c.fillStyle = fg;
+      c.font = `bold ${size}px ${font}`;
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(text, w / 2, h / 2 + 3);
+    });
+  board('gyokyo', 640, 96, '#f4f2ea', '#1d3a66', '雨ノ浦漁業協同組合', 52, FONT_M, (c, w, h) => {
+    c.fillStyle = '#1d3a66';
+    c.fillRect(0, h - 8, w, 8);
+  });
+  board('fishmkt', 384, 96, '#1d3a66', '#ffffff', '魚市場', 60, FONT_M);
+  board('laundry', 512, 110, '#2a64b4', '#ffffff', 'コインランドリー', 60, FONT, (c, w, h) => {
+    c.fillStyle = 'rgba(255,255,255,0.25)';
+    for (let i = 0; i < 14; i++) {
+      c.beginPath();
+      c.arc(20 + i * 37, h - 14 - (i % 3) * 8, 6 + (i % 4) * 2, 0, Math.PI * 2);
+      c.fill();
+    }
+  });
+  board('barber', 384, 100, '#f3f1ea', '#23262b', '理容 ヤマモト', 50, FONT_M, (c, w, h) => {
+    c.fillStyle = '#c8322e';
+    c.fillRect(0, 0, 14, h);
+    c.fillStyle = '#2a4f9a';
+    c.fillRect(w - 14, 0, 14, h);
+  });
+  board('kissa', 384, 100, '#efe6d2', '#5a3a22', '喫茶 しぐれ', 52, FONT_M, (c, w, h) => {
+    c.strokeStyle = '#5a3a22';
+    c.lineWidth = 3;
+    c.strokeRect(8, 8, w - 16, h - 16);
+  });
+  board('bakery', 384, 100, '#f6f0e2', '#7a4a24', 'パン工房 こむぎ', 44, FONT, (c, w, h) => {
+    c.fillStyle = '#d9a35b';
+    c.fillRect(0, h - 10, w, 10);
+  });
+  // red paper lantern (akachochin): wraps around a cylinder
+  A.add('chochin', 256, 192, (c, w, h) => {
+    const g = c.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0, '#9e1f1a');
+    g.addColorStop(0.5, '#e0473a');
+    g.addColorStop(1, '#9e1f1a');
+    c.fillStyle = g;
+    c.fillRect(0, 0, w, h);
+    c.strokeStyle = 'rgba(60,0,0,0.35)';
+    c.lineWidth = 2;
+    for (let y = 10; y < h; y += 16) {
+      c.beginPath();
+      c.moveTo(0, y);
+      c.lineTo(w, y);
+      c.stroke();
+    }
+    c.fillStyle = '#151515';
+    c.font = `bold 96px ${FONT_M}`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('酒', w * 0.25, h / 2 + 4);
+    c.fillText('処', w * 0.75, h / 2 + 4);
+  });
+  // indigo shop curtain (noren) with a name, split into three flaps
+  A.add('noren', 512, 256, (c, w, h) => {
+    c.fillStyle = '#23324f';
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = 'rgba(0,0,0,0.25)';
+    for (const x of [w / 3, (2 * w) / 3]) c.fillRect(x - 3, 40, 6, h);
+    c.fillStyle = '#f2efe6';
+    c.font = `bold 92px ${FONT_M}`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('や', w / 6, h / 2 + 10);
+    c.fillText('き', w / 2, h / 2 + 10);
+    c.fillText('鳥', (5 * w) / 6, h / 2 + 10);
+    c.font = `bold 28px ${FONT}`;
+    c.fillText('鳥 八', w / 2, 28);
+  });
+  A.add('busstop', 160, 160, (c, w, h) => {
+    c.fillStyle = '#f5f5f0';
+    c.beginPath();
+    c.arc(w / 2, h / 2, 76, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = '#2a64b4';
+    c.lineWidth = 12;
+    c.stroke();
+    c.fillStyle = '#2a64b4';
+    c.font = `bold 30px ${FONT}`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText('雨ノ浦港', w / 2, h / 2 - 12);
+    c.font = `bold 20px ${FONT}`;
+    c.fillText('町営バス', w / 2, h / 2 + 22);
+  });
+  A.add('timetable', 128, 170, (c, w, h) => {
+    c.fillStyle = '#fbfbf7';
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = '#1d3f6e';
+    c.fillRect(0, 0, w, 22);
+    c.fillStyle = '#333';
+    c.font = `12px ${FONT}`;
+    for (let r = 0; r < 12; r++) {
+      c.fillText(String(6 + r).padStart(2, '0'), 6, 38 + r * 11);
+      for (let k = 0; k < 3; k++) if ((r * 7 + k * 3) % 5 !== 0) c.fillText(String((r * 13 + k * 19) % 60).padStart(2, '0'), 34 + k * 28, 38 + r * 11);
+    }
+  });
+  // shelf goods: rows of colourful packs, cans and bottles (drawn on shelf fronts)
+  A.add('goods', 512, 256, (c, w, h) => {
+    c.fillStyle = '#e9e6de';
+    c.fillRect(0, 0, w, h);
+    const cols = ['#d8433a', '#f2c230', '#3b7dc4', '#4aa060', '#f08a3c', '#ffffff', '#8a5ab0', '#e9e0c8', '#2c3e50', '#e87aa0'];
+    for (let row = 0; row < 4; row++) {
+      let x = 2;
+      const y0 = row * 64;
+      while (x < w - 4) {
+        const bw = 10 + Math.floor(rng.next() * 22);
+        const bh = 26 + Math.floor(rng.next() * 32);
+        c.fillStyle = cols[Math.floor(rng.next() * cols.length)];
+        c.fillRect(x, y0 + 62 - bh, bw, bh);
+        c.fillStyle = 'rgba(255,255,255,0.5)';
+        c.fillRect(x + 2, y0 + 62 - bh + 4, bw - 4, 4);
+        c.fillStyle = 'rgba(0,0,0,0.18)';
+        c.fillRect(x + bw - 2, y0 + 62 - bh, 2, bh);
+        x += bw + 1;
+      }
+      c.fillStyle = '#bdb8ac';
+      c.fillRect(0, y0 + 60, w, 4);
+    }
+  });
+  A.add('bottles', 256, 256, (c, w, h) => {
+    c.fillStyle = '#dfe6ea';
+    c.fillRect(0, 0, w, h);
+    const cols = ['#e9eef2', '#3a7a3e', '#c8322e', '#f0b030', '#2e5e9e', '#8fd0e6', '#a0522d'];
+    for (let row = 0; row < 5; row++) {
+      for (let k = 0; k < 11; k++) {
+        const x = 6 + k * 22, y = row * 51 + 10;
+        c.fillStyle = cols[(row * 3 + k) % cols.length];
+        c.fillRect(x, y + 8, 16, 34);
+        c.fillRect(x + 5, y, 6, 10);
+        c.fillStyle = 'rgba(255,255,255,0.6)';
+        c.fillRect(x + 2, y + 18, 12, 8);
+      }
+      c.fillStyle = '#9aa3a8';
+      c.fillRect(0, row * 51 + 46, w, 3);
+    }
+  });
+  A.add('magazines', 256, 128, (c, w, h) => {
+    const cols = ['#e84a5f', '#2a9d8f', '#f4a261', '#264653', '#e9c46a', '#8ab17d', '#6a4c93', '#ff6b6b'];
+    for (let k = 0; k < 8; k++) {
+      c.fillStyle = cols[k];
+      c.fillRect(k * 32, 0, 30, h);
+      c.fillStyle = '#fff';
+      c.fillRect(k * 32 + 3, 8, 24, 10);
+      c.fillStyle = 'rgba(255,255,255,0.5)';
+      c.fillRect(k * 32 + 5, 40, 18, 40);
+    }
+  });
+  A.add('menu', 128, 180, (c, w, h) => {
+    c.fillStyle = '#2b2a27';
+    c.fillRect(0, 0, w, h);
+    c.strokeStyle = '#8a6a44';
+    c.lineWidth = 8;
+    c.strokeRect(4, 4, w - 8, h - 8);
+    c.fillStyle = '#efeadf';
+    c.font = `bold 20px ${FONT}`;
+    c.textAlign = 'center';
+    c.fillText('本日の', w / 2, 34);
+    c.fillText('おすすめ', w / 2, 58);
+    c.font = `16px ${FONT}`;
+    ['珈琲 450', 'ナポリタン', 'ホットケーキ', '雨の日割'].forEach((t, i) => c.fillText(t, w / 2, 90 + i * 22));
+  });
+  A.add('washer', 128, 128, (c, w, h) => {
+    c.fillStyle = '#eef1f2';
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = '#c9d1d5';
+    c.fillRect(0, 0, w, 20);
+    c.fillStyle = '#2c3238';
+    c.beginPath();
+    c.arc(w / 2, 72, 44, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#6d8796';
+    c.beginPath();
+    c.arc(w / 2, 72, 36, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.35)';
+    c.beginPath();
+    c.arc(w / 2 - 12, 60, 12, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#e25a3a';
+    c.fillRect(10, 6, 16, 8);
+  });
   // leaf cluster textures live in their own atlas (see plants.js)
+  if (/[?&]stats/.test(location.search)) console.log('[rainroji] atlas used px rows', A.y + A.rowH);
 }

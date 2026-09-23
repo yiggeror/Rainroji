@@ -88,6 +88,7 @@ export const PAT = {
   GRATE: 26,
   RUST: 27,
   CONCRETE: 28, // bare concrete, form-tie holes
+  BARBER: 29, // spinning barber-pole stripes
 };
 
 const _v = new THREE.Vector3();

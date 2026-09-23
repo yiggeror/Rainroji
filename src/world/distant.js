@@ -1,134 +1,55 @@
-import * as THREE from 'three';
 import { PAT } from '../builder.js';
 import { col } from '../util.js';
-import { quadF } from './parts.js';
-import { blobGeometry } from './plants.js';
+import { SEA } from './layout.js';
+import { triF } from './parts.js';
 
-// Layered hills fading into the rain and a sea of roofs beyond the neighbourhood
+// Other islands of the archipelago, far out in the rain: soft silhouettes that
+// dissolve into the mist (drawn with the lighter 'far' fog).
 export function buildDistant(ctx) {
   const E = ctx.E, rng = ctx.rng;
-  // ---- mountain ranges (drawn into the 'far' sink: softer fog)
-  const ranges = [
-    { r: 520, h0: 30, h1: 95, colr: '#4d5f57', seg: 160, bias: (a) => 0.6 + 0.4 * Math.max(0, Math.cos(a - 3.6)) },
-    { r: 900, h0: 70, h1: 170, colr: '#5e6f72', seg: 140, bias: (a) => 0.5 + 0.5 * Math.max(0, Math.cos(a - 4.4)) },
-    { r: 1500, h0: 120, h1: 300, colr: '#7c8a91', seg: 120, bias: (a) => 0.55 + 0.45 * Math.cos(a - 4.0) },
+  const islands = [
+    // [angle (rad, 0 = east, pi/2 = south), distance, radius, height, colour]
+    [0.05, 2300, 1100, 170, '#4a5a58'], // the mainland the bridge runs to
+    [-0.55, 1500, 420, 95, '#3f504c'],
+    [-1.25, 1250, 300, 70, '#3c4d48'],
+    [-1.9, 1750, 600, 120, '#46574f'],
+    [-2.55, 1150, 260, 55, '#3a4b46'],
+    [2.9, 1400, 480, 105, '#425349'],
+    [2.3, 950, 170, 38, '#394a44'],
+    [1.75, 1300, 360, 80, '#3f4f4a'],
+    [1.2, 2100, 800, 150, '#4a5b58'],
+    [0.7, 1000, 200, 45, '#3a4b45'],
   ];
   ctx.inSink('far', () => {
-    ranges.forEach((R, ri) => {
-      const pts = [];
+    for (const [a, d, R, H, c] of islands) {
+      const cx = Math.cos(a) * d, cz = Math.sin(a) * d;
+      const seg = 36, rings = 6;
       const ph = rng.range(0, 10);
-      for (let i = 0; i <= R.seg; i++) {
-        const a = (i / R.seg) * Math.PI * 2;
-        const n = Math.sin(a * 3 + ph) * 0.35 + Math.sin(a * 7.3 + ph * 2) * 0.2 + Math.sin(a * 17.1 + ph) * 0.08 + Math.sin(a * 31 + ph * 3) * 0.03;
-        const h = (R.h0 + (R.h1 - R.h0) * (0.5 + 0.5 * n)) * R.bias(a);
-        const rr = R.r * (1 + 0.08 * Math.sin(a * 5 + ph));
-        pts.push([Math.cos(a) * rr, h, Math.sin(a) * rr]);
+      const rim = (ang) => 1 + 0.14 * Math.sin(ang * 2 + ph) + 0.07 * Math.sin(ang * 3 + ph * 2) + 0.04 * Math.sin(ang * 5 + ph * 3);
+      const P = [];
+      for (let r = 0; r <= rings; r++) {
+        const t = r / rings; // 0 = peak, 1 = shore
+        const row = [];
+        for (let i = 0; i <= seg; i++) {
+          const ang = (i / seg) * Math.PI * 2;
+          const rr = R * t * rim(ang);
+          // rounded hump with a couple of shoulders
+          const bump = Math.pow(Math.max(0, 1 - t * t), 1.3) * (r === 0 ? 0.92 : 0.84 + 0.16 * Math.sin(ang * 2 + ph + r * 0.4));
+          const h = t >= 1 ? SEA - 8 : H * bump;
+          row.push([cx + Math.cos(ang) * rr, h, cz + Math.sin(ang) * rr]);
+        }
+        P.push(row);
       }
-      const base = col(R.colr);
-      for (let i = 0; i < R.seg; i++) {
-        const a = pts[i], b = pts[i + 1];
-        E.set({ color: base, pat: PAT.LEAF, gloss: 0, weather: 0, param: ri });
-        // face towards the centre
-        quadF(E, [a[0], -20, a[2]], [b[0], -20, b[2]], [b[0], b[1], b[2]], [a[0], a[1], a[2]], [0, 0, 1, 0, 1, 1, 0, 1], [-a[0], 0, -a[2]]);
+      E.set({ color: col(c), pat: PAT.LEAF, gloss: 0, weather: 0, param: Math.min(3, d / 800) });
+      for (let r = 0; r < rings; r++) {
+        for (let i = 0; i < seg; i++) {
+          const p00 = P[r][i], p01 = P[r][i + 1], p10 = P[r + 1][i], p11 = P[r + 1][i + 1];
+          const up = (a, b, c) => [(a[0] + b[0] + c[0]) / 3 - cx, R * 0.4, (a[2] + b[2] + c[2]) / 3 - cz];
+          triF(E, p00, p10, p11, null, up(p00, p10, p11));
+          if (r > 0) triF(E, p00, p11, p01, null, up(p00, p11, p01));
+        }
       }
-    });
+    }
   });
   E.set({ pat: 0, param: 0 });
-
-  // ---- distant town: simple houses scattered in rings (not to the west: hills)
-  const occupied = (x, z) => (x > -30 && x < 125 && z > -210 && z < 125) || (x < -80 && z > -150 && z < 130);
-  let n = 0;
-  for (let k = 0; k < 4000 && n < 900; k++) {
-    const a = rng.range(0, Math.PI * 2);
-    const d = rng.range(140, 420);
-    const x = Math.cos(a) * d + 20, z = Math.sin(a) * d - 60;
-    if (occupied(x, z)) continue;
-    if (x < -120 && z > -140) continue; // behind the west ridge
-    if (z < -101 && z > -140 && Math.abs(x) < 400) {
-      // keep the rail/canal corridor clear
-      if (z > -135) continue;
-    }
-    n++;
-    ctx.chunk(x, z);
-    const w = rng.range(6, 10), dd = rng.range(6, 9);
-    const tall = rng.chance(0.025);
-    const h = tall ? rng.range(10, 22) : rng.range(4.5, 7);
-    const rot = Math.round(rng.range(0, 4)) * (Math.PI / 2) + rng.range(-0.1, 0.1);
-    const wc = col(rng.pick(['#b9b6ae', '#a9adaf', '#b3aa9a', '#c4bfb4', '#9fa6a8', '#b8b0a2']));
-    E.frame(x, 0, z, rot, () => {
-      E.with({ color: wc, pat: tall ? PAT.TILE : PAT.PANEL, param: 0.1, gloss: 0.1, weather: 0.4 }, () => E.box(-w / 2, 0, -dd / 2, w / 2, h, dd / 2, { ny: true, py: !tall }));
-      // window bands
-      E.with({ color: col('#59636d'), pat: PAT.PLAIN, gloss: 0.6 }, () => {
-        for (let y = 1.2; y < h - 1; y += 2.8) {
-          E.box(-w / 2 + 0.8, y, dd / 2, -w / 2 + 2.2, y + 1.0, dd / 2 + 0.02);
-          E.box(w / 2 - 2.2, y, dd / 2, w / 2 - 0.8, y + 1.0, dd / 2 + 0.02);
-        }
-      });
-      if (!tall) {
-        const rc = col(rng.pick(['#4b5057', '#58616d', '#4f6c61', '#5b4b40', '#63686e']));
-        const rh = dd * 0.3;
-        E.with({ color: rc, pat: PAT.PLAIN, gloss: 0.45 }, () => {
-          quadF(E, [-w / 2 - 0.4, h - 0.1, dd / 2 + 0.4], [w / 2 + 0.4, h - 0.1, dd / 2 + 0.4], [w / 2 + 0.4, h + rh, 0], [-w / 2 - 0.4, h + rh, 0], null, [0, 1, 1]);
-          quadF(E, [w / 2 + 0.4, h - 0.1, -dd / 2 - 0.4], [-w / 2 - 0.4, h - 0.1, -dd / 2 - 0.4], [-w / 2 - 0.4, h + rh, 0], [w / 2 + 0.4, h + rh, 0], null, [0, 1, -1]);
-        });
-        E.with({ color: wc, pat: PAT.PANEL, gloss: 0.1 }, () => {
-          for (const s of [-1, 1]) quadF(E, [s * w / 2, h, -dd / 2], [s * w / 2, h, dd / 2], [s * w / 2, h + rh, 0], [s * w / 2, h, dd / 2], null, [s, 0, 0]);
-        });
-      } else {
-        E.with({ color: col('#9ea3a6'), pat: PAT.PLAIN }, () => E.box(-w / 2, h, -dd / 2, w / 2, h + 0.4, dd / 2));
-      }
-    });
-    // odd tree between houses
-    if (rng.chance(0.45)) {
-      E.with({ color: col(rng.pick(['#3f5f3c', '#4a6b42', '#3a5638'])), pat: PAT.LEAF, gloss: 0 }, () => {
-        const r = rng.range(2.2, 3.8);
-        E.geom(blobGeometry(), new THREE.Matrix4().makeTranslation(x + rng.range(-7, 7), rng.range(3, 5), z + rng.range(-7, 7)).scale(new THREE.Vector3(r, r * 0.85, r)));
-      });
-    }
-  }
-  // ---- steel transmission towers marching over the hills
-  const towers = [[-260, 38, -40], [-230, 30, -260], [-120, 18, -420], [60, 22, -520], [240, 26, -470]];
-  const tp = [];
-  for (const [x, y, z] of towers) {
-    ctx.chunk(x, z);
-    tp.push(tower(ctx, x, y, z));
-  }
-  for (let i = 0; i < tp.length - 1; i++) {
-    for (let k = 0; k < tp[i].length; k++) {
-      const a = tp[i][k], b = tp[i + 1][k];
-      const pts = [];
-      for (let t = 0; t <= 16; t++) {
-        const u = t / 16;
-        pts.push([a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u - 18 * 4 * u * (1 - u), a.z + (b.z - a.z) * u]);
-      }
-      ctx.chunk((a.x + b.x) / 2, (a.z + b.z) / 2);
-      E.with({ color: col('#3a3f45'), pat: PAT.PLAIN, gloss: 0.2 }, () => E.tube(pts, 0.06, 3));
-    }
-  }
-}
-
-function tower(ctx, x, y, z) {
-  const E = ctx.E;
-  const H = 48;
-  const att = [];
-  E.frame(x, y, z, 0.3, () => {
-    E.with({ color: col('#8d9397'), pat: PAT.METAL, gloss: 0.3 }, () => {
-      const lv = [0, 12, 24, 34, 42, 48];
-      const wd = (h) => 4.5 * (1 - h / H) + 0.8;
-      for (let i = 0; i < lv.length - 1; i++) {
-        const a = lv[i], b = lv[i + 1];
-        const wa = wd(a), wb = wd(b);
-        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) E.beam([sx * wa, a, sz * wa], [sx * wb, b, sz * wb], 0.25);
-        for (const [p, q] of [[[-1, -1], [1, -1]], [[1, -1], [1, 1]], [[1, 1], [-1, 1]], [[-1, 1], [-1, -1]]]) {
-          E.beam([p[0] * wa, a, p[1] * wa], [q[0] * wb, b, q[1] * wb], 0.12);
-          E.beam([q[0] * wa, a, q[1] * wa], [p[0] * wb, b, p[1] * wb], 0.12);
-        }
-      }
-      for (const [yy, w] of [[30, 7], [38, 6], [45, 5]]) {
-        E.box(-w, yy - 0.3, -0.3, w, yy + 0.3, 0.3);
-        for (const s of [-1, 1]) att.push(ctx.toWorld(s * (w - 0.3), yy - 2, 0));
-      }
-    });
-  });
-  return att;
 }

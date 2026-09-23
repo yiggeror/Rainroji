@@ -17,6 +17,7 @@ function pole(ctx, x, y, z, dir, o = {}) {
   const rot = Math.atan2(dir.x, dir.z); // local +z along the line
   const att = { hv: [], lv: [], tel: [], drop: null, base: new THREE.Vector3(x, y, z) };
   E.frame(x, y, z, rot, () => {
+    ctx.foot('pole', 0, 0, 0.21, 0.21);
     E.with({ color: col('#b9b8b1'), pat: PAT.CONCRETE, gloss: 0.2, weather: 0.5, vbase: 0 }, () => E.cyl(0, 0, 0, 0.19, H, 10, true, 0.13));
     // yellow/black guard sleeve at the base
     if (o.guard ?? rng.chance(0.5)) {
@@ -136,7 +137,7 @@ export function buildPoles(ctx, roads) {
   };
   const R = roads;
   // main street, east side (the first view looks up this line)
-  const main = line(R.main, 1, [2, { s: 30, lamp: true }, 58, { s: 88, trans: true, lamp: true }, 116, { s: 146, lamp: true }, 174, { s: 212, lamp: true }, 240, 268]);
+  const main = line(R.main, 1, [7, { s: 35, lamp: true }, 63, { s: 93, trans: true, lamp: true }, 121, { s: 151, lamp: true }, 179, { s: 213, lamp: true }, 238]);
   // cross street west: wires fly across the junction
   const cw = line(R.crossW, 1, [{ s: 9, lamp: true }, 21.5]);
   connect(ctx, main[3], cw[0]);
@@ -148,16 +149,24 @@ export function buildPoles(ctx, roads) {
   connect(ctx, up[3], sl[1]);
   const ea = line(R.east, 1, [4, { s: 30, lamp: true }, 58, 86]);
   connect(ctx, ce[1], ea[0]);
-  const cn = line(R.canalNW, -1, [44, 74, { s: 104, lamp: true }, 134]);
-  const cne = line(R.canalNE, -1, [{ s: 14, lamp: true }, 44, 74, 104]);
+  const cn = line(R.canalNW, 1, [8, { s: 38, lamp: true }, 66, { s: 92, lamp: true }]);
+  const cne = line(R.canalNE, 1, [{ s: 12, lamp: true }, 42, 72]);
   connect(ctx, cn[3], cne[0]);
-  const nw = line(R.northW, -1, [50, 80, 110, 138]);
-  const ne = line(R.northE, -1, [12, 42, 72, 102]);
+  const nw = line(R.coastN, 1, [10, { s: 40, lamp: true }, 70, 92]);
+  const ne = line(R.coastNE, 1, [14, { s: 44, lamp: true }, 76]);
   connect(ctx, nw[3], ne[0]);
   const sw = line(R.southW, 1, [10, 22]);
   const se = line(R.southE, -1, [14, 40]);
   connect(ctx, main[1], sw[0]);
   connect(ctx, main[1], se[0]);
+  // harbour road, west coast road and the east shore road
+  const hs = line(R.coastSE, -1, [6, { s: 32, lamp: true }, 60, { s: 88, lamp: true, trans: true }]);
+  connect(ctx, main[0], hs[0]);
+  const cs = line(R.coastS, -1, [{ s: 12, lamp: true }, 24]);
+  connect(ctx, cs[1], main[0]);
+  const es = line(R.coastE, -1, [{ s: 8, lamp: true }, 36, 64, { s: 94, lamp: true }, 122, 150, { s: 178, lamp: true }]);
+  connect(ctx, hs[3], es[0]);
+  connect(ctx, ce[3], es[3]);
   ctx.poleLines = lines;
   // service drops to houses
   const all = lines.flat();

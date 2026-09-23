@@ -24,6 +24,7 @@ export function makeGlows(scene, list) {
       attribute vec4 aCol;
       uniform vec4 uFlicker;
       uniform vec2 uCrossing;
+      uniform vec4 uBlink;
       varying vec2 vUv;
       varying vec3 vCol;
       varying float vA;
@@ -43,7 +44,7 @@ export function makeGlows(scene, list) {
         if (st >= 10.0){
           float id = floor(st / 10.0);
           st = st - id * 10.0;
-          fl = id < 1.5 ? uFlicker.x : id < 2.5 ? uFlicker.y : uFlicker.z;
+          fl = id < 1.5 ? uFlicker.x : id < 2.5 ? uFlicker.y : id < 3.5 ? uFlicker.z : id < 4.5 ? uCrossing.x : id < 5.5 ? uCrossing.y : id < 6.5 ? uBlink.x : id < 7.5 ? uBlink.y : id < 8.5 ? uBlink.z : uBlink.w;
         }
         vCol = aCol.rgb;
         vA = st * fl * smoothstep(0.4, 2.0, dist);
@@ -73,5 +74,17 @@ export function makeGlows(scene, list) {
   mesh.renderOrder = 5;
   scene.add(mesh);
   void LAYER_NOREFL;
-  return { mesh, update() {} };
+  const attr = geo.getAttribute('aPos');
+  return {
+    mesh,
+    update() {},
+    // move halo i (for lamps on moving things); a = strength multiplier via size
+    set(i, p, size) {
+      attr.array[i * 4] = p.x;
+      attr.array[i * 4 + 1] = p.y;
+      attr.array[i * 4 + 2] = p.z;
+      if (size !== undefined) attr.array[i * 4 + 3] = size;
+      attr.needsUpdate = true;
+    },
+  };
 }

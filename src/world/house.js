@@ -47,6 +47,7 @@ export function lotBase(ctx, lot, o = {}) {
   const lowland = Math.abs(lot.level) < 0.05;
   // pad for raised lots
   if (lot.pad > 0.05) {
+    ctx.solid(-w / 2, -lot.pad - 0.4, -d, w / 2, 0, 0);
     const stone = lot.padStyle || (rng.chance(0.6) ? 'stone' : 'concrete');
     E.with({ color: col(stone === 'stone' ? '#9a9788' : '#a9a8a0'), pat: stone === 'stone' ? PAT.STONE : PAT.CONCRETE, gloss: 0.15, weather: 0.5, vbase: -lot.pad }, () =>
       E.box(-w / 2, -lot.pad - 0.4, -d, w / 2, 0, 0, { py: true, ny: true }),
@@ -168,7 +169,7 @@ export function detached(ctx, lot, opts = {}) {
   const frame = opts.frame || (style === 'modern' ? rng.pick(['#3b3a38', '#b9bcbd', '#5a4a3c', '#8a8d8e']) : rng.pick(['#b9bcbd', '#b9bcbd', '#8a8d8e', '#5a4a3c']));
 
   lotBase(ctx, lot);
-  ctx.solid(x0 - 0.3, 0, z0 - 0.3, x1 + 0.3, ye + 1.5, z1 + 0.3);
+  ctx.solid(x0 - 0.25, 0, z0 - 0.25, x1 + 0.25, ye + 0.15, z1 + 0.25);
   ctx.dropPoints.push(ctx.toWorld(x0 + 0.3, ye - 0.5, z1 + 0.05));
 
   // --- structure
@@ -383,12 +384,8 @@ export function detached(ctx, lot, opts = {}) {
       x += rng.range(0.7, 1.4);
     }
   }
-  // garden tree
-  if (opts.tree ?? rng.chance(0.55)) {
-    const tx = parkSide ? -parkSide * (lw / 2 - 0.9) : rng.sign() * (lw / 2 - 0.9);
-    const tz = rng.chance(0.5) ? Math.min(-0.8, z1 + 0.2) : z0 - 0.6;
-    if (tz < -0.6 && tz > -ld + 0.5) tree(ctx, tx, 0, tz, { h: rng.range(3.2, 5.5), crown: rng.range(1.0, 1.7) });
-  }
+  // garden tree: only where the crown has room (never through a wall)
+  if (opts.tree ?? rng.chance(0.55)) gardenTree(ctx, lot, [x0, z0, x1, z1], parkSide, rng.range(1.0, 1.7));
   // back / side clutter
   if (ld + z0 > 1.6 && rng.chance(0.45)) shed(ctx, rng.range(x0 + 0.8, x1 - 0.8), 0, z0 - 0.75, 1.6, 0.8, 1.8, Math.PI);
   if (!parkSide && rng.chance(0.25)) bicycle(ctx, x1 + 0.45, 0.02, z1 - 1.5, Math.PI / 2);
@@ -503,8 +500,31 @@ export function oldHouse(ctx, lot, opts = {}) {
   });
   for (let i = 0; i < 4; i++) bush(ctx, rng.range(-lw / 2 + 0.8, lw / 2 - 0.8), 0.02, rng.range(z1 + 0.6, -0.8), rng.range(0.35, 0.6), { color: '#44683c' });
   if (rng.chance(0.6)) hydrangea(ctx, x0 + 3.0, 0.02, z1 + 0.9, 0.55);
-  tree(ctx, x0 - 0.9 + (lw / 2 + x0 > 1.5 ? 0 : 1.2), 0, z0 + 1.0, { h: rng.range(5, 7), crown: 1.8, color: '#3f6a3a' });
+  gardenTree(ctx, lot, [x0, z0, x1, z1], 0, 1.8, { color: '#3f6a3a', h: rng.range(5, 7) });
   if (lowland) void 0;
+}
+
+// Garden tree placed where its crown fits between the house and the lot edges.
+// house: [x0, z0, x1, z1] in lot coordinates. Tries a few spots, keeps the best.
+export function gardenTree(ctx, lot, house, parkSide, want, o = {}) {
+  const rng = ctx.rng;
+  const lw = lot.w, ld = lot.depth;
+  const [x0, z0, x1, z1] = house;
+  const cands = [];
+  for (let k = 0; k < 14; k++) {
+    const x = rng.range(-lw / 2 + 0.7, lw / 2 - 0.7), z = rng.range(-ld + 0.7, -0.7);
+    if (parkSide && Math.sign(x) === parkSide && Math.abs(x) > lw / 2 - 3.2 && z > -5.5) continue; // not on the car
+    const dx = Math.max(x0 - x, 0, x - x1), dz = Math.max(z0 - z, 0, z - z1);
+    const dHouse = Math.hypot(dx, dz);
+    const dEdge = Math.min(x + lw / 2, lw / 2 - x, -z, z + ld);
+    const room = Math.min(dHouse - 0.35, dEdge + 0.6);
+    cands.push({ x, z, room });
+  }
+  cands.sort((a, b) => b.room - a.room);
+  const c = cands[0];
+  if (!c || c.room < 0.85) return;
+  const crown = Math.min(want, c.room);
+  tree(ctx, c.x, 0, c.z, { h: o.h || rng.range(3.2, 5.5), crown, color: o.color, lean: [rng.range(-0.15, 0.15), rng.range(-0.15, 0.15)] });
 }
 
 // Small helper so other modules can fill a strip with shrubs

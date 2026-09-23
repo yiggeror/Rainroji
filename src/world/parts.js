@@ -226,6 +226,12 @@ export function gableRoof(ctx, x0, z0, x1, z1, ye, o) {
       }
     });
     ridgeTop = yr + tv + rc * 0.9;
+    // camera collision: stepped slices approximating the roof prism
+    const n = 3;
+    for (let k = 0; k < n; k++) {
+      const hw = run * (1 - k / n);
+      ctx.solid(-len / 2, ye + ((yr - ye) * k) / n, -hw, len / 2, ye + ((yr - ye) * (k + 1)) / n + tv, hw);
+    }
   });
   return ridgeTop;
 }
@@ -274,6 +280,11 @@ export function hipRoof(ctx, x0, z0, x1, z1, ye, o) {
       // hip ridges
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) E.beam([sx * rx, yr + tv + 0.02, 0], [sx * ex, ye2 + tv + 0.02, sz * ez], rc * 0.7, rc * 0.5);
     });
+    const n = 3;
+    for (let k = 0; k < n; k++) {
+      const hz = hd * (1 - k / n);
+      ctx.solid(-(W / 2 - (hd * k) / n), ye + ((yr - ye) * k) / n, -hz, W / 2 - (hd * k) / n, ye + ((yr - ye) * (k + 1)) / n + tv, hz);
+    }
   });
   return yr + tv + 0.1;
 }
@@ -296,6 +307,7 @@ export function shedRoof(ctx, x0, z0, x1, z1, ye, o) {
     quadF(E, [a, yHigh - 0.05, z0 - ov], [b, yHigh - 0.05, z0 - ov], [b, yHigh + tv + 0.05, z0 - ov], [a, yHigh + tv + 0.05, z0 - ov], null, [0, 0, -1]);
     for (const [x, e] of [[a, -1], [b, 1]]) quadF(E, [x, yLow - 0.05, z1 + ov], [x, yHigh - 0.05, z0 - ov], [x, yHigh + tv + 0.05, z0 - ov], [x, yLow + tv, z1 + ov], null, [e, 0, 0]);
   });
+  for (let k = 0; k < 3; k++) ctx.solid(x0, ye + (D * p * k) / 3, z0, x1, ye + (D * p * (k + 1)) / 3 + tv, z1 - (D * k) / 3);
   if (o.gutter !== false)
     E.with({ color: col(o.gutterCol || '#cfcfca'), pat: PAT.METAL, gloss: 0.5 }, () => E.box(a + 0.05, yLow - 0.15, z1 + ov - 0.04, b - 0.05, yLow - 0.03, z1 + ov + 0.08));
   else for (let x = a + 0.3; x < b - 0.2; x += ctx.rng.range(0.6, 1.4)) ctx.drip(x, yLow - 0.05, z1 + ov + 0.04);
@@ -326,6 +338,7 @@ export function flatRoof(ctx, x0, z0, x1, z1, ye, o) {
     });
   }
   E.with({ color: col(o.capCol || '#b8b8b2'), pat: PAT.METAL, gloss: 0.5 }, () => E.box(x0 - 0.03, ye + ph, z0 - 0.03, x1 + 0.03, ye + ph + 0.05, z1 + 0.03, { ny: true }));
+  ctx.solid(x0, ye - 0.1, z0, x1, ye + ph + 0.05, z1);
   return ye + ph + 0.05;
 }
 

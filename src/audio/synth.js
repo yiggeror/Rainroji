@@ -1,4 +1,4 @@
-import { noiseBuffer, reverbIR, rainTexture, dist } from './common.js';
+import { noiseBuffer, reverbIR, rainTexture, dist, makeSea } from './common.js';
 
 // ---------------------------------------------------------------------------
 // Fully synthesized soundscape (no samples): rain, drips, gutter water,
@@ -209,8 +209,9 @@ export function makeSynthAudio() {
     trem.start();
     epBus.connect(music);
 
+    const sea = makeSea(ac, sfx);
     window.__audioNodes = { sfx, music };
-    nodes = { master, sfx, reverb, hissG, roarG, texG, t2G, gutG, gAM, hum, trG, trHG, trPan, music, epBus, sfxSend };
+    nodes = { master, sfx, reverb, hissG, roarG, texG, t2G, gutG, gAM, hum, trG, trHG, trPan, music, epBus, sfxSend, sea };
   }
 
   // ------------------------------------------------------------------------------------
@@ -434,13 +435,14 @@ export function makeSynthAudio() {
       }
     }
     // train wheel joints
-    if (env.train > 0.02) {
+    if (env.train > 0.02 && (env.trainV || 0) > 1.5) {
       if (nextClack < ac.currentTime) nextClack = ac.currentTime + 0.05;
+      const gap = Math.min(4, (1.25 * 15) / env.trainV);
       while (nextClack < until) {
         const v = env.train * 0.5;
         thump(nextClack, v, env.trainPan || 0);
-        thump(nextClack + 0.16, v * 0.8, env.trainPan || 0);
-        nextClack += 1.25 + Math.random() * 0.1;
+        thump(nextClack + Math.min(0.3, 0.16 * (15 / env.trainV)), v * 0.8, env.trainPan || 0);
+        nextClack += gap + Math.random() * 0.1;
       }
     }
   }
@@ -516,12 +518,17 @@ export function makeSynthAudio() {
       if (st.train && st.train.active) {
         const tp = { x: st.train.x - st.train.dir * 40, y: 1.5, z: st.train.z };
         const td = dist(tp, cp);
-        env.train = 1 / (1 + Math.pow(td / 60, 2));
+        env.trainV = st.train.v || 0;
+        // idling at the platform it only hums; it roars when it runs
+        env.train = (1 / (1 + Math.pow(td / 60, 2))) * Math.min(1, 0.12 + env.trainV / 12);
         env.trainPan = panOf(tp);
       } else env.train = 0;
       nodes.trG.gain.setTargetAtTime(env.train * 0.55, now, 0.4);
       nodes.trHG.gain.setTargetAtTime(env.train * 0.12, now, 0.4);
       nodes.trPan.pan.setTargetAtTime(env.trainPan || 0, now, 0.4);
+      // the sea: louder the closer you are to the shore line
+      const cdist = world.coastDist ? Math.abs(world.coastDist(cp.x, cp.z)) : 999;
+      nodes.sea.update(t, Math.pow(Math.max(0, 1 - cdist / 55), 1.5) * (1 - Math.min(0.6, alt * 0.01)));
       // gentle gusts
       const gust = 0.85 + 0.15 * Math.sin(t * 0.11) * Math.sin(t * 0.037 + 1.3);
       nodes.hissG.gain.setTargetAtTime(0.34 * gust, now, 1.0);

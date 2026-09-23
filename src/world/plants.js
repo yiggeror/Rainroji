@@ -197,6 +197,7 @@ export function tree(ctx, x, y, z, o = {}) {
   const trunkCol = col(o.trunk || '#4a3f36');
   const lean = o.lean || [rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)];
   const top = [x + lean[0], y + h * 0.62, z + lean[1]];
+  ctx.foot('tree', x, z, (o.r || h * 0.035) + 0.02, (o.r || h * 0.035) + 0.02);
   E.with({ color: trunkCol, pat: PAT.WOOD, gloss: 0.15, weather: 0.2, sway: 0 }, () => {
     const pts = [[x, y - 0.1, z], [x + lean[0] * 0.3, y + h * 0.25, z + lean[1] * 0.3], top];
     E.tube(pts, [o.r || h * 0.035, (o.r || h * 0.035) * 0.8, (o.r || h * 0.035) * 0.55], 6);
@@ -382,4 +383,93 @@ export function bamboo(ctx, x, y, z, n = 8, o = {}) {
     clump(ctx, bx + lx, y + h * 0.85, bz + lz, 1.1, 1.6, 1.1, { tile: 'small', color: '#6f9448', size: 0.6, sway: 0.15, n: 30 });
   }
   void o;
+}
+
+// ---------------------------------------------------------------------------
+// Woodland trees: a painterly solid core (so the wood reads as a mass from far
+// away) with leaf cards on its skin (so it has a leafy edge up close).
+// ---------------------------------------------------------------------------
+function skinCards(ctx, center, rx, ry, rz, n, o) {
+  const E = ctx.E, rng = ctx.rng;
+  const base = col(o.color);
+  ctx.inSink('leaf', () => {
+    for (let i = 0; i < n; i++) {
+      const u = rng.range(-0.55, 1), a = rng.next() * Math.PI * 2;
+      const q = Math.sqrt(1 - u * u);
+      const d = new THREE.Vector3(q * Math.cos(a), u, q * Math.sin(a));
+      const p = new THREE.Vector3(center.x + d.x * rx * 1.02, center.y + d.y * ry * 1.02, center.z + d.z * rz * 1.02);
+      const c = base.clone().offsetHSL(rng.range(-0.015, 0.015), rng.range(-0.05, 0.05), rng.range(-0.04, 0.05) + (u > 0.3 ? 0.03 : -0.02));
+      E.set({ color: c, pat: 0, sway: (o.sway ?? 0.05) * (0.5 + 0.5 * Math.max(0, u)), ex1: rng.next() });
+      card(E, p, o.size * rng.range(0.8, 1.2), d, center, o.tile || 'broad', 0.8, 0.8 + 0.3 * Math.max(0, u), rng.range(0, 6.28));
+    }
+    E.set({ sway: 0, ex1: 0, weather: 0 });
+  });
+}
+
+export function forestTree(ctx, x, y, z, o = {}) {
+  const E = ctx.E, rng = ctx.rng;
+  const h = o.h || rng.range(7, 11);
+  const leafCol = o.color || rng.pick(['#3d6537', '#4a7340', '#3a5c38', '#52793f', '#446a3a']);
+  const lean = [rng.range(-0.4, 0.4), rng.range(-0.4, 0.4)];
+  const top = [x + lean[0], y + h * 0.55, z + lean[1]];
+  E.with({ color: col('#4a4038'), pat: PAT.WOOD, gloss: 0.1, weather: 0.2 }, () => E.tube([[x, y - 0.2, z], [x + lean[0] * 0.4, y + h * 0.3, z + lean[1] * 0.4], top], [h * 0.03, h * 0.024, h * 0.016], 5));
+  const g = blobGeometry();
+  const blobs = rng.int(2, 3);
+  for (let b = 0; b < blobs; b++) {
+    const r = h * rng.range(0.2, 0.28);
+    const c = new THREE.Vector3(top[0] + rng.range(-1, 1) * r * 0.6, top[1] + r * (0.4 + b * 0.55) + rng.range(-0.3, 0.3), top[2] + rng.range(-1, 1) * r * 0.6);
+    const sx = r * rng.range(1.0, 1.25), sy = r * rng.range(0.75, 0.95), sz = r * rng.range(1.0, 1.25);
+    E.with({ color: col(leafCol).multiplyScalar(0.72), pat: PAT.LEAF, gloss: 0.05, weather: 0 }, () => {
+      E.geom(g, new THREE.Matrix4().compose(c, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rng.range(0, 6), 0)), new THREE.Vector3(sx * 0.92, sy * 0.92, sz * 0.92)));
+    });
+    skinCards(ctx, c, sx, sy, sz, Math.round(10 + r * 3), { color: leafCol, size: Math.min(2.2, r * 0.75), tile: 'broad', sway: 0.05 });
+  }
+}
+
+// Japanese cedar (sugi): tall straight trunk, narrow dark cone of foliage
+export function sugi(ctx, x, y, z, o = {}) {
+  const E = ctx.E, rng = ctx.rng;
+  const h = o.h || rng.range(11, 17);
+  const leafCol = o.color || rng.pick(['#2f4a33', '#34503a', '#2b4430', '#3a5638']);
+  E.with({ color: col('#5a4636'), pat: PAT.WOOD, gloss: 0.1, weather: 0.2 }, () => E.cyl(x, y - 0.2, z, h * 0.022, h * 0.9, 6, false, h * 0.01));
+  const c0 = y + h * 0.3, R = h * rng.range(0.13, 0.17);
+  const tiers = 4;
+  for (let t = 0; t < tiers; t++) {
+    const ya = c0 + ((h - (c0 - y)) * t) / tiers;
+    const yb = c0 + ((h - (c0 - y)) * (t + 1.25)) / tiers;
+    const ra = R * (1 - t / tiers) * 1.05 + 0.2, rb = R * (1 - (t + 1) / tiers) * 0.7 + 0.08;
+    E.with({ color: col(leafCol).multiplyScalar(0.75 + t * 0.05), pat: PAT.LEAF, gloss: 0.05, weather: 0 }, () => E.cyl(x, ya, z, ra, yb - ya, 7, true, rb));
+    skinCards(ctx, new THREE.Vector3(x, (ya + yb) / 2, z), ra * 0.95, (yb - ya) * 0.5, ra * 0.95, 5, { color: leafCol, size: Math.max(0.8, ra * 0.9), tile: 'small', sway: 0.04 });
+  }
+}
+
+// Black pine (kuromatsu) of the beach grove: leaning trunk, flat layered crowns
+export function pine(ctx, x, y, z, o = {}) {
+  const E = ctx.E, rng = ctx.rng;
+  const h = o.h || rng.range(6, 10);
+  const lean = o.lean || [rng.range(-1.5, 1.5), rng.range(-1.5, 1.5)];
+  // a gently snaking trunk leaning away from the sea wind
+  const pts = [];
+  for (let i = 0; i <= 5; i++) {
+    const t = i / 5;
+    const wob = Math.sin(t * 5 + x) * 0.25 * t;
+    pts.push([x + lean[0] * t * t + wob, y - 0.2 + h * t, z + lean[1] * t * t + wob * 0.5]);
+  }
+  E.with({ color: col('#6b5646'), pat: PAT.WOOD, gloss: 0.1, weather: 0.3 }, () => E.tube(pts, pts.map((_, i) => h * (0.024 - i * 0.0032)), 6));
+  const leafCol = o.color || rng.pick(['#3f6540', '#3a5f3c', '#46693f']);
+  const n = rng.int(4, 6);
+  for (let i = 0; i < n; i++) {
+    const t = 0.5 + (i / (n - 1)) * 0.5;
+    const k = Math.min(4, Math.floor(t * 5));
+    const p = pts[k];
+    const a = rng.range(0, Math.PI * 2);
+    const reach = rng.range(0.8, 2.0) * (1.1 - t * 0.5);
+    const cx = p[0] + Math.cos(a) * reach, cz = p[2] + Math.sin(a) * reach;
+    const cy = y + h * t + rng.range(-0.2, 0.3);
+    const r = rng.range(1.0, 1.7) * (1.15 - t * 0.35);
+    E.with({ color: col('#4d3e33'), pat: PAT.WOOD, gloss: 0.1 }, () => E.tube([[p[0], cy - 0.25, p[2]], [(p[0] + cx) / 2, cy + 0.1, (p[2] + cz) / 2], [cx, cy, cz]], [0.07, 0.05, 0.03], 4));
+    // flat pad of needles: a thin dark core with lighter needle cards on top
+    E.with({ color: col(leafCol).multiplyScalar(0.62), pat: PAT.LEAF, gloss: 0.05 }, () => E.geom(blobGeometry(), new THREE.Matrix4().compose(new THREE.Vector3(cx, cy + 0.05, cz), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, a, 0)), new THREE.Vector3(r * 0.85, r * 0.2, r * 0.75))));
+    clump(ctx, cx, cy + 0.18, cz, r * 1.05, r * 0.26, r * 0.95, { tile: 'small', color: leafCol, size: 0.5, n: Math.round(r * 22), sway: 0.05, bend: 0.35 });
+  }
 }

@@ -106,3 +106,45 @@ export function glide(p, v, ctx, tc = 0.3) {
   p.cancelScheduledValues(ctx.currentTime);
   p.setTargetAtTime(v, ctx.currentTime, tc);
 }
+
+// Waves washing against the sea wall / beach: low surf + a fizzing wash that
+// rise and fall on a slow swell. update(t, level) sets how close the shore is.
+export function makeSea(ac, dest) {
+  const buf = noiseBuffer(ac, 9, 'brown');
+  const pink = noiseBuffer(ac, 7, 'pink');
+  const mk = (b, rate) => {
+    const s = ac.createBufferSource();
+    s.buffer = b;
+    s.loop = true;
+    s.playbackRate.value = rate;
+    s.start(ac.currentTime + 0.05, Math.random() * b.duration);
+    return s;
+  };
+  const surf = mk(buf, 0.7);
+  const lp = ac.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 520;
+  const surfG = ac.createGain();
+  surfG.gain.value = 0;
+  surf.connect(lp).connect(surfG).connect(dest);
+  const wash = mk(pink, 0.9);
+  const bp = ac.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1500;
+  bp.Q.value = 0.6;
+  const washG = ac.createGain();
+  washG.gain.value = 0;
+  wash.connect(bp).connect(washG).connect(dest);
+  return {
+    update(t, level) {
+      const now = ac.currentTime;
+      // a swell every ~8 s: the wash follows the surf and then drains away
+      const ph = (t / 8.3) % 1;
+      const swell = Math.pow(Math.sin(Math.PI * ph), 2);
+      const drain = Math.pow(Math.max(0, Math.sin(Math.PI * (ph - 0.18))), 3);
+      surfG.gain.setTargetAtTime(level * (0.08 + 0.2 * swell), now, 0.4);
+      washG.gain.setTargetAtTime(level * (0.015 + 0.09 * drain), now, 0.3);
+      lp.frequency.setTargetAtTime(380 + 420 * swell, now, 0.5);
+    },
+  };
+}

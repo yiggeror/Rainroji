@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { U } from './shaders.js';
 import { makeSky } from './sky.js';
 import { SkyOcclusion, RainMap, GroundReflection, Post, LAYER_OCC } from './render.js';
@@ -7,7 +6,7 @@ import { buildWorld } from './world/index.js';
 import { makeRain } from './fx/rain.js';
 import { makeSoundToggle } from './ui.js';
 import { Emitter } from './builder.js';
-import { makeCameraRig } from './camera.js';
+import { makeGhostCamera } from './camera.js';
 
 export function start({ audio } = {}) {
   const params = new URLSearchParams(location.search);
@@ -26,7 +25,7 @@ export function start({ audio } = {}) {
   let pixelRatio = shot ? 1 : maxPR;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 3000);
+  const camera = new THREE.PerspectiveCamera(48, 1, 0.15, 3500);
   const sky = makeSky();
   scene.add(sky);
 
@@ -44,20 +43,8 @@ export function start({ audio } = {}) {
 
   // --- camera & controls ------------------------------------------------------
   const view = world.views[params.get('view') || 'start'] || world.views.start;
-  camera.position.set(...view.pos);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(...view.target);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.minDistance = 1.2;
-  controls.maxDistance = 60;
-  controls.maxPolarAngle = Math.PI * 0.492;
-  controls.screenSpacePanning = false;
-  controls.rotateSpeed = 0.5;
-  controls.zoomSpeed = 0.9;
-  controls.panSpeed = 0.9;
-  controls.update();
-  const rig = makeCameraRig({ camera, controls, world, dom: renderer.domElement });
+  const rig = makeGhostCamera({ camera, world, dom: renderer.domElement });
+  rig.reset(view.pos, view.target);
 
   // --- sizing ----------------------------------------------------------------
   let W = 0, H = 0;
@@ -73,6 +60,8 @@ export function start({ audio } = {}) {
     W = Math.floor(w * pixelRatio);
     H = Math.floor(h * pixelRatio);
     camera.aspect = w / h;
+    // portrait screens: widen the vertical field so the street isn't a keyhole
+    camera.fov = camera.aspect >= 1 ? 50 : Math.min(74, (2 * Math.atan(Math.tan((25 * Math.PI) / 180) / Math.pow(camera.aspect, 0.75)) * 180) / Math.PI);
     camera.updateProjectionMatrix();
     post.setSize(W, H);
     refl.setSize(W, H);
@@ -118,7 +107,6 @@ export function start({ audio } = {}) {
     renderer.render(scene, camera);
     fade = Math.min(1, fade + dt * 0.5);
     post.render(fade);
-    rig.restore();
 
     // adaptive resolution: keep things smooth on weaker GPUs
     if (!shot) {
@@ -138,11 +126,8 @@ export function start({ audio } = {}) {
   if (shot) {
     // deterministic stills for review: render a few frames so the rain settles
     window.__renderShot = (opts = {}) => {
-      if (opts.pos) camera.position.set(...opts.pos);
-      if (opts.target) controls.target.set(...opts.target);
-      rig.reset();
+      if (opts.pos && opts.target) rig.reset(opts.pos, opts.target);
       if (opts.t !== undefined) t = opts.t;
-      controls.update();
       for (let i = 0; i < (opts.frames || 3); i++) {
         clock.getDelta();
         frame();
@@ -150,25 +135,21 @@ export function start({ audio } = {}) {
       return true;
     };
     window.__world = world;
+    window.THREE_Vector3 = THREE.Vector3;
     // headless camera simulation (no rendering) for control tests
     window.__sim = {
-      controls,
       camera,
+      rig,
       reset(pos, target) {
-        camera.position.set(...pos);
-        controls.target.set(...target);
-        rig.reset();
-        rig.keys.clear();
-        controls.update();
+        rig.reset(pos, target);
       },
       step(dt, act) {
-        if (act) act(controls, rig.keys);
+        if (act) act(rig);
         stepCamera(dt);
-        const r = camera.position.toArray();
-        rig.restore();
-        return { render: r, orbit: camera.position.toArray(), target: controls.target.toArray() };
+        const d = new THREE.Vector3();
+        camera.getWorldDirection(d);
+        return { pos: camera.position.toArray(), dir: d.toArray() };
       },
-      rig,
     };
     window.__ready = true;
   } else {
@@ -179,6 +160,6 @@ export function start({ audio } = {}) {
     veil.style.opacity = '0';
     setTimeout(() => veil.remove(), 1400);
   }
-  return { renderer, scene, camera, world, controls };
+  return { renderer, scene, camera, world, rig };
 }
 void LAYER_OCC;

@@ -46,6 +46,8 @@ export const U = {
   uRainOn: { value: 0 },
   uFlicker: { value: new THREE.Vector4(1, 1, 1, 1) },
   uCrossing: { value: new THREE.Vector2(0, 0) },
+  // lighthouses (x red, y white), boat mast lamps (z), spare (w)
+  uBlink: { value: new THREE.Vector4(1, 1, 1, 1) },
   uCheap: { value: 0 },
 };
 
@@ -98,12 +100,19 @@ vec3 skyGradient(vec3 d){
 }
 
 // aerial perspective + drifting rain mist
+// the rain mist hugs the ground: average density along the view ray through an
+// exponential height layer (so flying up clears the view, the street stays misty)
+float fogLayer(float yc, float yp){
+  const float Hs = 24.0;
+  float a = exp(-max(yc + 2.0, 0.0) / Hs), b = exp(-max(yp + 2.0, 0.0) / Hs);
+  float dy = yc - yp;
+  float avg = abs(dy) < 0.5 ? 0.5 * (a + b) : Hs * (b - a) / dy;
+  return 0.24 + 0.76 * clamp(avg / 0.92, 0.0, 1.0);
+}
 vec3 applyFog(vec3 col, vec3 wp, float dist){
   vec3 vd = (wp - cameraPosition) / max(dist, 1e-3);
-  float d = dist * uFogDensity;
+  float d = dist * uFogDensity * fogLayer(cameraPosition.y, wp.y);
   float f = 1.0 - exp(-pow(d, 1.3));
-  float hf = exp(-max(wp.y + 2.0, 0.0) * 0.035);
-  f *= mix(0.72, 1.12, hf);
   float mist = vnoise(wp.xz * 0.018 + vec2(uTime * 0.012, uTime * 0.004)) * 0.65
              + vnoise(wp.xz * 0.05 - vec2(uTime * 0.02, 0.0)) * 0.35;
   f *= mix(0.8, 1.2, mist);
@@ -224,6 +233,7 @@ ${GLSL_SKYOCC}
 ${GLSL_LIGHTS}
 uniform vec4 uFlicker;
 uniform vec2 uCrossing;
+uniform vec4 uBlink;
 #ifdef ATLAS
 uniform sampler2D uAtlas;
 #endif
@@ -370,12 +380,14 @@ void main(){
     // distant ranges: painted forest texture, much lighter fog, misty feet
     float n = fbm(vWorldPos.xz * 0.008 + vWorldPos.y * 0.015);
     float n2 = vnoise(vWorldPos.xz * 0.05 + vWorldPos.y * 0.07);
-    vec3 alb = vColor * (0.78 + 0.35 * n + 0.12 * n2);
-    vec3 c = alb * (uAmbSky * 0.9 + uLightColor * 0.35 * max(dot(N, uLightDir), 0.0) + 0.08);
-    c = applyFog(c, vWorldPos, dist * (0.12 + 0.045 * param));
+    vec3 alb = vColor * (0.82 + 0.3 * n + 0.1 * n2);
+    vec3 c = alb * (uAmbSky * 0.62 + uLightColor * 0.22 * max(dot(N, uLightDir), 0.0) + 0.04);
     vec3 vd = (vWorldPos - cameraPosition) / dist;
-    float low = 1.0 - smoothstep(-10.0, 60.0 + 50.0 * param, vWorldPos.y);
-    c = mix(c, skyGradient(normalize(vec3(vd.x, 0.03, vd.z))), low * 0.6);
+    // aerial perspective towards the horizon colour, strongest at the misty feet
+    float k = 1.0 - exp(-dist * 0.00055 * (0.8 + 0.25 * param));
+    float low = 1.0 - smoothstep(-5.0, 40.0 + 30.0 * param, vWorldPos.y);
+    k = clamp(k + low * 0.35, 0.0, 0.97);
+    c = mix(c, skyGradient(normalize(vec3(vd.x, 0.02, vd.z))), k);
     gl_FragColor = vec4(c, 1.0);
     return;
   }
@@ -497,13 +509,22 @@ void main(){
     else if (fid == 3) fl = uFlicker.z;
     else if (fid == 4) fl = uCrossing.x;
     else if (fid == 5) fl = uCrossing.y;
+    else if (fid == 6) fl = uBlink.x;
+    else if (fid == 7) fl = uBlink.y;
+    else if (fid == 8) fl = uBlink.z;
+    else if (fid == 9) fl = uBlink.w;
     vec3 c = albedo * emit * fl + albedo * 0.08;
     c = applyFog(c, vWorldPos, dist);
     gl_FragColor = vec4(c, 1.0);
     return;
   } else if (pat == 14){ // water surface
-    vec3 rp = ripples(vWorldPos.xz * 0.8 + vec2(0.0, uTime * 0.05 * param), uTime);
-    Np = normalize(N + vec3(rp.x, 0.0, rp.y) * 1.2 + vec3(vnoise(vWorldPos.xz * 2.0 + uTime * 0.3) - 0.5, 0.0, vnoise(vWorldPos.xz * 2.0 - uTime * 0.2) - 0.5) * 0.25);
+    float nearW = 1.0 - smoothstep(25.0, 110.0, dist);
+    float midW = 1.0 - smoothstep(50.0, 320.0, dist);
+    vec3 rp = nearW > 0.01 ? ripples(vWorldPos.xz * 0.8 + vec2(0.0, uTime * 0.05 * param), uTime) : vec3(0.0);
+    // long low swell + a soft wind ruffle; rain rings only up close (no sparkle far away)
+    vec2 sw = vec2(sin(vWorldPos.x * 0.07 + vWorldPos.z * 0.04 + uTime * 0.6), sin(vWorldPos.z * 0.09 - vWorldPos.x * 0.03 + uTime * 0.45)) * 0.022;
+    vec2 ruf = vec2(vnoise(vWorldPos.xz * 0.22 + uTime * 0.18) - 0.5, vnoise(vWorldPos.xz * 0.22 - uTime * 0.15 + 7.0) - 0.5) * 0.07 * midW;
+    Np = normalize(N + vec3(rp.x, 0.0, rp.y) * 0.9 * nearW + vec3(sw.x + ruf.x, 0.0, sw.y + ruf.y) + vec3(vnoise(vWorldPos.xz * 2.0 + uTime * 0.3) - 0.5, 0.0, vnoise(vWorldPos.xz * 2.0 - uTime * 0.2) - 0.5) * 0.12 * nearW);
     gloss = 0.95;
     puddle = 1.0;
   } else if (pat == 15){ // kenchi-ishi retaining wall (diagonal stones)
@@ -564,6 +585,12 @@ void main(){
     albedo = mix(albedo, vec3(0.28, 0.12, 0.05), smoothstep(0.45, 0.75, rs) * 0.7);
   } else if (pat == 11){
     isGlass = 1.0;
+  } else if (pat == 29){ // barber pole: red / white / blue spirals turning
+    float a = uv.x / (6.2832 * 0.1);
+    float st = fract(a * 1.0 + uv.y * 2.2 - uTime * 0.45);
+    vec3 bc = st < 0.33 ? vec3(0.8, 0.08, 0.06) : st < 0.5 ? vec3(0.95) : st < 0.83 ? vec3(0.1, 0.2, 0.7) : vec3(0.95);
+    albedo = bc;
+    gloss = 0.8;
   }
 
   // ---- weathering: stains and damp bottoms on walls
@@ -765,6 +792,63 @@ export function makeDepthMaterial() {
         gl_Position = projectionMatrix * modelViewMatrix * p;
       }`,
     fragmentShader: /* glsl */ `void main(){ gl_FragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0); }`,
+    side: THREE.DoubleSide,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Clear glass (shop fronts): mostly see-through, reflective at grazing angles,
+// with rain running down it.
+// ---------------------------------------------------------------------------
+export function makeGlassMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: U,
+    vertexShader: /* glsl */ `
+      varying vec3 vWorldPos;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      void main(){
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vUv = uv;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: /* glsl */ `
+      ${GLSL_COMMON}
+      varying vec3 vWorldPos;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+      void main(){
+        vec3 N = normalize(vNormal);
+        if (!gl_FrontFacing) N = -N;
+        vec3 toCam = cameraPosition - vWorldPos;
+        float dist = length(toCam);
+        vec3 V = toCam / dist;
+        float nv = clamp(abs(dot(N, V)), 0.0, 1.0);
+        float F = mix(0.05, 0.8, pow(1.0 - nv, 3.0));
+        vec3 env = envColor(reflect(-V, N));
+        // the street and the houses opposite, as a dark band in the reflection
+        float band = smoothstep(-0.05, 0.1, reflect(-V, N).y) * (1.0 - smoothstep(0.12, 0.4, reflect(-V, N).y));
+        env = mix(env, env * 0.55, band);
+        // rain: beads and runnels on the pane
+        vec2 q = vUv * vec2(9.0, 5.0);
+        float col = floor(q.x);
+        float h = hash12(vec2(col, 3.1));
+        float run = fract(q.y * 0.35 + uTime * (0.08 + h * 0.18) + h * 7.0);
+        float lane = abs(fract(q.x) - 0.5 - (h - 0.5) * 0.4);
+        float streak = (1.0 - smoothstep(0.015, 0.04, lane)) * smoothstep(0.0, 0.25, run) * (1.0 - smoothstep(0.25, 0.9, run)) * step(0.55, h);
+        vec2 bq = vUv * 22.0;
+        vec2 bc = floor(bq);
+        vec2 bo = hash22(bc) - 0.5;
+        float bead = (1.0 - smoothstep(0.05, 0.12, length(fract(bq) - 0.5 - bo * 0.5))) * step(0.72, hash12(bc + 11.0));
+        float a = clamp(F + 0.06 + streak * 0.35 + bead * 0.25, 0.0, 0.9);
+        vec3 c = mix(env, vec3(0.85, 0.88, 0.92), (streak + bead) * 0.35);
+        c = applyFog(c, vWorldPos, dist);
+        gl_FragColor = vec4(c, a);
+      }`,
+    transparent: true,
+    depthWrite: false,
     side: THREE.DoubleSide,
   });
 }

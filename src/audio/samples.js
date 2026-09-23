@@ -1,4 +1,4 @@
-import { noiseBuffer, reverbIR, dist } from './common.js';
+import { noiseBuffer, reverbIR, dist, makeSea } from './common.js';
 
 // ---------------------------------------------------------------------------
 // Recorded soundscape for the multi-file site: CC0 / public-domain field
@@ -91,7 +91,7 @@ export function makeSampleAudio(base = 'audio/') {
     const trPan = ac.createStereoPanner();
     br.connect(brf).connect(trG).connect(trPan).connect(sfx);
     br.start();
-    N = { master, reverb, sfx, musicBus, hum, trG, trPan };
+    N = { master, reverb, sfx, musicBus, hum, trG, trPan, sea: makeSea(ac, sfx) };
     window.__audioNodes = { sfx, musicBus };
   }
 
@@ -257,7 +257,7 @@ export function makeSampleAudio(base = 'audio/') {
       const vol = 1.1 / (1 + Math.pow(cd / 30, 2));
       if (st.crossing && !env.crossingOn) {
         env.crossingOn = true;
-        const eta = st.train ? Math.abs(st.train.x - 6) / 15 : 12;
+        const eta = st.crossEta ?? 7;
         startCrossing(manifest.crossing.trainPeak - eta, vol, panOf(cross));
       } else if (!st.crossing) env.crossingOn = false;
       if (crossingSrc) {
@@ -268,9 +268,11 @@ export function makeSampleAudio(base = 'audio/') {
       if (st.train && st.train.active) {
         const tp = { x: st.train.x - st.train.dir * 40, y: 1.5, z: st.train.z };
         const td = dist(tp, cp);
-        N.trG.gain.setTargetAtTime(0.5 / (1 + Math.pow(td / 60, 2)), now, 0.4);
+        N.trG.gain.setTargetAtTime((0.5 / (1 + Math.pow(td / 60, 2))) * Math.min(1, 0.12 + (st.train.v || 0) / 12), now, 0.4);
         N.trPan.pan.setTargetAtTime(panOf(tp), now, 0.4);
       } else N.trG.gain.setTargetAtTime(0, now, 0.6);
+      const cdist = world.coastDist ? Math.abs(world.coastDist(cp.x, cp.z)) : 999;
+      N.sea.update(t, 1.2 * Math.pow(Math.max(0, 1 - cdist / 55), 1.5) * (1 - Math.min(0.6, alt * 0.01)));
     },
   };
 }

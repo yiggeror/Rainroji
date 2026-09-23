@@ -73,6 +73,7 @@ export function shed(ctx, x, y, z, w = 1.6, d = 0.9, h = 1.9, rot = 0) {
   const E = ctx.E;
   const c = col(ctx.rng.pick(['#d9d3c2', '#c9ccc4', '#b8bfb9', '#d8cdb5']));
   E.frame(x, y, z, rot, () => {
+    ctx.foot('shed', 0, 0, w / 2, d / 2);
     E.with({ color: c, pat: PAT.CORR, gloss: 0.4, weather: 0.4 }, () => E.box(-w / 2, 0.08, -d / 2, w / 2, h, d / 2));
     E.with({ color: c.clone().multiplyScalar(0.8), pat: PAT.METAL, gloss: 0.5 }, () => {
       E.box(-w / 2 - 0.05, h, -d / 2 - 0.08, w / 2 + 0.05, h + 0.08, d / 2 + 0.1);
@@ -89,6 +90,7 @@ export function bicycle(ctx, x, y, z, rot, o = {}) {
   const fc = col(o.color || rng.pick(['#c9c7c0', '#2e5e8e', '#a12f2f', '#e6e3dc', '#3d5a45', '#d8b54a', '#1d1d1f']));
   const wr = 0.33;
   E.frame(x, y, z, rot, () => {
+    ctx.foot('bicycle', 0, 0, 0.85, 0.2);
     // lean on its stand a little
     const lean = new THREE.Matrix4().makeRotationZ(o.lean ?? 0.06);
     E.frameM(lean, () => {
@@ -134,6 +136,7 @@ export function car(ctx, x, y, z, rot, o = {}) {
   const [L, W, H, bh] = dims;
   const glass = col('#27303a');
   E.frame(x, y, z, rot, () => {
+    ctx.foot('car', 0, 0, L / 2, W / 2);
     // lower body
     E.with({ color: paint, pat: PAT.PLAIN, gloss: 0.85, weather: 0 }, () => {
       E.box(-L / 2, 0.22, -W / 2, L / 2, bh, W / 2);
@@ -190,6 +193,7 @@ export function vendingMachine(ctx, x, y, z, rot, variant = 0) {
   const accent = col(['#c8282c', '#1d5aa8', '#2f8f4e'][variant]);
   const w = 1.0, h = 1.83, d = 0.72;
   E.frame(x, y, z, rot, () => {
+    ctx.foot('vending', 0, -d / 2, w / 2, d / 2);
     E.with({ color: accent, pat: PAT.PLAIN, gloss: 0.6, weather: 0.1 }, () => E.box(-w / 2, 0, -d, w / 2, h, 0));
     E.with({ color: bodyCol, pat: PAT.PLAIN, gloss: 0.6 }, () => E.box(-w / 2 - 0.02, h, -d - 0.02, w / 2 + 0.02, h + 0.06, 0.04));
     E.with({ color: col('#3a3b3d'), pat: PAT.PLAIN }, () => E.box(-w / 2 + 0.02, 0, -d + 0.05, w / 2 - 0.02, 0.08, 0.0));
@@ -211,6 +215,7 @@ export function curveMirror(ctx, x, y, z, rot, o = {}) {
   const E = ctx.E;
   const orange = col('#e36f2a');
   E.frame(x, y, z, rot, () => {
+    ctx.foot('mirror', 0, 0, 0.05, 0.05);
     E.with({ color: orange, pat: PAT.METAL, gloss: 0.55, weather: 0.2 }, () => {
       E.cyl(0, 0, 0, 0.038, 3.0, 8);
       E.box(-0.05, 2.55, -0.05, 0.05, 2.65, 0.25);
@@ -243,6 +248,7 @@ export function curveMirror(ctx, x, y, z, rot, o = {}) {
 export function postBox(ctx, x, y, z, rot) {
   const E = ctx.E;
   E.frame(x, y, z, rot, () => {
+    ctx.foot('postbox', 0, 0, 0.29, 0.29);
     E.with({ color: col('#c8231f'), pat: PAT.METAL, gloss: 0.6, weather: 0.1 }, () => {
       E.cyl(0, 0.25, 0, 0.26, 1.05, 16);
       const dome = new THREE.SphereGeometry(0.28, 16, 6, 0, Math.PI * 2, 0, Math.PI / 2);
@@ -259,6 +265,7 @@ export function postBox(ctx, x, y, z, rot) {
 export function signPost(ctx, x, y, z, rot, rect, w, h, top = 2.5, o = {}) {
   const E = ctx.E;
   E.frame(x, y, z, rot, () => {
+    ctx.foot('sign', 0, 0, 0.05, 0.05);
     E.with({ color: col(o.pole || '#9fa3a6'), pat: PAT.METAL, gloss: 0.5, weather: 0.1 }, () => E.cyl(0, 0, 0, 0.035, top + 0.05, 8));
     ctx.inSink('atlas', () => {
       E.with({ color: col('#ffffff'), pat: PAT.PLAIN, gloss: 0.35, weather: 0 }, () => {
@@ -325,6 +332,7 @@ export function meshFence(ctx, x0, x1, z, h = 1.5, colr = '#4f6f52') {
 export function gatePost(ctx, x, z, h = 1.35, o = {}) {
   const E = ctx.E, rng = ctx.rng;
   const c = col(o.color || rng.pick(['#b8b5ad', '#8e8a82', '#d4cfc2', '#6f6a64']));
+  ctx.foot('gatepost', x, z, 0.3, 0.15);
   E.with({ color: c, pat: o.tile ? PAT.TILE : PAT.MORTAR, param: 0.06, gloss: 0.2, weather: 0.4 }, () => E.box(x - 0.3, 0, z - 0.15, x + 0.3, h, z + 0.15, { ny: true }));
   E.with({ color: c.clone().multiplyScalar(0.85), pat: PAT.PLAIN, gloss: 0.4 }, () => E.box(x - 0.33, h, z - 0.18, x + 0.33, h + 0.05, z + 0.18, { ny: true }));
   // nameplate
@@ -356,6 +364,7 @@ export function crates(ctx, x, z, n = 3) {
 export function bench(ctx, x, z, rot, o = {}) {
   const E = ctx.E;
   E.frame(x, 0, z, rot, () => {
+    ctx.foot('bench', 0, -0.05, 0.8, 0.25);
     E.with({ color: col(o.color || '#7a5a40'), pat: PAT.WOOD, gloss: 0.25, weather: 0.3 }, () => {
       for (let i = 0; i < 3; i++) E.box(-0.8, 0.42, -0.2 + i * 0.13, 0.8, 0.46, -0.1 + i * 0.13);
       if (o.back !== false) for (let i = 0; i < 2; i++) E.box(-0.8, 0.6 + i * 0.16, -0.26, 0.8, 0.7 + i * 0.16, -0.23);
@@ -389,6 +398,7 @@ export function umbrella(ctx, x, y, z, rot, open = false) {
 export function garbageStation(ctx, x, z, rot) {
   const E = ctx.E;
   E.frame(x, 0, z, rot, () => {
+    ctx.foot('garbage', 0, 0, 0.82, 0.42);
     const g = col('#3d6b4a');
     E.with({ color: g, pat: PAT.METAL, gloss: 0.4 }, () => {
       for (const [a, b] of [[-0.8, -0.4], [0.8, -0.4], [-0.8, 0.4], [0.8, 0.4]]) E.box(a - 0.02, 0, b - 0.02, a + 0.02, 0.95, b + 0.02);

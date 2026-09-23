@@ -236,7 +236,7 @@ export function buildTerraces(ctx, roads, lots) {
       });
     }
   });
-  E.with({ color: col('#6a604f'), pat: PAT.SOIL, param: 0.4, gloss: 0.15 }, () => E.poly(T1.poly.map(([x, z]) => [x, z]), T1.level, true));
+  E.with({ color: col('#6a604f'), pat: PAT.SOIL, param: 0.4, gloss: 0.15 }, () => E.poly(T1.poly.map(([x, z]) => [x, z]), T1.level - 0.04, true));
   // fence along the top edges (east + north)
   E.frame(-26.35, T1.level, 0, Math.PI / 2, () => {
     fence(ctx, -63, -1.5, 0, 1.1, { color: '#8b8e8d' });
@@ -273,112 +273,6 @@ export function buildTerraces(ctx, roads, lots) {
   for (let i = 0; i < steps; i += 3) grass(ctx, -26 - i * run - 0.1, (i + 1) * rise, rng.chance(0.5) ? 1.2 : -1.2, 0.2);
   void roads;
   void lots;
-}
-
-// hill terrain mesh around the spur and the west ridge
-export function buildTerrain(ctx, roads, lots) {
-  const E = ctx.E, rng = ctx.rng;
-  const roadList = Object.values(roads);
-  const H = (x, z) => {
-    let h = naturalHeight(x, z);
-    if (h <= 0.001) return 0;
-    // lots flatten
-    for (const lot of lots) {
-      if (!lot.bbox) continue;
-      const b = lot.bbox;
-      if (x < b.minX - 2 || x > b.maxX + 2 || z < b.minZ - 2 || z > b.maxZ + 2) continue;
-      // local coords
-      const dx = x - lot.x, dz = z - lot.z;
-      const c = Math.cos(lot.rot), s = Math.sin(lot.rot);
-      const lx = dx * c - dz * s, lz = dx * s + dz * c;
-      const ox = Math.max(0, Math.abs(lx) - lot.w / 2), oz = Math.max(0, lz, -lot.depth - lz);
-      const d = Math.hypot(ox, oz);
-      if (d < 0.5) h = lot.level - 0.1;
-      else if (d < 3 && h > lot.level) h = lot.level + (h - lot.level) * smoothstep(0.5, 3, d);
-    }
-    for (const r of roadList) {
-      const c = r.closest(x, z);
-      const hw = r.w / 2;
-      if (c.d < hw + 0.6) h = Math.min(h, c.y - 0.15);
-      else if (c.d < hw + 4 && h > c.y) h = c.y + (h - c.y) * smoothstep(hw + 0.6, hw + 4, c.d);
-    }
-    return h;
-  };
-  const regions = [
-    { x0: -100, x1: -12, z0: -100, z1: 64, step: 1 },
-    { x0: -220, x1: -100, z0: -160, z1: 120, step: 3 },
-  ];
-  for (const R of regions) {
-    const nx = Math.round((R.x1 - R.x0) / R.step), nz = Math.round((R.z1 - R.z0) / R.step);
-    const hs = [];
-    for (let j = 0; j <= nz; j++) {
-      const row = [];
-      for (let i = 0; i <= nx; i++) row.push(H(R.x0 + i * R.step, R.z0 + j * R.step));
-      hs.push(row);
-    }
-    for (let j = 0; j < nz; j++) {
-      for (let i = 0; i < nx; i++) {
-        const x = R.x0 + i * R.step, z = R.z0 + j * R.step;
-        const h00 = hs[j][i], h10 = hs[j][i + 1], h01 = hs[j + 1][i], h11 = hs[j + 1][i + 1];
-        if (h00 + h10 + h01 + h11 < 0.02) continue;
-        const cx = x + R.step / 2, cz = z + R.step / 2;
-        if (inPoly(cx, cz, T1.poly) && Math.max(h00, h10, h01, h11) <= T1.level + 0.05) continue;
-        ctx.chunk(cx, cz);
-        const slope = Math.max(Math.abs(h10 - h00), Math.abs(h01 - h00)) / R.step;
-        const c = col(slope > 0.9 ? '#6b5d49' : '#566b3e').offsetHSL(0, 0, rng.range(-0.02, 0.02));
-        E.set({ color: c, pat: PAT.SOIL, param: slope > 0.9 ? -0.3 : 0.5, gloss: 0.15, weather: 0 });
-        quadF(E, [x, h01, z + R.step], [x + R.step, h11, z + R.step], [x + R.step, h10, z], [x, h00, z], null, [0, 1, 0]);
-      }
-    }
-  }
-  E.set({ pat: 0, weather: 0 });
-  // vegetation on the hill: trees, bamboo, shrubs where the ground is natural
-  const isFree = (x, z) => {
-    for (const r of roadList) if (r.closest(x, z).d < r.w / 2 + 1.5) return false;
-    for (const lot of lots) {
-      const b = lot.bbox;
-      if (b && x > b.minX - 1 && x < b.maxX + 1 && z > b.minZ - 1 && z < b.maxZ + 1) return false;
-    }
-    if (inPoly(x, z, T1.poly)) return false;
-    // terrace footprint incl. the stair notch
-    if (x > -87 && x < -24.5 && z > -39 && z < 65) return false;
-    return true;
-  };
-  // distant ridge: dense painterly canopy masses (cheap blobs), like a background forest
-  let blobs = 0;
-  for (let k = 0; k < 3200 && blobs < 1150; k++) {
-    const x = rng.range(-225, -72), z = rng.range(-170, 118);
-    const h = H(x, z);
-    if (h < 2.0 || !isFree(x, z)) continue;
-    blobs++;
-    ctx.chunk(x, z);
-    const s = rng.range(2.4, 4.6);
-    const c = col(rng.pick(['#3b5f38', '#446b3c', '#35553a', '#4e7442', '#2f4d33'])).offsetHSL(0, rng.range(-0.04, 0.04), rng.range(-0.03, 0.03));
-    E.with({ color: c, pat: PAT.LEAF, gloss: 0.05, weather: 0 }, () => {
-      const g = blobGeometry();
-      for (let b = 0; b < 2; b++) {
-        const m = new THREE.Matrix4().compose(
-          new THREE.Vector3(x + rng.range(-1.5, 1.5), h + s * (0.55 + b * 0.35), z + rng.range(-1.5, 1.5)),
-          new THREE.Quaternion().setFromEuler(new THREE.Euler(rng.range(0, 3), rng.range(0, 3), 0)),
-          new THREE.Vector3(s * rng.range(0.8, 1.1), s * rng.range(0.6, 0.85), s * rng.range(0.8, 1.1)),
-        );
-        E.geom(g, m);
-      }
-    });
-  }
-  let placed = 0;
-  for (let k = 0; k < 1200 && placed < 300; k++) {
-    const x = rng.range(-80, -14), z = rng.range(-99, 60);
-    const h = H(x, z);
-    if (h < 1.0 || !isFree(x, z)) continue;
-    ctx.chunk(x, z);
-    placed++;
-    const r = rng.next();
-    if (r < 0.1 && x < -40) bamboo(ctx, x, h, z, rng.int(5, 10));
-    else if (r < 0.55) tree(ctx, x, h - 0.1, z, { h: rng.range(6, 12), crown: rng.range(2.2, 3.4), color: rng.pick(['#3f6a3a', '#4c7a44', '#35573a', '#56823f']), leafSize: 1.1 });
-    else bush(ctx, x, h - 0.05, z, rng.range(0.6, 1.4), { color: rng.pick(['#4a7340', '#5d8a45', '#3f6438']) });
-  }
-  return H;
 }
 
 // retaining walls where the slope road cuts into the hill
