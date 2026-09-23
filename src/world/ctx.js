@@ -54,7 +54,14 @@ export function makeCtx() {
     const inv = E.m.clone().invert();
     const c = ctx.toWorld((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
     const r = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2;
-    ctx.solids.push({ inv, min: new THREE.Vector3(x0, y0, z0), max: new THREE.Vector3(x1, y1, z1), c, r });
+    ctx.solids.push({ mat: E.m.clone(), inv, min: new THREE.Vector3(x0, y0, z0), max: new THREE.Vector3(x1, y1, z1), c, r });
+  };
+  // axis-aligned world box (terraces etc.)
+  ctx.solidWorld = (x0, y0, z0, x1, y1, z1) => {
+    const m = new THREE.Matrix4();
+    const c = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    const r = Math.hypot(x1 - x0, y1 - y0, z1 - z0) / 2;
+    ctx.solids.push({ mat: m, inv: m.clone(), min: new THREE.Vector3(x0, y0, z0), max: new THREE.Vector3(x1, y1, z1), c, r });
   };
   return ctx;
 }

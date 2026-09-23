@@ -7,6 +7,7 @@ import { buildWorld } from './world/index.js';
 import { makeRain } from './fx/rain.js';
 import { makeSoundToggle } from './ui.js';
 import { Emitter } from './builder.js';
+import { makeCameraRig } from './camera.js';
 
 export function start({ audio } = {}) {
   const params = new URLSearchParams(location.search);
@@ -47,58 +48,16 @@ export function start({ audio } = {}) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(...view.target);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.07;
-  controls.minDistance = 1.5;
-  controls.maxDistance = 70;
-  controls.maxPolarAngle = Math.PI * 0.53;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 1.2;
+  controls.maxDistance = 60;
+  controls.maxPolarAngle = Math.PI * 0.492;
   controls.screenSpacePanning = false;
-  controls.rotateSpeed = 0.55;
-  controls.zoomSpeed = 0.8;
-  controls.panSpeed = 0.8;
-  controls.keyPanSpeed = 12;
+  controls.rotateSpeed = 0.5;
+  controls.zoomSpeed = 0.9;
+  controls.panSpeed = 0.9;
   controls.update();
-
-  // WASD / arrow keys walk the orbit target along the ground
-  const keys = new Set();
-  window.addEventListener('keydown', (e) => {
-    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON')) return;
-    keys.add(e.code);
-  });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
-  window.addEventListener('blur', () => keys.clear());
-  const fwd = new THREE.Vector3(), right = new THREE.Vector3(), move = new THREE.Vector3();
-  function walk(dt) {
-    move.set(0, 0, 0);
-    camera.getWorldDirection(fwd);
-    fwd.y = 0;
-    fwd.normalize();
-    right.crossVectors(fwd, camera.up).normalize();
-    if (keys.has('KeyW') || keys.has('ArrowUp')) move.add(fwd);
-    if (keys.has('KeyS') || keys.has('ArrowDown')) move.sub(fwd);
-    if (keys.has('KeyD') || keys.has('ArrowRight')) move.add(right);
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) move.sub(right);
-    if (move.lengthSq() > 0) {
-      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 14 : 6;
-      move.normalize().multiplyScalar(speed * dt);
-      controls.target.add(move);
-      camera.position.add(move);
-    }
-  }
-  // keep the orbit target inside the neighbourhood and on the ground
-  function constrain() {
-    const t = controls.target;
-    const b = world.walkBounds;
-    const cx = THREE.MathUtils.clamp(t.x, b.minX, b.maxX), cz = THREE.MathUtils.clamp(t.z, b.minZ, b.maxZ);
-    const dx = cx - t.x, dz = cz - t.z;
-    t.x = cx; t.z = cz;
-    camera.position.x += dx; camera.position.z += dz;
-    const gy = world.groundAt(t.x, t.z) + 1.4;
-    const dy = (gy - t.y) * 0.12;
-    t.y += dy;
-    camera.position.y += dy;
-    const cg = Math.max(world.groundAt(camera.position.x, camera.position.z), 0) + 0.45;
-    if (camera.position.y < cg) camera.position.y = cg;
-  }
+  const rig = makeCameraRig({ camera, controls, world, dom: renderer.domElement });
 
   // --- sizing ----------------------------------------------------------------
   let W = 0, H = 0;
@@ -135,32 +94,16 @@ export function start({ audio } = {}) {
   if (params.has('noglow') && world.glowMesh) world.glowMesh.visible = false;
   if (params.has('norefl')) refl.update = () => { U.uReflOn.value = 0; };
 
-  const lastGood = controls.target.clone();
-  const desired = new THREE.Vector3();
-  const armDir = new THREE.Vector3();
+  function stepCamera(dt) {
+    rig.update(dt);
+  }
+
   function frame(ts) {
     clock.update(ts);
     const dt = Math.min(clock.getDelta(), 0.1);
     t += dt;
     U.uTime.value = t;
-    walk(dt);
-    controls.update();
-    constrain();
-    // never let the orbit target walk into a house
-    if (world.inside(controls.target)) {
-      const back = lastGood.clone().sub(controls.target);
-      controls.target.add(back);
-      camera.position.add(back);
-    } else lastGood.copy(controls.target);
-    // spring arm: pull the render camera in front of walls between it and the target
-    desired.copy(camera.position);
-    armDir.copy(camera.position).sub(controls.target);
-    const armLen = armDir.length();
-    if (armLen > 0.01) {
-      armDir.divideScalar(armLen);
-      const hit = world.raycast(controls.target, armDir, armLen);
-      if (hit < armLen) camera.position.copy(controls.target).addScaledVector(armDir, Math.max(0.35, hit - 0.3));
-    }
+    stepCamera(dt);
     world.update(t, dt, camera);
     rain.update(t, dt, camera, renderer);
     if (audio) audio.update && audio.update(t, camera, world);
@@ -175,7 +118,7 @@ export function start({ audio } = {}) {
     renderer.render(scene, camera);
     fade = Math.min(1, fade + dt * 0.5);
     post.render(fade);
-    camera.position.copy(desired);
+    rig.restore();
 
     // adaptive resolution: keep things smooth on weaker GPUs
     if (!shot) {
@@ -197,6 +140,7 @@ export function start({ audio } = {}) {
     window.__renderShot = (opts = {}) => {
       if (opts.pos) camera.position.set(...opts.pos);
       if (opts.target) controls.target.set(...opts.target);
+      rig.reset();
       if (opts.t !== undefined) t = opts.t;
       controls.update();
       for (let i = 0; i < (opts.frames || 3); i++) {
@@ -206,6 +150,26 @@ export function start({ audio } = {}) {
       return true;
     };
     window.__world = world;
+    // headless camera simulation (no rendering) for control tests
+    window.__sim = {
+      controls,
+      camera,
+      reset(pos, target) {
+        camera.position.set(...pos);
+        controls.target.set(...target);
+        rig.reset();
+        rig.keys.clear();
+        controls.update();
+      },
+      step(dt, act) {
+        if (act) act(controls, rig.keys);
+        stepCamera(dt);
+        const r = camera.position.toArray();
+        rig.restore();
+        return { render: r, orbit: camera.position.toArray(), target: controls.target.toArray() };
+      },
+      rig,
+    };
     window.__ready = true;
   } else {
     renderer.setAnimationLoop(frame);

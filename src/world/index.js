@@ -181,6 +181,10 @@ export function buildWorld(scene, renderer) {
     const d = end.dir;
     shrine(ctx, end.x + d.x * 0.3, end.y, end.z + d.z * 0.3, Math.atan2(-d.x, -d.z));
   }
+  // the terrace (T1) is solid below its top, except for the stair notch
+  ctx.solidWorld(-86, -1, 1.3, -26, T1.level, 64);
+  ctx.solidWorld(-86, -1, -38, -26, T1.level, -1.3);
+  ctx.solidWorld(-86, -1, -1.3, -33.6, T1.level, 1.3);
   buildRail(ctx);
   buildCanal(ctx);
   buildDistant(ctx);
@@ -379,6 +383,8 @@ export function buildWorld(scene, renderer) {
   // ---- ground height for camera ----------------------------------------------------------------
   const roadList = Object.values(roads);
   function groundAt(x, z) {
+    // stairs up to the terrace
+    if (x > -33.7 && x < -25.9 && Math.abs(z) < 1.35) return THREE.MathUtils.clamp((-26 - x) / 7.6, 0, 1) * T1.level;
     for (const r of roadList) {
       const c = r.closest(x, z);
       if (c.d < r.w / 2 + 0.3) return c.y;
@@ -396,7 +402,7 @@ export function buildWorld(scene, renderer) {
   }
 
   const views = {
-    start: { pos: [0.9, 2.2, 13.5], target: [0.1, 2.6, -6] },
+    start: { pos: [0.9, 2.15, 13.5], target: [0.5, 1.4, 4.0] },
     slope: { pos: [-3.5, 1.9, -33], target: [-24, 3.2, -43] },
     alley: { pos: [-0.8, 1.7, -21.2], target: [10, 1.6, -22] },
     shop: { pos: [-1.8, 1.6, 5.2], target: [3.8, 1.4, -2.2] },
@@ -463,6 +469,34 @@ export function buildWorld(scene, renderer) {
         if (hit && t0 < best) best = t0;
       }
       return best;
+    },
+    // push a point out of building boxes horizontally (slide along walls); returns true if moved
+    pushOut(p, rad = 0.3) {
+      const q = new THREE.Vector3();
+      let movedAny = false;
+      for (let iter = 0; iter < 3; iter++) {
+        let moved = false;
+        for (const b of ctx.solids) {
+          const rr = b.r + rad;
+          if (p.distanceToSquared(b.c) > rr * rr) continue;
+          q.copy(p).applyMatrix4(b.inv);
+          if (q.y <= b.min.y || q.y >= b.max.y) continue;
+          const a = q.x - (b.min.x - rad), bb = b.max.x + rad - q.x, c = q.z - (b.min.z - rad), d = b.max.z + rad - q.z;
+          if (a <= 0 || bb <= 0 || c <= 0 || d <= 0) continue;
+          const m = Math.min(a, bb, c, d);
+          if (m === a) q.x = b.min.x - rad - 1e-3;
+          else if (m === bb) q.x = b.max.x + rad + 1e-3;
+          else if (m === c) q.z = b.min.z - rad - 1e-3;
+          else q.z = b.max.z + rad + 1e-3;
+          q.applyMatrix4(b.mat);
+          p.x = q.x;
+          p.z = q.z;
+          moved = true;
+        }
+        if (!moved) break;
+        movedAny = true;
+      }
+      return movedAny;
     },
     inside(p) {
       const q = new THREE.Vector3();
