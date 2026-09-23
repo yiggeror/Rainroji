@@ -411,6 +411,8 @@ export function buildWorld(scene, renderer) {
     hill: { pos: [-44, 6.2, -45], target: [-58, 8, -80] },
     east: { pos: [8, 1.8, 1.5], target: [40, 1.5, -1] },
     edgeE: { pos: [88, 28, 20], target: [125, 0, 5] },
+    gutter: { pos: [1.2, 0.9, 16], target: [2.1, 0.1, 8] },
+    eave: { pos: [3.2, 1.3, -1.2], target: [5.5, 2.4, -4.5] },
     edgeS: { pos: [10, 28, 74], target: [10, 0, 115] },
     edgeN: { pos: [6, 24, -145], target: [6, 0, -205] },
     edgeW: { pos: [-68, 22, -10], target: [-120, 6, -10] },

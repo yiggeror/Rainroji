@@ -277,7 +277,7 @@ function makeGutterFlow(lines) {
     const dx = b[0] - a[0], dz = b[2] - a[2];
     const len = Math.hypot(dx, dz);
     if (len < 0.5) continue;
-    const nx = -dz / len * 0.07, nz = dx / len * 0.07;
+    const nx = -dz / len * 0.09, nz = dx / len * 0.09;
     const flip = a[1] < b[1] ? -1 : 1; // flow downhill
     const steps = Math.max(1, Math.round(len / 6));
     for (let k = 0; k < steps; k++) {
@@ -287,7 +287,7 @@ function makeGutterFlow(lines) {
       pos.push(p0[0] - nx, p0[1], p0[2] - nz, p0[0] + nx, p0[1], p0[2] + nz, p1[0] + nx, p1[1], p1[2] + nz, p1[0] - nx, p1[1], p1[2] - nz);
       const u0 = t0 * len * flip, u1 = t1 * len * flip;
       uv.push(u0, 0, u0, 1, u1, 1, u1, 0);
-      idx.push(n, n + 2, n + 1, n, n + 3, n + 2);
+      idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
       n += 4;
     }
   }
@@ -313,8 +313,10 @@ function makeGutterFlow(lines) {
         float dist = length(vWorld - cameraPosition);
         vec3 V = normalize(cameraPosition - vWorld);
         vec3 env = envColor(reflect(-V, vec3(0.0, 1.0, 0.0)));
-        vec3 c = mix(env * 0.9, vec3(1.0), glint * 0.5);
-        float a = smoothstep(0.0, 0.6, across) * (0.35 + 0.5 * glint) * (1.0 - smoothstep(25.0, 45.0, dist));
+        // thin running water: darker than the dry concrete, with bright moving glints
+        float ripple = 0.5 + 0.5 * sin(u * 26.0 + vUv.y * 5.0);
+        vec3 c = mix(env * 0.36, vec3(0.92, 0.95, 1.0), glint * 0.55 + ripple * 0.06);
+        float a = smoothstep(0.0, 0.5, across) * (0.55 + 0.4 * glint) * (1.0 - smoothstep(25.0, 45.0, dist));
         gl_FragColor = vec4(applyFog(c, vWorld, dist), a);
       }`,
     transparent: true,
