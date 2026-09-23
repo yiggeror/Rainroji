@@ -5,7 +5,7 @@ import { quv } from './atlas.js';
 import { quadF } from './parts.js';
 import { T1, naturalHeight } from './layout.js';
 import { handRail, fence } from './props.js';
-import { grass, bush, tree, bamboo } from './plants.js';
+import { grass, bush, tree, bamboo, blobGeometry } from './plants.js';
 
 // edge points with mitred joints
 function edges(road, off) {
@@ -340,11 +340,35 @@ export function buildTerrain(ctx, roads, lots) {
       if (b && x > b.minX - 1 && x < b.maxX + 1 && z > b.minZ - 1 && z < b.maxZ + 1) return false;
     }
     if (inPoly(x, z, T1.poly)) return false;
+    // terrace footprint incl. the stair notch
+    if (x > -87 && x < -24.5 && z > -39 && z < 65) return false;
     return true;
   };
+  // distant ridge: dense painterly canopy masses (cheap blobs), like a background forest
+  let blobs = 0;
+  for (let k = 0; k < 3200 && blobs < 1150; k++) {
+    const x = rng.range(-225, -72), z = rng.range(-170, 118);
+    const h = H(x, z);
+    if (h < 2.0 || !isFree(x, z)) continue;
+    blobs++;
+    ctx.chunk(x, z);
+    const s = rng.range(2.4, 4.6);
+    const c = col(rng.pick(['#3b5f38', '#446b3c', '#35553a', '#4e7442', '#2f4d33'])).offsetHSL(0, rng.range(-0.04, 0.04), rng.range(-0.03, 0.03));
+    E.with({ color: c, pat: PAT.LEAF, gloss: 0.05, weather: 0 }, () => {
+      const g = blobGeometry();
+      for (let b = 0; b < 2; b++) {
+        const m = new THREE.Matrix4().compose(
+          new THREE.Vector3(x + rng.range(-1.5, 1.5), h + s * (0.55 + b * 0.35), z + rng.range(-1.5, 1.5)),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(rng.range(0, 3), rng.range(0, 3), 0)),
+          new THREE.Vector3(s * rng.range(0.8, 1.1), s * rng.range(0.6, 0.85), s * rng.range(0.8, 1.1)),
+        );
+        E.geom(g, m);
+      }
+    });
+  }
   let placed = 0;
-  for (let k = 0; k < 900 && placed < 230; k++) {
-    const x = rng.range(-150, -14), z = rng.range(-99, 60);
+  for (let k = 0; k < 1200 && placed < 300; k++) {
+    const x = rng.range(-80, -14), z = rng.range(-99, 60);
     const h = H(x, z);
     if (h < 1.0 || !isFree(x, z)) continue;
     ctx.chunk(x, z);

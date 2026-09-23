@@ -46,6 +46,7 @@ export const U = {
   uRainOn: { value: 0 },
   uFlicker: { value: new THREE.Vector4(1, 1, 1, 1) },
   uCrossing: { value: new THREE.Vector2(0, 0) },
+  uCheap: { value: 0 },
 };
 
 // ---------------------------------------------------------------------------
@@ -129,9 +130,12 @@ uniform float uSkyWeight[${NUM_SKY}];
 uniform float uSkyBias[${NUM_SKY}];
 uniform vec2 uSkyTile;
 uniform float uSkyOn;
+uniform float uCheap;
 
 float skyVisibility(vec3 wp, vec3 n){
   if (uSkyOn < 0.5) return 1.0;
+  // the reflection pass and far-away pixels don't need the full 12-tap estimate
+  if (uCheap > 0.5 || length(wp - cameraPosition) > 230.0) return 0.82 + 0.18 * n.y;
   float sum = 0.0, wsum = 0.0;
   vec3 p = wp + n * 0.12;
   for (int i = 0; i < ${NUM_SKY}; i++){
@@ -667,11 +671,13 @@ const FOLIAGE_VERT = /* glsl */ `
 attribute vec4 aMatB;
 uniform float uTime;
 uniform vec3 uWind;
+${GLSL_SKYOCC}
 varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec3 vColor;
 varying vec2 vUv;
 varying float vShade;
+varying float vVis;
 void main(){
   vec4 wp = modelMatrix * vec4(position, 1.0);
   float sw = aMatB.y;
@@ -686,13 +692,14 @@ void main(){
   vColor = color;
   vUv = uv;
   vShade = aMatB.x;
+  // sky visibility per vertex: leaves overdraw a lot, the 12 taps are too costly per pixel
+  vVis = skyVisibility(wp.xyz, vNormal);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
 
 const FOLIAGE_FRAG = /* glsl */ `
 ${GLSL_COMMON}
-${GLSL_SKYOCC}
 ${GLSL_LIGHTS}
 uniform sampler2D uLeafTex;
 varying vec3 vWorldPos;
@@ -700,6 +707,7 @@ varying vec3 vNormal;
 varying vec3 vColor;
 varying vec2 vUv;
 varying float vShade;
+varying float vVis;
 void main(){
   vec4 tx = texture(uLeafTex, vUv);
   // sharpen alpha so alpha-to-coverage gives crisp, antialiased leaf edges
@@ -713,8 +721,7 @@ void main(){
   vec3 albedo = vColor * (0.7 + 0.45 * tx.r);
   float al = dot(albedo, vec3(0.299, 0.587, 0.114));
   albedo = max(mix(vec3(al), albedo, 1.18), 0.0);
-  // flowers keep their own tint from the texture's green channel
-  float vis = skyVisibility(vWorldPos, N);
+  float vis = vVis;
   float ndl = dot(N, uLightDir);
   float band = smoothstep(-0.25, 0.35, ndl);
   float hemi = N.y * 0.5 + 0.5;

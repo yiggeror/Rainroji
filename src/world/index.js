@@ -404,12 +404,16 @@ export function buildWorld(scene, renderer) {
     canal: { pos: [9.2, 3.6, -100.4], target: [34, -1.2, -104.6] },
     sky: { pos: [0.5, 1.8, 8], target: [-2, 9, -20] },
     drip: { pos: [-1.2, 1.5, 24], target: [-4.5, 2.2, 26.5] },
-    upper: { pos: [-35.8, 6.1, 0.4], target: [-12, 1.8, -3] },
+    upper: { pos: [-36.6, 6.5, 0.8], target: [-14, 1.5, -1.5] },
     top: { pos: [40, 42, 42], target: [0, 0, -30] },
     stairs: { pos: [-12.5, 1.7, 0.6], target: [-30, 3.0, 0] },
     south: { pos: [-1.5, 1.9, -8], target: [0.5, 1.5, 24] },
     hill: { pos: [-44, 6.2, -45], target: [-58, 8, -80] },
     east: { pos: [8, 1.8, 1.5], target: [40, 1.5, -1] },
+    edgeE: { pos: [88, 28, 20], target: [125, 0, 5] },
+    edgeS: { pos: [10, 28, 74], target: [10, 0, 115] },
+    edgeN: { pos: [6, 24, -145], target: [6, 0, -205] },
+    edgeW: { pos: [-68, 22, -10], target: [-120, 6, -10] },
   };
 
   const world = {

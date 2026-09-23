@@ -121,14 +121,15 @@ export function makeRoads() {
 export function naturalHeight(x, z) {
   let h = 0;
   // spur between the slope road and the canal: rises west of the main street
-  const spurZ = smoothstep(-43.5, -49, z) * smoothstep(-99, -93, z);
+  const spurZ = smoothstep(-42, -60, z) * smoothstep(-99, -91, z);
   const spur = 9.5 * smoothstep(-15.5, -33, x) + Math.max(0, -33 - x) * 0.28;
   h = Math.max(h, spur * spurZ);
   // T1 terrace level to the south-west
   if (z > -40 && x < -26) h = Math.max(h, 4.0);
   // west ridge (forest), everywhere west of x=-86 except the rail valley
   const ridge = Math.max(0, -86 - x) * 0.45 + 4.0 * smoothstep(-80, -90, x);
-  const valley = 1 - smoothstep(-98, -104, z) * smoothstep(-142, -136, z);
+  // the canal / rail valley cuts through the ridge with gentle wooded sides
+  const valley = 1 - smoothstep(-70, -99, z) * smoothstep(-168, -139, z);
   h = Math.max(h, ridge * valley);
   // rolling noise on the hills
   if (h > 0.5) h += (Math.sin(x * 0.11 + z * 0.07) * 0.6 + Math.sin(x * 0.05 - z * 0.13) * 0.8) * smoothstep(0.5, 6, h);

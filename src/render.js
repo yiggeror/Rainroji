@@ -287,9 +287,11 @@ export class GroundReflection {
     vc.layers.enableAll();
     vc.layers.disable(LAYER_NOREFL);
     U.uReflOn.value = 0;
+    U.uCheap.value = 1;
     r.setRenderTarget(this.rt);
     r.clear();
     r.render(scene, vc);
+    U.uCheap.value = 0;
     for (const o of hide) o.visible = true;
 
     // anime-style vertical smear: blur harder vertically

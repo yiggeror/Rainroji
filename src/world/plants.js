@@ -1,6 +1,19 @@
 import * as THREE from 'three';
 import { PAT } from '../builder.js';
 import { col } from '../util.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// shared indexed low-poly blob for distant canopies (42 vertices)
+let _blob = null;
+export function blobGeometry() {
+  if (!_blob) {
+    const g = new THREE.IcosahedronGeometry(1, 1);
+    g.deleteAttribute('uv');
+    _blob = mergeVertices(g);
+    _blob.computeVertexNormals();
+  }
+  return _blob;
+}
 
 // ---------------------------------------------------------------------------
 // Leaf atlas: 2x2 tiles drawn on a canvas.
@@ -224,8 +237,8 @@ export function bush(ctx, x, y, z, r, o = {}) {
 export function hedge(ctx, x0, x1, z, h, t = 0.6, o = {}) {
   const E = ctx.E, rng = ctx.rng;
   const len = Math.abs(x1 - x0);
-  const n = Math.round(len * h * 14);
-  const base = col(o.color || rng.pick(['#45703d', '#3e6638', '#577f42']));
+  const n = Math.round(len * h * 20);
+  const base = col(o.color || rng.pick(['#4b7a40', '#447238', '#5a8744']));
   const cx = (x0 + x1) / 2;
   ctx.inSink('leaf', () => {
     for (let i = 0; i < n; i++) {
@@ -248,7 +261,7 @@ export function hedge(ctx, x0, x1, z, h, t = 0.6, o = {}) {
     E.set({ sway: 0, weather: 0, ex1: 0 });
   });
   // dark core
-  E.with({ color: base.clone().multiplyScalar(0.35), pat: PAT.LEAF, gloss: 0 }, () => E.box(Math.min(x0, x1) + 0.05, 0, z - t / 2 + 0.12, Math.max(x0, x1) - 0.05, h - 0.12, z + t / 2 - 0.12, { ny: true }));
+  E.with({ color: base.clone().multiplyScalar(0.55), pat: PAT.LEAF, gloss: 0 }, () => E.box(Math.min(x0, x1) + 0.12, 0, z - t / 2 + 0.16, Math.max(x0, x1) - 0.12, h - 0.2, z + t / 2 - 0.16, { ny: true }));
 }
 
 const HYDRANGEA = ['#6f86c9', '#8a7cc4', '#5f7fbf', '#a08ac8', '#7aa0d2', '#c69ab8', '#e6e9ef'];

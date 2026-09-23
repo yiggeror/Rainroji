@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PAT } from '../builder.js';
 import { col } from '../util.js';
 import { quadF } from './parts.js';
+import { blobGeometry } from './plants.js';
 
 // Layered hills fading into the rain and a sea of roofs beyond the neighbourhood
 export function buildDistant(ctx) {
@@ -50,10 +51,10 @@ export function buildDistant(ctx) {
     n++;
     ctx.chunk(x, z);
     const w = rng.range(6, 10), dd = rng.range(6, 9);
-    const tall = rng.chance(0.06);
+    const tall = rng.chance(0.025);
     const h = tall ? rng.range(10, 22) : rng.range(4.5, 7);
     const rot = Math.round(rng.range(0, 4)) * (Math.PI / 2) + rng.range(-0.1, 0.1);
-    const wc = col(rng.pick(['#d9d4c8', '#c9c9c2', '#bfc5c7', '#d8cdb8', '#b8b2a6']));
+    const wc = col(rng.pick(['#b9b6ae', '#a9adaf', '#b3aa9a', '#c4bfb4', '#9fa6a8', '#b8b0a2']));
     E.frame(x, 0, z, rot, () => {
       E.with({ color: wc, pat: tall ? PAT.TILE : PAT.PANEL, param: 0.1, gloss: 0.1, weather: 0.4 }, () => E.box(-w / 2, 0, -dd / 2, w / 2, h, dd / 2, { ny: true, py: !tall }));
       // window bands
@@ -65,7 +66,7 @@ export function buildDistant(ctx) {
       });
       if (!tall) {
         const rc = col(rng.pick(['#4b5057', '#58616d', '#4f6c61', '#5b4b40', '#63686e']));
-        const rh = dd * 0.22;
+        const rh = dd * 0.3;
         E.with({ color: rc, pat: PAT.PLAIN, gloss: 0.45 }, () => {
           quadF(E, [-w / 2 - 0.4, h - 0.1, dd / 2 + 0.4], [w / 2 + 0.4, h - 0.1, dd / 2 + 0.4], [w / 2 + 0.4, h + rh, 0], [-w / 2 - 0.4, h + rh, 0], null, [0, 1, 1]);
           quadF(E, [w / 2 + 0.4, h - 0.1, -dd / 2 - 0.4], [-w / 2 - 0.4, h - 0.1, -dd / 2 - 0.4], [-w / 2 - 0.4, h + rh, 0], [w / 2 + 0.4, h + rh, 0], null, [0, 1, -1]);
@@ -78,10 +79,10 @@ export function buildDistant(ctx) {
       }
     });
     // odd tree between houses
-    if (rng.chance(0.25)) {
-      E.with({ color: col(rng.pick(['#3f5f3c', '#4a6b42'])), pat: PAT.LEAF, gloss: 0 }, () => {
-        const g = new THREE.IcosahedronGeometry(rng.range(2, 3.5), 0);
-        E.geom(g, new THREE.Matrix4().makeTranslation(x + rng.range(-6, 6), rng.range(3, 5), z + rng.range(-6, 6)));
+    if (rng.chance(0.45)) {
+      E.with({ color: col(rng.pick(['#3f5f3c', '#4a6b42', '#3a5638'])), pat: PAT.LEAF, gloss: 0 }, () => {
+        const r = rng.range(2.2, 3.8);
+        E.geom(blobGeometry(), new THREE.Matrix4().makeTranslation(x + rng.range(-7, 7), rng.range(3, 5), z + rng.range(-7, 7)).scale(new THREE.Vector3(r, r * 0.85, r)));
       });
     }
   }
