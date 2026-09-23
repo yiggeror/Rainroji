@@ -506,9 +506,12 @@ void main(){
     vec2 r = vec2(uv.x + uv.y, uv.x - uv.y) * 0.7071;
     vec2 cell = floor(r / 0.36);
     float h = hash12(cell);
-    float gl1 = gline(r.x, 0.36, 0.02) + gline(r.y, 0.36, 0.02);
+    float gl1 = gline(r.x, 0.36, 0.028) + gline(r.y, 0.36, 0.028);
     vec2 f = fract(r / 0.36) - 0.5;
-    albedo *= (0.86 + 0.16 * h) * (1.0 - 0.35 * clamp(gl1, 0.0, 1.0)) * (1.0 - 0.1 * dot(f, f) * 4.0);
+    // each stone: its own tone, a lit upper edge and a shaded lower edge
+    float bevel = clamp((f.x + f.y) * 1.4, -1.0, 1.0);
+    albedo *= (0.8 + 0.26 * h) * (1.0 - 0.2 * clamp(gl1, 0.0, 1.0)) * (1.0 - 0.14 * dot(f, f) * 4.0) * (1.0 + 0.07 * bevel);
+    albedo = mix(albedo, albedo * vec3(1.04, 1.0, 0.93), step(0.7, h) * 0.6);
     float moss = smoothstep(0.55, 0.8, fbm(uv * 0.8 + 4.0)) * 0.6 + (1.0 - smoothstep(0.0, 0.8, uv.y)) * 0.4;
     albedo = mix(albedo, albedo * vec3(0.6, 0.72, 0.48), moss);
     float drip = smoothstep(0.6, 0.85, fbm(vec2(uv.x * 3.0, uv.y * 0.3)));

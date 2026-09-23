@@ -259,9 +259,7 @@ export function buildWorld(scene, renderer) {
   const farMesh = addMesh(ctx.far, far, false);
   if (farMesh) farMesh.frustumCulled = false;
   verts += ctx.ground.count;
-  const cnt = (cs) => cs.sinks().reduce((a, s) => a + s.count, 0);
-  console.log('[rainroji] stat', cnt(ctx.stat), 'leaf', cnt(ctx.leaf), 'atlas', cnt(ctx.atlasC), 'ground', ctx.ground.count, 'far', ctx.far.count);
-  console.log('[rainroji] static vertices', verts, 'lights', ctx.lights.length, 'drips', ctx.drips.length);
+  if (/[?&]stats/.test(location.search)) console.log('[rainroji] vertices', verts, 'lights', ctx.lights.length, 'drips', ctx.drips.length);
 
   // ---- crossing gates + train --------------------------------------------------------
   const gates = ctx.gateSpecs.map((g) => {

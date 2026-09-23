@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>雨の路地 · Rainroji</title>
+<title>雨の路地</title>
 <meta name="description" content="雨の日の日本の住宅街を、アニメ背景のような三渲二スタイルで自由に歩ける3Dシーン。">
 <style>
 :root{--bg:#b3bcc5;--fg:#f4f6f8}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#b3bcc5;--fg:#f4f6f8}}
 :root[data-theme="dark"]{--bg:#b3bcc5;--fg:#f4f6f8}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg)}
-canvas{display:block;width:100vw;height:100vh;touch-action:none;outline:none}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none;outline:none}
 .rr-veil{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;
   font:13px/1.5 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;letter-spacing:.2em;color:rgba(255,255,255,.85);transition:opacity 1.2s;z-index:20}
 </style>

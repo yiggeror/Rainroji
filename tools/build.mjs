@@ -20,7 +20,7 @@ const HEAD = (title) => `<!doctype html>
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#b3bcc5;--fg:#f4f6f8}}
 :root[data-theme="dark"]{--bg:#b3bcc5;--fg:#f4f6f8}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg)}
-canvas{display:block;width:100vw;height:100vh;touch-action:none;outline:none}
+canvas{display:block;position:fixed;inset:0;width:100%;height:100%;touch-action:none;outline:none}
 .rr-veil{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;
   font:13px/1.5 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;letter-spacing:.2em;color:rgba(255,255,255,.85);transition:opacity 1.2s;z-index:20}
 </style>
@@ -48,6 +48,19 @@ function page(title, js, inline = true) {
   return HEAD(title) + tail;
 }
 
+// Artifact pages are wrapped in their own skeleton by the host: drop ours.
+function artifactPage(html) {
+  return html
+    .replace(/<!doctype html>\s*/i, '')
+    .replace(/<html[^>]*>\s*/i, '')
+    .replace(/<head>\s*/i, '')
+    .replace(/<meta charset="utf-8">\s*/i, '')
+    .replace(/<meta name="viewport"[^>]*>\s*/i, '')
+    .replace(/<\/head>\s*/i, '')
+    .replace(/<body>\s*/i, '')
+    .replace(/<\/body>\s*<\/html>\s*$/i, '');
+}
+
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 if (which === 'dev' || which === 'all') {
   const js = await bundle('src/entry-dev.js', { minify: false });
@@ -56,7 +69,7 @@ if (which === 'dev' || which === 'all') {
 }
 if (which === 'single' || which === 'all') {
   const js = await bundle('src/entry-single.js');
-  fs.writeFileSync(path.join(root, 'rainroji-single.html'), page('雨の路地 · Rainroji', js));
+  fs.writeFileSync(path.join(root, 'rainroji-single.html'), page('雨の路地', js));
   console.log('rainroji-single.html', (js.length / 1024).toFixed(0) + 'KB');
 }
 if (which === 'site' || which === 'all') {
@@ -64,6 +77,15 @@ if (which === 'site' || which === 'all') {
   const out = path.join(root, 'site');
   fs.mkdirSync(out, { recursive: true });
   fs.writeFileSync(path.join(out, 'app.js'), js);
-  fs.writeFileSync(path.join(out, 'index.html'), page('雨の路地 · Rainroji', 'app.js', false));
+  fs.writeFileSync(path.join(out, 'index.html'), page('雨の路地', 'app.js', false));
   console.log('site/app.js', (js.length / 1024).toFixed(0) + 'KB');
+}
+if (which === 'artifact' || which === 'all') {
+  const single = fs.readFileSync(path.join(root, 'rainroji-single.html'), 'utf8');
+  fs.mkdirSync(path.join(root, 'dist/artifact-single'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'dist/artifact-single/rainroji.html'), artifactPage(single).replace('<title>雨の路地</title>', '<title>雨の路地 合成音</title>'));
+  const site = fs.readFileSync(path.join(root, 'site/index.html'), 'utf8');
+  fs.mkdirSync(path.join(root, 'dist/artifact-site'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'dist/artifact-site/index.html'), artifactPage(site));
+  console.log('dist/artifact-* written');
 }

@@ -226,7 +226,8 @@ export function detached(ctx, lot, opts = {}) {
   }
 
   // --- entrance
-  const doorOnFront = opts.doorSide ? opts.doorSide === 'front' : rng.chance(0.75);
+  const sideGap = hx > 0 ? x0 + lw / 2 : lw / 2 - x1;
+  const doorOnFront = opts.doorSide ? opts.doorSide === 'front' : sideGap < 1.9 || rng.chance(0.75);
   const doorX = parkSide ? (parkSide > 0 ? W - 1.15 : 1.15) : rng.chance(0.5) ? 1.1 : W - 1.1; // facade-local
   const lit = (p) => rng.chance(p);
   const balc = floors > 1 && rng.chance(style === 'showa' ? 0.45 : 0.65);

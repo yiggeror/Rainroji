@@ -5,7 +5,7 @@ const ICON_OFF = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" st
 export function makeSoundToggle(audio) {
   const style = document.createElement('style');
   style.textContent = `
-  .rr-sound{position:fixed;right:14px;bottom:14px;width:34px;height:34px;border-radius:50%;
+  .rr-sound{position:fixed;right:calc(14px + env(safe-area-inset-right, 0px));bottom:calc(14px + env(safe-area-inset-bottom, 0px));width:34px;height:34px;border-radius:50%;
     border:1px solid rgba(255,255,255,.28);background:rgba(40,48,58,.22);color:rgba(255,255,255,.72);
     display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
     backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);opacity:.55;transition:opacity .3s,background .3s;z-index:10}

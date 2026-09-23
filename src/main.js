@@ -12,6 +12,11 @@ export function start({ audio } = {}) {
   const params = new URLSearchParams(location.search);
   const shot = params.has('shot');
   const canvas = document.createElement('canvas');
+  if (!canvas.getContext('webgl2')) {
+    const v = document.getElementById('rr-veil');
+    if (v) v.textContent = 'この場面は WebGL2 対応のブラウザが必要です · This scene needs a WebGL2-capable browser';
+    return null;
+  }
   document.body.appendChild(canvas);
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: shot });
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -120,7 +125,7 @@ export function start({ audio } = {}) {
   if (audio && !shot) makeSoundToggle(audio);
 
   // --- loop -----------------------------------------------------------------------
-  const clock = new THREE.Clock();
+  const clock = new THREE.Timer();
   let t = +(params.get('t') || 0);
   let fade = shot ? 1 : 0;
   let frameAvg = 16;
@@ -133,7 +138,8 @@ export function start({ audio } = {}) {
   const lastGood = controls.target.clone();
   const desired = new THREE.Vector3();
   const armDir = new THREE.Vector3();
-  function frame() {
+  function frame(ts) {
+    clock.update(ts);
     const dt = Math.min(clock.getDelta(), 0.1);
     t += dt;
     U.uTime.value = t;
