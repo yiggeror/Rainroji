@@ -77,6 +77,8 @@ node tools/shots.mjs dist/dev.html start,harbour,station   # 按预设视角截�
 node tools/shotat.mjs dist/dev.html out 960 540 'name:x,y,z:tx,ty,tz[:t]'   # 任意位置/时间截图
 node tools/camtest.mjs && node tools/touchtest.mjs            # 镜头与触屏测试
 node tools/capturetest.mjs dist/dev.html start 1280          # 截图：分块 vs 整张渲染对比，检查接缝
+node tools/zfight.mjs          # 全岛 100 多个视角各渲染两次（只改近裁剪面），变色的像素就是两个面在抢同一处（闪烁）
+node tools/motiontest.mjs      # 以 50 ms 步长推进时间，检查车、电车、船、海鸥有没有“瞬移”
 # dist/dev.html?cap=1280：截图按钮改为输出长边 1280（测试用）
 # dist/dev.html?stats&audit：打印顶点数，并检查道具之间、道具与房子之间、地块之间有没有重叠
 python3 tools/prep_audio.py   # 重新下载并处理 site/audio/ 的素材（需要 numpy、imageio-ffmpeg）

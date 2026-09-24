@@ -103,8 +103,10 @@ export function buildTerrain(ctx, roads, lots, opts = {}) {
       const id = [j * (nx + 1) + i, j * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i];
       const h = id.map((k) => hs[k]), d = id.map((k) => ds[k]);
       const center = coastInfo(cx, cz);
-      // the sea: everything near or beyond the shore (the land hides what is under it)
-      if (Math.max(...d) > -3 && !inHole(cx, cz)) sea.push([x, z]);
+      // the sea: everything near or beyond the shore, and any ground that dips to sea level
+      // (beaches and rocky shores slope below it a few metres inland); the land hides what is
+      // under it, so the waterline follows the ground instead of the grid
+      if ((Math.max(...d) > -3 || Math.min(...h) < SEA + 0.5) && !inHole(cx, cz)) sea.push([x, z]);
       if (inHole(cx, cz)) {
         flush();
         continue;

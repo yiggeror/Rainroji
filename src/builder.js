@@ -8,6 +8,12 @@ import * as THREE from 'three';
 // a painted pattern (siding, tiles, kawara...), wetness and emission.
 // ---------------------------------------------------------------------------
 
+// linear 0..1 -> sRGB byte (8-bit linear would band the dark colours)
+function toSRGB8(c) {
+  c = c <= 0 ? 0 : c >= 1 ? 1 : c;
+  return Math.round((c < 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055) * 255);
+}
+
 class Grow {
   constructor(Type, n = 4096) {
     this.T = Type;
@@ -32,8 +38,9 @@ export class Sink {
   constructor(name) {
     this.name = name;
     this.pos = new Grow(Float32Array);
-    this.nrm = new Grow(Float32Array);
-    this.col = new Grow(Float32Array);
+    // normals and colours are packed into bytes (colour sRGB-encoded, decoded in the shaders)
+    this.nrm = new Grow(Int8Array);
+    this.col = new Grow(Uint8Array);
     this.uv = new Grow(Float32Array);
     this.ma = new Grow(Float32Array);
     this.mb = new Grow(Float32Array);
@@ -46,8 +53,8 @@ export class Sink {
   toGeometry() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(this.pos.view(), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(this.nrm.view(), 3));
-    g.setAttribute('color', new THREE.BufferAttribute(this.col.view(), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(this.nrm.view(), 4, true));
+    g.setAttribute('color', new THREE.BufferAttribute(this.col.view(), 4, true));
     g.setAttribute('uv', new THREE.BufferAttribute(this.uv.view(), 2));
     g.setAttribute('aMatA', new THREE.BufferAttribute(this.ma.view(), 4));
     g.setAttribute('aMatB', new THREE.BufferAttribute(this.mb.view(), 4));
@@ -173,8 +180,8 @@ export class Emitter {
       _n.set(0, 1, 0);
     }
     s.pos.ensure(3);
-    s.nrm.ensure(3);
-    s.col.ensure(3);
+    s.nrm.ensure(4);
+    s.col.ensure(4);
     s.uv.ensure(2);
     s.ma.ensure(4);
     s.mb.ensure(4);
@@ -189,15 +196,16 @@ export class Emitter {
     s.pos.a[p + 2] = _v.z;
     s.pos.n += 3;
     p = s.nrm.n;
-    s.nrm.a[p] = _n.x;
-    s.nrm.a[p + 1] = _n.y;
-    s.nrm.a[p + 2] = _n.z;
-    s.nrm.n += 3;
+    s.nrm.a[p] = Math.round(_n.x * 127);
+    s.nrm.a[p + 1] = Math.round(_n.y * 127);
+    s.nrm.a[p + 2] = Math.round(_n.z * 127);
+    s.nrm.n += 4;
     p = s.col.n;
-    s.col.a[p] = b.color.r * k;
-    s.col.a[p + 1] = b.color.g * k;
-    s.col.a[p + 2] = b.color.b * k;
-    s.col.n += 3;
+    s.col.a[p] = toSRGB8(b.color.r * k);
+    s.col.a[p + 1] = toSRGB8(b.color.g * k);
+    s.col.a[p + 2] = toSRGB8(b.color.b * k);
+    s.col.a[p + 3] = 255;
+    s.col.n += 4;
     p = s.uv.n;
     s.uv.a[p] = u;
     s.uv.a[p + 1] = v;
@@ -229,6 +237,13 @@ export class Emitter {
     let nx, ny, nz;
     if (normal) {
       [nx, ny, nz] = normal;
+      // keep the winding consistent with the given normal, or the face is culled from the side it faces
+      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      const vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
+      if ((uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz < 0) {
+        const U = uvs || [0, 0, 1, 0, 1, 1, 0, 1];
+        return this.quad(a, d, c, b, [U[0], U[1], U[6], U[7], U[4], U[5], U[2], U[3]], normal);
+      }
     } else {
       const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
       const vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
@@ -248,8 +263,15 @@ export class Emitter {
   }
   tri(a, b, c, uvs, normal) {
     let nx, ny, nz;
-    if (normal) [nx, ny, nz] = normal;
-    else {
+    if (normal) {
+      [nx, ny, nz] = normal;
+      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+      if ((uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz < 0) {
+        const U = uvs || [0, 0, 1, 0, 0.5, 1];
+        return this.tri(a, c, b, [U[0], U[1], U[4], U[5], U[2], U[3]], normal);
+      }
+    } else {
       const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
       const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
       nx = uy * vz - uz * vy;
@@ -283,6 +305,11 @@ export class Emitter {
 
   // Axis aligned box in local space. skip: set of 'px','nx','py','ny','pz','nz'
   box(x0, y0, z0, x1, y1, z1, skip) {
+    // extents may come in either order (e.g. mirrored with a sign): a box given max < min
+    // would be built inside out, its visible faces lying on its neighbours' surfaces
+    if (x0 > x1) [x0, x1] = [x1, x0];
+    if (y0 > y1) [y0, y1] = [y1, y0];
+    if (z0 > z1) [z0, z1] = [z1, z0];
     const vb = this.b.vbase;
     const sx = x1 - x0, sz = z1 - z0;
     const sk = skip || NOSKIP;

@@ -333,15 +333,17 @@ export function gatePost(ctx, x, z, h = 1.35, o = {}) {
   const E = ctx.E, rng = ctx.rng;
   const c = col(o.color || rng.pick(['#b8b5ad', '#8e8a82', '#d4cfc2', '#6f6a64']));
   ctx.foot('gatepost', x, z, 0.3, 0.15);
-  E.with({ color: c, pat: o.tile ? PAT.TILE : PAT.MORTAR, param: 0.06, gloss: 0.2, weather: 0.4 }, () => E.box(x - 0.3, 0, z - 0.15, x + 0.3, h, z + 0.15, { ny: true }));
-  E.with({ color: c.clone().multiplyScalar(0.85), pat: PAT.PLAIN, gloss: 0.4 }, () => E.box(x - 0.33, h, z - 0.18, x + 0.33, h + 0.05, z + 0.18, { ny: true }));
+  // a little proud of the boundary wall it stands in, so their faces never coincide
+  const hw = 0.32, hd = 0.17, f = z + hd;
+  E.with({ color: c, pat: o.tile ? PAT.TILE : PAT.MORTAR, param: 0.06, gloss: 0.2, weather: 0.4 }, () => E.box(x - hw, 0, z - hd, x + hw, h, z + hd, { ny: true }));
+  E.with({ color: c.clone().multiplyScalar(0.85), pat: PAT.PLAIN, gloss: 0.4 }, () => E.box(x - hw - 0.03, h, z - hd - 0.03, x + hw + 0.03, h + 0.05, z + hd + 0.03, { ny: true }));
   // nameplate
   const nr = ctx.atlasRects['name' + rng.int(0, 15)];
-  ctx.inSink('atlas', () => E.with({ color: col('#ffffff'), pat: PAT.PLAIN, gloss: 0.4 }, () => E.quad([x - 0.08, h - 0.42, z + 0.155], [x + 0.08, h - 0.42, z + 0.155], [x + 0.08, h - 0.1, z + 0.155], [x - 0.08, h - 0.1, z + 0.155], quv(nr), [0, 0, 1])));
+  ctx.inSink('atlas', () => E.with({ color: col('#ffffff'), pat: PAT.PLAIN, gloss: 0.4 }, () => E.quad([x - 0.08, h - 0.42, f + 0.005], [x + 0.08, h - 0.42, f + 0.005], [x + 0.08, h - 0.1, f + 0.005], [x - 0.08, h - 0.1, f + 0.005], quv(nr), [0, 0, 1])));
   // intercom
-  E.with({ color: col('#e9e8e3'), pat: PAT.PLAIN, gloss: 0.4 }, () => E.box(x + 0.12, h - 0.55, z + 0.15, x + 0.24, h - 0.37, z + 0.18));
+  E.with({ color: col('#e9e8e3'), pat: PAT.PLAIN, gloss: 0.4 }, () => E.box(x + 0.12, h - 0.55, f, x + 0.24, h - 0.37, f + 0.03));
   // mailbox
-  E.with({ color: col(rng.pick(['#3a3a38', '#b9b3a4', '#8a4a33', '#2f4a5f'])), pat: PAT.METAL, gloss: 0.5 }, () => E.box(x - 0.18, h - 0.95, z + 0.15, x + 0.18, h - 0.62, z + 0.3));
+  E.with({ color: col(rng.pick(['#3a3a38', '#b9b3a4', '#8a4a33', '#2f4a5f'])), pat: PAT.METAL, gloss: 0.5 }, () => E.box(x - 0.18, h - 0.95, f, x + 0.18, h - 0.62, f + 0.15));
   // lamp on top
   if (o.lamp) {
     E.with({ color: col('#ffe2b0'), pat: PAT.EMIT, emit: 1.6 }, () => E.box(x - 0.08, h + 0.05, z - 0.08, x + 0.08, h + 0.26, z + 0.08));

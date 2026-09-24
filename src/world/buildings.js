@@ -66,24 +66,33 @@ export function apartment(ctx, lot, opts = {}) {
     const r = ctx.atlasRects.corpo;
     ctx.inSink('atlas', () => E.with({ color: col('#fff'), pat: PAT.PLAIN, gloss: 0.3 }, () => E.quad([W - 1.4, base + fh + 1.2, corrD + 0.01], [W - 0.2, base + fh + 1.2, corrD + 0.01], [W - 0.2, base + fh + 1.5, corrD + 0.01], [W - 1.4, base + fh + 1.5, corrD + 0.01], quv(r), [0, 0, 1])));
   });
-  // external steel stair at the right end, rising towards the back along +x side
-  const sx = x1 + 0.1;
+  // external steel stair at the right end: it climbs along the side wall from the back
+  // up to a landing that joins the end of the upper corridor
+  const sx = x1 + 0.1, top = base + fh;
   const stairCol = railCol;
   E.with({ color: stairCol, pat: PAT.METAL, gloss: 0.4, weather: 0.4 }, () => {
-    const steps = 15, rise = (base + fh) / steps, run = 0.25;
-    for (let i = 0; i < steps; i++) {
-      const zz = z1 + corrD - 0.2 - i * run;
-      E.box(sx, (i + 1) * rise - 0.04, zz - run, sx + 1.0, (i + 1) * rise, zz);
+    const steps = 15, rise = top / steps, run = 0.25;
+    const zLand = z1 - 0.1; // back edge of the landing = top of the flight
+    const zFoot = zLand - (steps - 1) * run; // first step, towards the back of the building
+    for (let i = 0; i < steps - 1; i++) {
+      const za = zFoot + i * run;
+      E.box(sx, (i + 1) * rise - 0.04, za, sx + 1.0, (i + 1) * rise, za + run);
     }
-    const zTop = z1 + corrD - 0.2 - steps * run;
-    E.beam([sx + 0.02, 0, z1 + corrD - 0.1], [sx + 0.02, base + fh, zTop], 0.05, 0.2);
-    E.beam([sx + 0.98, 0, z1 + corrD - 0.1], [sx + 0.98, base + fh, zTop], 0.05, 0.2);
-    E.beam([sx + 1.0, 1.0, z1 + corrD - 0.1], [sx + 1.0, base + fh + 1.0, zTop], 0.04, 0.04);
+    // landing, level with the corridor and continuous with it
+    E.box(sx, top - 0.2, zLand, sx + 1.0, top, z1 + corrD);
+    // stringers
+    for (const ox of [0.02, 0.98]) E.beam([sx + ox, 0, zFoot - 0.1], [sx + ox, top, zLand], 0.05, 0.2);
+    // hand rail on the open side of the flight, then round the landing to the corridor rail
+    E.beam([sx + 1.0, 1.0, zFoot - 0.05], [sx + 1.0, top + 1.0, zLand], 0.04, 0.04);
+    E.box(sx + 0.98, top + 0.98, zLand, sx + 1.02, top + 1.02, z1 + corrD);
+    E.box(x1 + 0.1, top + 1.05, z1 + corrD - 0.06, sx + 1.02, top + 1.1, z1 + corrD);
     for (let i = 0; i <= 5; i++) {
-      const t = i / 5;
-      E.box(sx + 0.98, t * (base + fh), z1 + corrD - 0.1 - t * steps * run - 0.02, sx + 1.02, t * (base + fh) + 1.0, z1 + corrD - 0.1 - t * steps * run + 0.02);
+      const t = i / 5, zp = zFoot - 0.05 + t * (zLand - zFoot + 0.05);
+      E.box(sx + 0.98, t * top, zp - 0.02, sx + 1.02, t * top + 1.0, zp + 0.02);
     }
-    E.box(sx, base + fh - 0.15, zTop - 1.0, sx + 1.0, base + fh, zTop);
+    for (const zp of [z1 + 0.5, z1 + corrD - 0.03]) E.box(sx + 0.98, top, zp - 0.02, sx + 1.02, top + 1.05, zp + 0.02);
+    // the landing stands on a post at its outer corner
+    E.box(sx + 0.9, 0, z1 + corrD - 0.1, sx + 1.0, top - 0.2, z1 + corrD);
   });
   // bicycles under the corridor
   for (let i = 0; i < rng.int(3, 6); i++) bicycle(ctx, x0 + 3.2 + i * 0.66, 0.04, z1 + corrD + 1.0, Math.PI / 2 + rng.range(-0.12, 0.12), { lean: rng.range(0.03, 0.1) });
@@ -288,7 +297,9 @@ export function mansion(ctx, lot, opts = {}) {
   const x0 = -W / 2, x1 = W / 2, z1 = -2.5, z0 = z1 - D;
   const fh = 2.9, base = 0.3, ye = base + floors * fh;
   lotBase(ctx, lot);
-  ctx.solid(x0 - 0.2, 0, z0 - 1.3, x1 + 0.2, ye + 3, z1 + 1.3);
+  // the block, and above the ground floor the balconies and entrance canopy in front of it
+  ctx.solid(x0 - 0.2, 0, z0 - 1.3, x1 + 0.2, ye + 3, z1 + 0.2);
+  ctx.solid(x0 - 0.2, 2.35, z1 + 0.2, x1 + 0.2, ye + 3, z1 + 1.7);
   slab(ctx, -lw / 2, z1, lw / 2, 0, 0.05, '#b3b0a8', lowOf(lot));
   const tile = { color: col(opts.wallCol || rng.pick(['#c9bfae', '#b8ad9c', '#d6d0c4', '#a7a198'])), pat: PAT.TILE, param: 0.06, gloss: 0.15, weather: 0.5, grad: [0, ye, 0.85] };
   E.with(tile, () => E.box(x0, 0, z0, x1, ye, z1, { ny: true }));
@@ -489,6 +500,8 @@ export function vacant(ctx, lot) {
   if (lowOf(lot)) ctx.inSink('ground', f);
   else f();
   for (let i = 0; i < lw * ld * 0.9; i++) grass(ctx, rng.range(-lw / 2 + 0.2, lw / 2 - 0.2), 0.02, rng.range(-ld + 0.2, -0.3), rng.range(0.25, 0.75), { n: 2 });
+  // a sliver of land between neighbours: just weeds
+  if (lw < 4) return;
   for (let i = 0; i < 4; i++) bush(ctx, rng.range(-lw / 2 + 1, lw / 2 - 1), 0.02, rng.range(-ld + 1, -2), rng.range(0.4, 0.8), { color: '#5d7f3c' });
   // rope fence
   E.with({ color: col('#d8d6cf'), pat: PAT.PLAIN, gloss: 0.3 }, () => {

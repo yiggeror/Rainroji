@@ -5,7 +5,7 @@ import { col } from '../util.js';
 import { LAYER_OCC, LAYER_NOREFL } from '../render.js';
 import { makeCtx } from './ctx.js';
 import { Atlas, paintAtlas } from './atlas.js';
-import { makeRoads, T1, CANAL, RAIL, SEA, naturalHeight, coastInfo } from './layout.js';
+import { makeRoads, T1, CANAL, RAIL, SEA, naturalHeight, coastInfo, BREAKWATERS } from './layout.js';
 import { buildRoads, buildTerraces, buildCutWalls } from './streets.js';
 import { buildTerrain, buildSea, buildWoods, buildRocks } from './terrain.js';
 import { buildCoast, buildBoatGeometry } from './coast.js';
@@ -222,6 +222,21 @@ export function buildWorld(scene, renderer) {
     }
   }
 
+  // ---- lots the trimming left too small for their building get something that fits ----
+  {
+    // minimum lot width / depth each builder needs to make a sound building
+    const MIN = { house: [5.4, 7], old: [8.5, 9], apartment: [12.2, 10.2], shop: [6.5, 8.5], closed: [5.5, 7.5], workshop: [6, 7], mansion: [10, 12],
+      parking: [5, 5], field: [3, 3.5], park: [8, 8], vacant: [0, 0], fishmarket: [8, 8], coop: [8, 8], boatshed: [8, 8],
+      kissa: [5.5, 7.5], barber: [5.5, 7.5], laundry: [5.5, 7.5], bakery: [5.5, 7.5], izakaya: [5.5, 7.5] };
+    const fits = (type, l) => { const m = MIN[type] || MIN.house; return l.w >= m[0] && l.depth >= m[1]; };
+    for (let i = lots.length - 1; i >= 0; i--) if (lots[i].w < 1.5) lots.splice(i, 1);
+    for (const l of lots) {
+      if (fits(l.type, l)) continue;
+      const to = ['house', 'parking', 'field'].find((t) => fits(t, l)) || 'vacant';
+      l.type = to;
+      l.opts = { type: to, w: l.w };
+    }
+  }
   // ---- build everything --------------------------------------------------------
   buildRoads(ctx, roads);
   buildTerraces(ctx, roads, lots);
@@ -528,8 +543,18 @@ export function buildWorld(scene, renderer) {
     boats.push({ x, z: 105.9 + boatGeos[v].beam / 2, rot: i % 2 ? 0 : Math.PI, variant: v });
     if (rng.chance(0.35)) boats.push({ x: x + rng.range(-1, 1), z: 106.1 + boatGeos[v].beam + boatGeos[(v + 1) % 3].beam / 2 + 0.4, rot: i % 2 ? Math.PI : 0, variant: (v + 1) % 3 });
   }
-  boats.push({ x: 14, z: 128, rot: -1.45, variant: 1 });
-  boats.push({ x: 97, z: 132, rot: 1.62, variant: 0 });
+  // two more tied up alongside the inner face of each breakwater (parallel to it, fenders out)
+  const alongside = (bw, u, variant, flip) => {
+    const [ax, az] = bw.pts[0], [bx, bz] = bw.pts[1];
+    const len = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / len, dz = (bz - az) / len;
+    let nx = dz, nz = -dx;
+    if ((55 - ax) * nx + (125 - az) * nz < 0) (nx = -nx), (nz = -nz); // towards the harbour
+    const off = 3.2 + boatGeos[variant].beam / 2 + 0.7;
+    const rot = Math.atan2(-dz, dx) + (flip ? Math.PI : 0);
+    return { x: ax + dx * len * u + nx * off, z: az + dz * len * u + nz * off, rot, variant };
+  };
+  boats.push(alongside(BREAKWATERS[0], 0.52, 1, false));
+  boats.push(alongside(BREAKWATERS[1], 0.6, 0, true));
   const boatMeshes = boats.map((b) => {
     const m = new THREE.Mesh(boatGeos[b.variant].geo, toon);
     m.position.set(b.x, b.beached ? b.y : SEA, b.z);
@@ -774,6 +799,9 @@ export function buildWorld(scene, renderer) {
     spouts: ctx.spouts,
     gutters: ctx.gutters,
     state,
+    // train car meshes (local frame: x along the car, y up from the rail head)
+    trainCars: cars,
+    trainSize: { L: TRAIN.L, W: TRAIN.W, H: TRAIN.H },
     occBounds: { minX: -162, maxX: 128, minY: -6, maxY: 45, minZ: -150, maxZ: 172 },
     rainBounds: { minX: -162, maxX: 128, minY: -6, maxY: 45, minZ: -150, maxZ: 172 },
     flyBounds: { minX: -700, maxX: 700, minZ: -700, maxZ: 700, maxY: 240 },

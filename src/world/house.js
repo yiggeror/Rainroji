@@ -349,7 +349,7 @@ export function detached(ctx, lot, opts = {}) {
     const pd = Math.min(ld - 0.5, 5.2);
     slab(ctx, pxc - pw / 2 + 0.05, -pd, pxc + pw / 2 - 0.05, 0, 0.06, '#c2c0b8', lowland);
     if (rng.chance(0.7)) car(ctx, pxc, 0.06, -pd / 2 - 0.1, Math.PI / 2 + (rng.chance(0.5) ? Math.PI : 0), {});
-    else for (let i = 0; i < rng.int(1, 3); i++) bicycle(ctx, pxc + (i - 0.5) * 0.45, 0.06, -1.3 - i * 0.2, Math.PI / 2 + rng.range(-0.15, 0.15));
+    else for (let i = 0; i < rng.int(1, 3); i++) bicycle(ctx, pxc + (i - 0.5) * 0.62, 0.06, -1.3 - i * 0.2, Math.PI / 2 + rng.range(-0.1, 0.1));
     if (rng.chance(0.3)) {
       // carport
       E.with({ color: col('#8f9294'), pat: PAT.METAL, gloss: 0.5 }, () => {

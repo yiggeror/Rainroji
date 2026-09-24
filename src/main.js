@@ -49,14 +49,20 @@ export function start({ audio } = {}) {
 
   // --- sizing ----------------------------------------------------------------
   let W = 0, H = 0;
-  let capturing = false, resizeLater = false;
-  function resize() {
+  let capturing = false, resizeLater = false, sized = '';
+  function resize(force) {
     if (capturing) {
       resizeLater = true;
       return;
     }
     const w = shot ? +(params.get('w') || 1600) : window.innerWidth;
     const h = shot ? +(params.get('h') || 900) : window.innerHeight;
+    // phones fire resize events without a real change (and briefly report 0 while
+    // switching apps): only reallocate when the size really changed
+    if (w < 16 || h < 16) return;
+    const key = `${w}x${h}@${pixelRatio}`;
+    if (key === sized && !force) return;
+    sized = key;
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(w, h, !shot);
     if (shot) {
@@ -73,7 +79,19 @@ export function start({ audio } = {}) {
     refl.setSize(W, H);
   }
   resize();
-  window.addEventListener('resize', resize);
+  // Resizing the canvas wipes what is on it, so never do it between drawing a frame and
+  // showing it: size changes are applied at the start of the next frame, right before drawing.
+  let resizeDue = false;
+  window.addEventListener('resize', () => {
+    if (shot) resize();
+    else resizeDue = true;
+  });
+  // if the browser drops and restores the GPU context, redo the one-off passes
+  canvas.addEventListener('webglcontextrestored', () => {
+    occ.render(scene);
+    rainMap.render(scene, rain.dir);
+    resize(true);
+  });
 
   // --- loop -----------------------------------------------------------------------
   const clock = new THREE.Timer();
@@ -81,6 +99,8 @@ export function start({ audio } = {}) {
   let fade = shot ? 1 : 0;
   let frameAvg = 16;
   let frames = 0;
+  let goodChecks = 0, lastScale = -10;
+  let still = false;
   const hideInRefl = [world.groundMesh, rain.object];
   if (params.has('norain')) rain.object.visible = false;
   if (params.has('noglow') && world.glowMesh) world.glowMesh.visible = false;
@@ -117,7 +137,11 @@ export function start({ audio } = {}) {
   function frame(ts) {
     clock.update(ts);
     if (capturing) return;
-    const dt = Math.min(clock.getDelta(), 0.1);
+    if (resizeDue) {
+      resizeDue = false;
+      resize();
+    }
+    const dt = still ? 0 : Math.min(clock.getDelta(), 0.1);
     t += dt;
     U.uTime.value = t;
     stepCamera(dt);
@@ -136,16 +160,24 @@ export function start({ audio } = {}) {
     fade = Math.min(1, fade + dt * 0.5);
     post.render(fade);
 
-    // adaptive resolution: keep things smooth on weaker GPUs
+    // adaptive resolution: keep things smooth on weaker GPUs. Changes are rare (every
+    // reallocation of the render targets costs a hitch) and take effect next frame.
     if (!shot) {
       frameAvg = frameAvg * 0.95 + dt * 1000 * 0.05;
-      if (++frames % 90 === 0) {
-        if (frameAvg > 30 && pixelRatio > 0.6) {
+      frames++;
+      if (frames % 30 === 0) {
+        const slow = frameAvg > 30 && pixelRatio > 0.6;
+        const fast = frameAvg < 17 && pixelRatio < maxPR;
+        goodChecks = fast ? goodChecks + 1 : 0;
+        if (slow && t - lastScale > 3) {
           pixelRatio = Math.max(0.6, pixelRatio - 0.15);
-          resize();
-        } else if (frameAvg < 18 && pixelRatio < maxPR) {
+          lastScale = t;
+          resizeDue = true;
+        } else if (goodChecks >= 6 && t - lastScale > 12) {
           pixelRatio = Math.min(maxPR, pixelRatio + 0.1);
-          resize();
+          lastScale = t;
+          goodChecks = 0;
+          resizeDue = true;
         }
       }
     }
@@ -156,15 +188,20 @@ export function start({ audio } = {}) {
     window.__renderShot = (opts = {}) => {
       if (opts.pos && opts.target) rig.reset(opts.pos, opts.target);
       if (opts.t !== undefined) t = opts.t;
+      still = !!opts.still; // time stands still (exactly repeatable frames)
       for (let i = 0; i < (opts.frames || 3); i++) {
         clock.getDelta();
         frame();
       }
+      still = false;
       return true;
     };
     window.__world = world;
     window.THREE_Vector3 = THREE.Vector3;
+    window.THREE = THREE;
     window.__capture = takeShot;
+    window.__scene = scene;
+    window.__renderer = renderer;
     // headless camera simulation (no rendering) for control tests
     window.__sim = {
       camera,

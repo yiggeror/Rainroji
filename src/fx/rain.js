@@ -16,11 +16,24 @@ function quadGeo() {
   return g;
 }
 
+// the train moves, so it is not in the (static) rain height map: its cars are passed
+// as boxes (world -> car-local matrices) and rain inside them is dropped
+const CARS = { uCarInv: { value: [0, 1, 2, 3].map(() => new THREE.Matrix4().makeTranslation(0, -1e5, 0)) }, uCarHalf: { value: new THREE.Vector3(10, 3.8, 1.5) } };
+
 const RAIN_COMMON = /* glsl */ `
 uniform sampler2D uRainMap;
 uniform mat4 uRainMat;
 uniform mat4 uRainInv;
 uniform float uRainOn;
+uniform mat4 uCarInv[4];
+uniform vec3 uCarHalf;
+float inTrain(vec3 p){
+  for (int i = 0; i < 4; i++){
+    vec3 l = (uCarInv[i] * vec4(p, 1.0)).xyz;
+    if (abs(l.x) < uCarHalf.x && l.y > 0.9 && l.y < uCarHalf.y && abs(l.z) < uCarHalf.z) return 1.0;
+  }
+  return 0.0;
+}
 // true if p is below the first surface hit by rain (i.e. sheltered)
 float sheltered(vec3 p){
   if (uRainOn < 0.5) return 0.0;
@@ -49,6 +62,7 @@ function makeStreaks(count, box, len, width, opacity, speed, seed) {
       uSpeed: { value: speed },
       uDir: { value: RAIN_DIR },
       uPix: { value: 1 / 900 },
+      ...CARS,
     },
     vertexShader: /* glsl */ `
       ${RAIN_COMMON}
@@ -75,7 +89,7 @@ function makeStreaks(count, box, len, width, opacity, speed, seed) {
         float L = uLen * (0.75 + 0.5 * aSeed.w);
         vec3 pos = p + side * (position.x - 0.5) * w + uDir * (position.y - 0.5) * L;
         vWorld = pos;
-        float hide = sheltered(p + uDir * 0.3);
+        float hide = max(sheltered(p + uDir * 0.3), inTrain(p));
         vFade = thin * (1.0 - hide) * smoothstep(0.25, 1.2, dist) * (1.0 - smoothstep(uBox.x * 0.42, uBox.x * 0.5, length(toCam.xz)));
         vUv = position.xy;
         gl_Position = projectionMatrix * viewMatrix * vec4(pos, 1.0);
@@ -115,7 +129,7 @@ function makeSplashes(count, area, seed) {
   g.setAttribute('aSeed', new THREE.InstancedBufferAttribute(a, 4));
   g.instanceCount = count;
   const mat = new THREE.ShaderMaterial({
-    uniforms: { ...U, uArea: { value: area } },
+    uniforms: { ...U, ...CARS, uArea: { value: area } },
     vertexShader: /* glsl */ `
       ${RAIN_COMMON}
       attribute vec4 aSeed;
@@ -375,6 +389,15 @@ export function makeRain(scene, world) {
     object: group,
     dir,
     update(t, dt, camera, renderer) {
+      const cars = world.trainCars || [];
+      for (let i = 0; i < 4; i++) {
+        const car = cars[i], inv = CARS.uCarInv.value[i];
+        if (car && car.visible) {
+          car.updateWorldMatrix(true, false);
+          inv.copy(car.matrixWorld).invert();
+        } else inv.makeTranslation(0, -1e5, 0);
+      }
+      if (world.trainSize) CARS.uCarHalf.value.set(world.trainSize.L / 2, world.trainSize.H + 0.15, world.trainSize.W / 2);
       if (t - lastRefresh > 0.6) {
         refresh(camera);
         lastRefresh = t;

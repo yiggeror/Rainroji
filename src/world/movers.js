@@ -79,9 +79,20 @@ export function makeMovers(ctx, { scene, group, material, rng, dynLights }) {
       return { x: a.x + (b.x - a.x) * u, z: a.z + (b.z - a.z) * u, dx: b.x - a.x, dz: b.z - a.z, corner: a.corner + (b.corner - a.corner) * u };
     };
     // timetable: drive the loop, stop for an errand in front of the co-op, drive on
-    const V = 6.2;
+    const V = 6.2, RAMP = 2.5; // cruise speed, seconds to speed up / slow down
     const stopS = cum[9] + 20; // on the harbour road
-    const driveA = stopS / V, park = 80, driveB = (L - stopS) / V, rest = 25;
+    // distance along a leg of length dist after w seconds: pull away, cruise, brake to a stop
+    // exactly at the end (continuous in position and speed)
+    const legTime = (dist) => dist / V + RAMP;
+    const legPos = (w, dist) => {
+      const T = legTime(dist), k = V / (2 * RAMP);
+      if (w <= 0) return 0;
+      if (w >= T) return dist;
+      if (w < RAMP) return k * w * w;
+      if (w < T - RAMP) return k * RAMP * RAMP + V * (w - RAMP);
+      return dist - k * (T - w) * (T - w);
+    };
+    const driveA = legTime(stopS), park = 80, driveB = legTime(L - stopS), rest = 25;
     const P = driveA + park + driveB + rest;
     const light = { p: new THREE.Vector3(), color: new THREE.Color('#fff2d8'), radius: 11, intensity: 0, flicker: 0, dyn: 'car' };
     dynLights.push(light);
@@ -91,13 +102,12 @@ export function makeMovers(ctx, { scene, group, material, rng, dynLights }) {
     out.push((t, glows) => {
       let u = ((t + 40) % P + P) % P;
       let s, moving = true;
-      if (u < driveA) s = Math.min(stopS, V * u - (u > driveA - 2.5 ? (V * (u - (driveA - 2.5)) * (u - (driveA - 2.5))) / 5 : 0));
+      if (u < driveA) s = legPos(u, stopS);
       else if (u < driveA + park) {
         s = stopS;
         moving = false;
       } else if (u < driveA + park + driveB) {
-        const w = u - driveA - park;
-        s = stopS + (w < 2.5 ? (V * w * w) / 5 : V * (w - 1.25));
+        s = stopS + legPos(u - driveA - park, L - stopS);
       } else {
         s = L;
         moving = false;

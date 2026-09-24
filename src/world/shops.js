@@ -314,7 +314,11 @@ export function shopHouse(ctx, lot, opts = {}) {
   const W = Math.min(lw - 0.8, 9.5), D = Math.min(ld - 2.4, 8.5);
   const hx = opts.hx ?? 0;
   const x0 = hx - W / 2, x1 = hx + W / 2, z1 = -(opts.setback ?? 1.4), z0 = z1 - D;
-  const base = 0.12, fh1 = 3.1, fh2 = 2.8, floors = opts.floors || 2;
+  // the shop is 3.1 m tall; above it a fascia band carries the sign board, then the house floors
+  const R0 = ctx.atlasRects;
+  const sign = { kissa: R0.kissa, barber: R0.barber, laundry: R0.laundry, bakery: R0.bakery }[kind];
+  const hS = 3.1, FASC = sign ? 0.95 : 0;
+  const base = 0.12, fh1 = hS + FASC, fh2 = 2.8, floors = opts.floors || 2;
   const ye = base + fh1 + fh2 * (floors - 1);
   const style = opts.style || rng.pick(['showa', 'modern', 'lap', 'tile']);
   const wm = { ...wallMat(style, rng, opts.wallCol), grad: [0, ye, 0.85], vbase: 0 };
@@ -332,19 +336,19 @@ export function shopHouse(ctx, lot, opts = {}) {
   });
   E.with({ color: col('#8f8d86'), pat: PAT.CONCRETE, gloss: 0.2 }, () => E.box(x0 - 0.02, base + fh1 - 0.05, z1 - 0.02, x1 + 0.02, base + fh1 + 0.18, z1 + 0.06));
   E.frame(x0, 0, z1, 0, () => {
-    shopFront(ctx, W, D - 0.1, base + fh1 - 0.1, kind, opts);
-    // sign board + awning / canopy
+    shopFront(ctx, W, D - 0.1, base + hS - 0.1, kind, opts);
+    // fascia band over the shop front, and on it the sign board
+    if (FASC) E.with(wm, () => E.box(0.1, base + hS - 0.1, -0.12, W - 0.1, base + fh1 - 0.05, 0));
     const R = ctx.atlasRects;
-    const sign = { kissa: R.kissa, barber: R.barber, laundry: R.laundry, bakery: R.bakery }[kind];
-    const sy = base + fh1 + 0.25;
+    const sy = base + hS + 0.08;
     if (sign) {
-      const sw = Math.min(W - 0.6, 4.6), sh = sw * (sign.h / sign.w);
+      const sw = Math.min(W - 0.6, 4.6, (FASC - 0.22) * (sign.w / sign.h)), sh = sw * (sign.h / sign.w);
       E.with({ color: col('#2a2c2e'), pat: PAT.METAL }, () => E.box(W / 2 - sw / 2 - 0.05, sy - 0.05, 0.04, W / 2 + sw / 2 + 0.05, sy + sh + 0.05, 0.12));
       atlasQuad(ctx, sign, [W / 2 - sw / 2, sy, 0.13], [W / 2 + sw / 2, sy, 0.13], [W / 2 + sw / 2, sy + sh, 0.13], [W / 2 - sw / 2, sy + sh, 0.13], [0, 0, 1], kind === 'laundry' ? 0.9 : 0.55);
     }
     const awn = { kissa: '#6b4a34', bakery: '#c86a3a', barber: '#2f4f8a', laundry: '#3a6db4' }[kind];
     if (awn) {
-      const ay = base + fh1 - 0.05;
+      const ay = base + hS - 0.05;
       E.with({ color: col(awn), pat: PAT.AWNING, param: kind === 'bakery' ? 0.45 : 2.0, gloss: 0.25, weather: 0.2 }, () => {
         quadF(E, [0.1, ay, 0.1], [W - 0.1, ay, 0.1], [W - 0.1, ay - 0.5, 1.1], [0.1, ay - 0.5, 1.1], [0, 0, W, 0, W, 1.1, 0, 1.1], [0, 1, 0.5]);
         quadF(E, [0.1, ay - 0.5, 1.1], [W - 0.1, ay - 0.5, 1.1], [W - 0.1, ay - 0.72, 1.1], [0.1, ay - 0.72, 1.1], [0, 0, W, 0, W, 0.22, 0, 0.22], [0, 0, 1]);

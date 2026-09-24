@@ -194,7 +194,11 @@ vec3 localLights(vec3 wp, vec3 n, vec3 V, float gloss, out vec3 spec){
 // ---------------------------------------------------------------------------
 // Toon material: the whole town is drawn with this.
 // ---------------------------------------------------------------------------
+const SRGB_DECODE = /* glsl */ `
+vec3 srgbToLinear(vec3 c){ return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c)); }
+`;
 const TOON_VERT = /* glsl */ `
+${SRGB_DECODE}
 attribute vec4 aMatA;
 attribute vec4 aMatB;
 uniform float uTime;
@@ -222,7 +226,7 @@ void main(){
   }
   vWorldPos = wp.xyz;
   vNormal = normalize(mat3(modelMatrix) * nrm);
-  vColor = color;
+  vColor = srgbToLinear(color.rgb);
   vUv = uv;
   vMatA = aMatA;
   vMatB = aMatB;
@@ -698,6 +702,7 @@ export function makeToonMaterial(opts = {}) {
 // Foliage: alpha-tested leaf cards with spherified normals (painterly clumps)
 // ---------------------------------------------------------------------------
 const FOLIAGE_VERT = /* glsl */ `
+${SRGB_DECODE}
 attribute vec4 aMatB;
 uniform float uTime;
 uniform vec3 uWind;
@@ -719,7 +724,7 @@ void main(){
   wp.y += sw * 0.12 * sin(uTime * 9.0 + ph * 13.0) * step(0.7, fract(ph * 3.7 + uTime * 0.3));
   vWorldPos = wp.xyz;
   vNormal = normalize(mat3(modelMatrix) * normal);
-  vColor = color;
+  vColor = srgbToLinear(color.rgb);
   vUv = uv;
   vShade = aMatB.x;
   // sky visibility per vertex: leaves overdraw a lot, the 12 taps are too costly per pixel
