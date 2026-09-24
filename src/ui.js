@@ -101,6 +101,20 @@ export function makeShotButton(takeShot) {
 
   const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
   let busy = false, card = null, url = null;
+  // inside the claude.ai artifact viewer plain downloads are blocked; it offers a save capability instead
+  let downloads = null;
+  if (window.claude && typeof window.claude.use === 'function') {
+    Promise.resolve(window.claude.use('downloads')).then((d) => (downloads = d), () => {});
+  }
+  function saveFile(blob, name) {
+    if (downloads) return downloads.save({ filename: name, data: blob }).catch((e) => console.warn(e && e.code));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 
   function closeCard() {
     if (!card) return;
@@ -128,10 +142,10 @@ export function makeShotButton(takeShot) {
     const meta = document.createElement('span');
     meta.className = 'meta';
     meta.textContent = `${res.width} × ${res.height}`;
-    const save = document.createElement('a');
-    save.href = url;
-    save.download = name;
+    const save = document.createElement('button');
+    save.type = 'button';
     save.textContent = '保存';
+    save.addEventListener('click', () => saveFile(res.blob, name));
     row.append(meta, save);
     const file = typeof File === 'function' ? new File([res.blob], name, { type: 'image/png' }) : null;
     if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -180,14 +194,7 @@ export function makeShotButton(takeShot) {
       const name = `rainroji-${stamp()}.png`;
       showCard(res, name);
       // straight to the downloads folder where that works; iOS saves via the card (share / long-press)
-      if (!iOS) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
+      if (!iOS || downloads) saveFile(res.blob, name);
       prog.remove();
     } catch (e) {
       console.warn(e);
