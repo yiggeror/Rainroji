@@ -65,13 +65,25 @@
 /* ============================================================================
    傍晚 · 雨窗 —— 一个永远停在傍晚的旧房间，窗外下着雨
    ----------------------------------------------------------------------------
-   架构（详见 PLAN.md）：WebGL2，全程线性 HDR（RGBA16F），最后 ACES + sRGB。
-     outside(sharp)   程序化街景，等距柱状广角，供雨滴折射取样（带 mip）
-     outside(defocus) 同一街景按屏幕视角渲染，点光源为解析 bokeh 圆盘
-     room             SDF raymarch 室内（动态分辨率），输出颜色 + 玻璃覆盖率 + 深度
-     composite        全分辨率：玻璃（透射/反射/雾）叠加室内
-     final            曝光 → ACES → sRGB → 抖动
+   渲染：WebGL2，全程线性 HDR（RGBA16F）。每帧的 pass：
+     1 outside·sharp    程序化街景，等距柱状广角、清晰，供雨滴折射取样（mip）
+     2 outside·defocus  同一街景按相机视角渲染；点光源是能量守恒的解析 bokeh 圆盘
+     3 drops → height   CPU 模拟的每颗水滴写成球冠高度场（实例化 quad，MAX 混合，mip）
+     4 room             SDF raymarch 室内（动态分辨率）→ 颜色 + 玻璃覆盖率 + 深度
+     5 room DOF         薄透镜弥散圆，焦点在玻璃上
+     6 composite        全分辨率：玻璃的折射、全反射、菲涅尔、雾珠、冷凝雾、室内倒影，叠在室内上
+     7 bloom            13-tap 降采样链 + tent 升采样，按能量混合（不设阈值）
+     8 final            色差 / 暗角 / 曝光（眼睛适应）→ ACES → 调色 → sRGB → 颗粒、抖动
+   模拟（CPU，真实毫米）：钉扎、滑动、合并、拖尾、雾珠吸收，见「RAIN ON GLASS」一节。
+   声音：Web Audio 实时合成，由模拟事件驱动，见「AUDIO」一节。
+   主要近似及原因（每处在对应代码旁另有注释）：
+     · 雨滴显示放大 MAG 倍（物理按真实尺寸计算）：真实尺度下透镜成像只有 2–3 个像素
+     · 窗外按方向参数化：远景视差可忽略；bokeh 用解析圆盘而不做散射式景深
+     · 间接光 = 虚拟点光源 + radiosity 常量 × AO：真正的 GI 在手机上不可行
+     · 雾珠用连续密度场 + 程序化小珠表示，不逐颗模拟
    单位：米；x 向右，y 向上，z 指向观者（窗墙内表面 z = 0，窗外 z < 0）。
+   调试参数：?shot &seed= &warm=秒 &lamp=0 &still &q=室内分辨率 &frames=N
+            &view=room|dof|defocus|sharp|height|state|bloom|cov|depth &dbg=1..11 &zoom= &zx= &zy=
    ========================================================================== */
 
 // ---------------------------------------------------------------- params ---
@@ -140,8 +152,8 @@ const S = {
   MUG_X: -0.17, MUG_Z: 0.17, MUG_R: 0.041, MUG_H: 0.092, MUG_HANG: 0.55,
   BOOK_X: 0.36, BOOK_Z: 0.20,
   CURT_X0: 0.47, CURT_X1: 0.98, CURT_Z: 0.075,
-  // outside world: we are on the 2nd floor of an old building facing a wide street
-  GROUND_Y: -3.4, CURB_Z: -26.0, FACADE_Z: -30.5, FAR_Z: -170.0,
+  // outside world: a raised ground floor of an old building, facing a wide street
+  GROUND_Y: -2.3, CURB_Z: -26.0, FACADE_Z: -30.5, FAR_Z: -170.0,
   // equirect range of the sharp outside texture (rad)
   AZM: 1.45, ELMIN: -1.25, ELMAX: 1.15,
 };
@@ -243,7 +255,7 @@ uniform vec2 uRes;
 uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
 uniform float uTime;
-uniform vec4 uCarIn;     // passing-car light entering the room: xyz position, w intensity
+uniform vec2 uJitter;                 // sub-pixel offset (Halton), accumulated by the TAA pass
 layout(location = 0) out vec4 oCol;   // rgb: room radiance (premultiplied by 1-coverage), a: glass coverage
 layout(location = 1) out vec4 oAux;   // r: view depth
 
@@ -698,20 +710,11 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
     col += m.trans * dot(Ew, vec3(0.3)) * 0.02;
   }
 
-  // 6) light of a passing car sweeping across the room (projected through the window, stage 3)
-  if (uCarIn.w > 0.0){
-    vec3 Lc2 = uCarIn.xyz - p; float lcd = length(Lc2); vec3 lcn = Lc2 / lcd;
-    float tg = (GLASS_Z - p.z) / lcn.z;
-    vec2 gp = p.xy + lcn.xy * tg;
-    float through = step(0.0, -lcn.z) * step(abs(gp.x - WIN_CX), WIN_HW - FW) * step(abs(gp.y - WIN_CY), WIN_HH - FW);
-    through *= smoothstep(MW * 0.6, MW, abs(gp.x)) * smoothstep(TW * 0.6, TW, abs(gp.y - TRANSOM_Y));
-    col += dif * vec3(1.0, 0.92, 0.8) * uCarIn.w * max(dot(n, lcn), 0.0) * through;
-  }
   return col;
 }
 
 void main(){
-  vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec2 ndc = (gl_FragCoord.xy + uJitter) / uRes * 2.0 - 1.0;
   vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
   vec3 ro = uCamPos;
   float tG = (GLASS_Z - ro.z) / rd.z;
@@ -739,7 +742,7 @@ void main(){
 // --------------------------------------------------------------------------
 const GLSL_CITY = `
 // opposite row: old 2-4 storey shophouses; far city: towers seen over their roofs
-float bldTop(float x){ float i = floor(x / 9.0); return 7.2 + 5.6 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
+float bldTop(float x){ float i = floor(x / 9.0); return 6.6 + 5.0 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
 float farTop(float x){ float i = floor(x / 26.0); return 16.0 + 50.0 * pow(hash11(i * 1.7 + 9.0), 1.6); }
 `;
 const GLSL_OUTSIDE = GLSL_CITY + `
@@ -901,7 +904,25 @@ uniform vec2 uRes;
 uniform vec3 uEye, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
 uniform float uBlur;         // angular blur radius (rad)
+uniform float uRain, uAperture, uFocus;
 out vec4 o;
+// 窗外几米处正在落下的雨：只有被背后的灯照亮时才看得见（前向散射），所以亮度正比于背后的光；
+// 短而虚（离焦 + 快门拖影），按三层深度分布，随风略斜。
+float rainStreaks(vec3 rd){
+  // in angular units: width ≈ defocus CoC = A·|1/z − 1/z_f|, length ≈ fall speed × 1/50 s shutter / z.
+  // vertically stretched value noise, sharpened → sparse soft streaks without any grid structure
+  float L = 0.0;
+  vec2 tp = vec2(rd.x, rd.y) / max(-rd.z, 0.2);
+  for (int k = 0; k < 3; k++){
+    float z = 3.6 * pow(1.75, float(k));                    // 3.6, 6.3, 11 m from the eye
+    float coc = max(uAperture * abs(1.0 / z - 1.0 / uFocus), 0.002);
+    float len = 6.2 * 0.02 / z;
+    vec2 q = vec2((tp.x + tp.y * 0.07) / (coc * 1.3), (tp.y + uTime * 6.2 / z) / (len * 1.1));
+    float n = vnoise(q + float(k) * 37.0);
+    L += pow(n, 7.0) * (1.0 - 0.25 * float(k));
+  }
+  return L;
+}
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
   vec3 rd;
@@ -912,7 +933,9 @@ void main(){
     vec2 ndc = uv * 2.0 - 1.0;
     rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
   }
-  o = vec4(outside(uEye, rd, uBlur), 1.0);
+  vec3 c = outside(uEye, rd, uBlur);
+  if (uMode == 1) c *= 1.0 + rainStreaks(rd) * 0.75 * uRain;
+  o = vec4(c, 1.0);
 }
 `;
 
@@ -988,6 +1011,11 @@ void main(){
     float r2 = length((qe + off)) / (R * 1.08);
     float cat = smoothstep(1.0, 0.93, r2);
     body = vE * disc * rim * cat / (PI * R * R * elong * 1.06);
+    // reflections on the rough, rain-pocked road are soft streaks rather than crisp ellipses
+    float soft = smoothstep(1.5, 3.0, elong);
+    float sg = R * 0.62;
+    vec3 streak = vE * exp(-dot(qe, qe) / (2.0 * sg * sg)) / (2.0 * PI * sg * sg * elong);
+    body = mix(body, streak, soft);
   } else {
     float s = R * 0.8;
     body = vE * exp(-dot(qe, qe) / (2.0 * s * s)) / (2.0 * PI * s * s * elong);
@@ -1012,7 +1040,8 @@ vec3 interiorRad(vec3 ro, vec3 rd){
   float ys = ro.y + rd.y * tc - DESK_TOP;
   float yr = sat((ys - SHADE_Y0) / (SHADE_Y1 - SHADE_Y0));
   float rsh = mix(SHADE_R0, SHADE_R1, yr);
-  float shadeM = smoothstep(rsh + 0.012, rsh - 0.012, rad) * smoothstep(-0.01, 0.01, ys - SHADE_Y0) * smoothstep(0.01, -0.01, ys - SHADE_Y1);
+  // the mirror image of the shade lies ~0.6 m behind the glass the lens focuses on → its edges are defocused (~3 cm)
+  float shadeM = smoothstep(rsh + 0.03, rsh - 0.03, rad) * smoothstep(-0.03, 0.03, ys - SHADE_Y0) * smoothstep(0.03, -0.03, ys - SHADE_Y1);
   float tS = shadeM > 0.0 ? tc : 1e9;
   // room box + desk top
   // (signed-zero safe: a direction component of -0.0 must not produce -Inf distances)
@@ -1167,7 +1196,7 @@ void main(){
   float pxPerMM = 1.0 / max(length(fwidth(pm)), 1e-4);
   float aaM = smoothstep(2.5, 6.0, pxPerMM * 0.6) * (1.0 - Fin);
   float macro = smoothstep(0.0, 0.03, h);
-  vec3 md = microDrops(pm, M) * aaM * (1.0 - macro);
+  vec3 md = aaM > 0.01 ? microDrops(pm, M) * aaM * (1.0 - macro) : vec3(0.0);   // sub-pixel (most phones): skip
   grad += md.yz;
   // ---- trail film: thin, slightly uneven water layer
   float fn = vnoise(pm * vec2(0.9, 0.25) + 3.0) - vnoise(pm * vec2(0.9, 0.25) + vec2(3.6, 3.0));
@@ -1222,6 +1251,41 @@ void main(){
   o = vec4(col, 1.0);
 }
 `;
+
+// --------------------------------------------------------------------------
+// ROOM TAA: the room is static and the camera only drifts, so a jittered history
+// reprojected with depth (and clamped to the current 3×3 neighbourhood to reject
+// stale samples) anti-aliases edges and supersamples the low-resolution raymarch.
+// --------------------------------------------------------------------------
+const FS_TAA = () => GLSL_HEAD() + `
+uniform sampler2D uCur, uDepth, uHist;
+uniform vec2 uRes, uJitter;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp; uniform vec2 uTan;
+uniform vec3 uPPos, uPFwd, uPRight, uPUp; uniform vec2 uPTan;
+uniform float uReset;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 t = 1.0 / uRes;
+  vec4 cur = texture(uCur, uv);
+  vec4 mn = cur, mx = cur;
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+    vec4 c = texture(uCur, uv + vec2(float(i), float(j)) * t);
+    mn = min(mn, c); mx = max(mx, c);
+  }
+  // reproject: world point of this pixel (view depth) → previous camera
+  vec2 ndc = uv * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  float z = texture(uDepth, uv).r;
+  vec3 P = uCamPos + rd * (z / max(dot(rd, uCamFwd), 1e-3));
+  vec3 d = P - uPPos; float pz = dot(d, uPFwd);
+  vec2 puv = vec2(dot(d, uPRight) / pz / uPTan.x, dot(d, uPUp) / pz / uPTan.y) * 0.5 + 0.5;
+  vec4 hist = texture(uHist, puv);
+  hist = clamp(hist, mn, mx);
+  float off = step(1.0, max(abs(puv.x - 0.5), abs(puv.y - 0.5)) * 2.0);
+  float a = max(max(0.1, off), uReset);
+  o = mix(hist, cur, a);
+}`;
 
 // --------------------------------------------------------------------------
 // ROOM DEPTH OF FIELD: thin-lens circle of confusion, focus on the glass.
@@ -1469,7 +1533,7 @@ function spawnCar() {
 }
 function updateOutside(dt, t) {
   OUT.nextCar -= dt;
-  if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = 14 + rnd() * 30; }
+  if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = 9 + rnd() * 24; }
   for (const c of OUT.cars) { c.x += c.dir * c.v * dt; c.age += dt; }
   OUT.cars = OUT.cars.filter(c => Math.abs(c.x) < 80);
 }
@@ -1509,8 +1573,9 @@ function buildSprites(t, eye) {
     const toEye = V.norm(V.sub(eye, [c.x, GY + 0.7, c.z]));
     const facing = Math.max(0, c.dir * toEye[0]);
     const fade = smooth(0, 3, c.age);
-    const hE = 0.0035 * c.I * (0.06 + 0.94 * facing ** 3) * fade;
-    const tE = 0.0007 * c.I * (0.25 + 0.75 * Math.max(0, -c.dir * toEye[0]) ** 2) * fade;
+    // a headlamp lens still glows well off-axis (≈20% seen side-on); the beam itself is narrow (~facing³)
+    const hE = 0.0032 * c.I * (0.2 + 0.8 * facing ** 3) * fade;
+    const tE = 0.0008 * c.I * (0.45 + 0.55 * Math.max(0, -c.dir * toEye[0]) ** 2) * fade;
     for (const dz of [-0.75, 0.75]) {
       if (n > 230) break;
       emit([c.x + c.dir * 2.1, GY + 0.68, c.z + dz], head, hE, { core: 0.09, refl: 1, halo: 0.35, haloR: 0.04 });
@@ -1827,10 +1892,9 @@ function simAdvance(dt, fieldEvery = 1 / 30) {
     fieldAcc += h; if (fieldAcc >= fieldEvery) { fieldStep(fieldAcc); fieldAcc = 0; }
   }
 }
-function prewarm(seconds) {
-  const h = 1 / 30;
-  for (let t = 0; t < seconds; t += h) { simStep(h); fieldAcc += h; if (fieldAcc >= 0.25) { for (let q = 0; q < 4; q++) fieldStep(fieldAcc / 4); fieldAcc = 0; } }
-  SIM.events.length = 0;
+// the rain has been falling for a while before we look: simulate ~2.5 min in slices (keeps the page responsive)
+function prewarmSlice(h, n) {
+  for (let k = 0; k < n; k++) { simStep(h); fieldAcc += h; if (fieldAcc >= 0.25) { for (let q = 0; q < 4; q++) fieldStep(fieldAcc / 4); fieldAcc = 0; } }
 }
 
 /* ============================================================================
@@ -1910,6 +1974,11 @@ let spriteVAO, spriteBuf, dropVAO, dropBuf, stateTex;
 function initGL() {
   gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: DBG.shot, powerPreference: 'high-performance' });
   if (!gl) return false;
+  createResources();
+  return true;
+}
+// everything owned by the GL context (re-created after a context loss)
+function createResources() {
   caps.cbf = !!gl.getExtension('EXT_color_buffer_float');
   caps.cbhf = !!gl.getExtension('EXT_color_buffer_half_float');
   caps.parallel = gl.getExtension('KHR_parallel_shader_compile');
@@ -1935,7 +2004,6 @@ function initGL() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return true;
 }
 function buildPrograms() {
   const P = R.progs;
@@ -1945,6 +2013,7 @@ function buildPrograms() {
   P.composite = makeProgram('composite', VS_FULL, FS_COMPOSITE());
   P.drop = makeProgram('drop', VS_DROP(), FS_DROP());
   P.dof = makeProgram('dof', VS_FULL, FS_DOF());
+  P.taa = makeProgram('taa', VS_FULL, FS_TAA());
   P.down = makeProgram('down', VS_FULL, FS_DOWN());
   P.up = makeProgram('up', VS_FULL, FS_UP());
   P.final = makeProgram('final', VS_FULL, FS_FINAL());
@@ -1958,11 +2027,14 @@ function finishPrograms() { Object.values(R.progs).forEach(checkProgram); }
 
 function allocTargets() {
   const T = R.tg, hdr = caps.hdr ? 'rgba16f' : 'rgba8';
-  Object.values(T).forEach(freeTarget);
+  for (const k in T) if (T[k] && T[k].fb) freeTarget(T[k]);   // (T.bloom is just a list of the b1..b6 targets)
   const W = canvas.width, H = canvas.height;
   T.hdr = makeTarget(W, H, [hdr]);
   T.room = makeTarget(W * R.roomScale, H * R.roomScale, [hdr, caps.hdr ? 'r16f' : 'rgba8']);
   T.roomDof = makeTarget(W * R.roomScale, H * R.roomScale, [hdr]);
+  T.hist0 = makeTarget(W * R.roomScale, H * R.roomScale, [hdr]);
+  T.hist1 = makeTarget(W * R.roomScale, H * R.roomScale, [hdr]);
+  R.taaReset = 1;
   T.bloom = [];
   for (let i = 1, w = W, h = H; i <= 6; i++) { w = Math.max(1, Math.ceil(w / 2)); h = Math.max(1, Math.ceil(h / 2)); T['b' + i] = makeTarget(w, h, [hdr]); T.bloom.push(T['b' + i]); }
   T.defocus = makeTarget(Math.ceil(W / 2), Math.ceil(H / 2), [hdr], { mips: true });
@@ -2007,7 +2079,7 @@ function lightU(pr, Lt) {
   U(pr, 'uLampI', Lt.lampI); U(pr, 'uShadeTau', Lt.tau3); U(pr, 'uSkyL', Lt.skyL); U(pr, 'uCityL', Lt.cityL); U(pr, 'uAmbL', Lt.ambL); U(pr, 'uAmbS', Lt.ambS);
 }
 function outsideUniforms(pr, t) {
-  U(pr, 'uTime', t);
+  U(pr, 'uTime', t % 900);              // wrapped: keeps noise coordinates small (float precision) on long sessions
   const lamps = new Float32Array(24);
   OUT.lamps.forEach((x, i) => { lamps.set([x, S.GROUND_Y + 6.4, S.CURB_Z - 0.6, 1.0], i * 4); });
   lamps.set([-15, S.GROUND_Y + 6.4, -4.2, 1.2], 16); lamps.set([13, S.GROUND_Y + 6.4, -4.2, 1.2], 20);
@@ -2055,7 +2127,8 @@ function render(t, dt, rt) {
   gl.useProgram(P.outside.p);
   camUniforms(P.outside);
   U(P.outside, 'uMode', I(1)); U(P.outside, 'uRes', [T.defocus.w, T.defocus.h]); U(P.outside, 'uEye', CAM.pos);
-  U(P.outside, 'uBlur', R.coc); outsideUniforms(P.outside, t);
+  U(P.outside, 'uBlur', R.coc); U(P.outside, 'uRain', SIM.rain); U(P.outside, 'uAperture', R.aperture); U(P.outside, 'uFocus', CAM.focus);
+  outsideUniforms(P.outside, t);
   drawFull();
   buildSprites(t, CAM.pos);
   drawSprites(T.defocus, 1, CAM.pos);
@@ -2086,15 +2159,32 @@ function render(t, dt, rt) {
   bindTarget(T.room);
   gl.useProgram(P.room.p);
   camUniforms(P.room); lightU(P.room, Lt);
-  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t); U(P.room, 'uCarIn', [0, 0, 0, 0]);
+  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t);
+  const hal = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
+  const ji = (frame % 8) + 1;
+  U(P.room, 'uJitter', DBG.shot && DBG.frames ? [0, 0] : [hal(ji, 2) - 0.5, hal(ji, 3) - 0.5]);
   drawFull();
+
+  // 3a) temporal accumulation (jittered history, reprojected)
+  const hNew = R.histFlip ? T.hist1 : T.hist0, hOld = R.histFlip ? T.hist0 : T.hist1;
+  R.histFlip = !R.histFlip;
+  bindTarget(hNew);
+  gl.useProgram(P.taa.p);
+  camUniforms(P.taa);
+  const pc = R.prevCam || CAM;
+  U(P.taa, 'uPPos', pc.pos); U(P.taa, 'uPFwd', pc.fwd); U(P.taa, 'uPRight', pc.right); U(P.taa, 'uPUp', pc.up); U(P.taa, 'uPTan', pc.tan);
+  U(P.taa, 'uRes', [hNew.w, hNew.h]); U(P.taa, 'uReset', R.taaReset);
+  bindTex(P.taa, 'uCur', T.room.tex, 0); bindTex(P.taa, 'uDepth', T.room.texs[1], 1); bindTex(P.taa, 'uHist', hOld.tex, 2);
+  drawFull();
+  R.taaReset = 0;
+  R.prevCam = { pos: CAM.pos, fwd: CAM.fwd, right: CAM.right, up: CAM.up, tan: CAM.tan };
 
   // 3b) depth of field on the room (focus on the glass)
   bindTarget(T.roomDof);
   gl.useProgram(P.dof.p);
   U(P.dof, 'uRes', [T.roomDof.w, T.roomDof.h]); U(P.dof, 'uFocus', CAM.focus); U(P.dof, 'uAperture', R.aperture);
   U(P.dof, 'uPxPerRad', T.roomDof.h * 0.5 / CAM.tan[1]);
-  bindTex(P.dof, 'uRoom', T.room.tex, 0); bindTex(P.dof, 'uDepth', T.room.texs[1], 1);
+  bindTex(P.dof, 'uRoom', hNew.tex, 0); bindTex(P.dof, 'uDepth', T.room.texs[1], 1);
   drawFull();
 
   // 4) composite
@@ -2229,7 +2319,7 @@ function onUp() {
 }
 canvas.addEventListener('pointerdown', onDown);
 canvas.addEventListener('pointermove', onMove);
-canvas.addEventListener('pointerup', onUp);
+canvas.addEventListener('pointerup', e => { AUDIO.unlock && AUDIO.unlock(); onUp(e); });
 canvas.addEventListener('pointercancel', onUp);
 canvas.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !PTR.down) CAM.parT = [0, 0]; });
 // gyroscope parallax (phones): relative to a slowly re-centring reference attitude
@@ -2294,7 +2384,7 @@ const UI = (() => {
    ========================================================================== */
 Object.assign(AUDIO, (() => {
   let ctx = null, master, comp, wet, enabled = true, ready = false;
-  let bedGain, bedLP, patGain, roomGain, tickBuf = [], dripBuf = [], clickBuf, cars = [];
+  let bedGain, bedLP, patGain, roomGain, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
   function noiseBuffer(sec, kind) {
@@ -2395,6 +2485,11 @@ Object.assign(AUDIO, (() => {
     for (let i = 0; i < 6; i++) tickBuf.push(tickBuffer());
     for (let i = 0; i < 5; i++) dripBuf.push(dripBuffer());
     clickBuf = clickBuffer();
+    for (let k = 0; k < 3; k++) {                                   // skin on wet glass: short soft noise grains
+      const sr = ctx.sampleRate, n = Math.floor(sr * 0.06), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (rand() * 2 - 1) * Math.sin(Math.PI * i / n) * 0.3;
+      rubBuf.push(b);
+    }
     // three car channels: engine/road rumble + tyre hiss on the wet street, panned and filtered per frame
     for (let i = 0; i < 3; i++) {
       const g = ctx.createGain(); g.gain.value = 0;
@@ -2441,10 +2536,9 @@ Object.assign(AUDIO, (() => {
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
     click(on) { if (ready) oneShot(clickBuf, 0.5, -0.45, on ? 1.0 : 0.88, 0.4); },
     rub(dist) {
-      if (!ready || dist < 0.002) return;
-      const sr = ctx.sampleRate, n = Math.floor(sr * 0.06), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
-      for (let i = 0; i < n; i++) { const t = i / n; d[i] = (rand() * 2 - 1) * Math.sin(Math.PI * t) * 0.3; }
-      oneShot(b, clamp(dist * 9, 0.02, 0.25), 0, 1, 0.2, 1800);
+      if (!ready || dist < 0.002 || ctx.currentTime - lastRub < 0.035) return;
+      lastRub = ctx.currentTime;
+      oneShot(rubBuf[(rand() * rubBuf.length) | 0], clamp(dist * 9, 0.02, 0.25), 0, 0.9 + rand() * 0.2, 0.2, 1800);
     },
     update(dt, wdt) {
       if (!ready || ctx.state !== 'running') { SIM.events.length = 0; return; }
@@ -2458,7 +2552,7 @@ Object.assign(AUDIO, (() => {
       // window ticks from real impacts (rate-limited)
       secT += dt; if (secT > 1) { secT = 0; ticksThisSec = 0; }
       for (const ev of SIM.events) {
-        if (ev.type === 'hit' && ev.D > 0.9 && ticksThisSec < 14 && now - lastTick > 0.03) {
+        if (ev.type === 'hit' && ev.D > 0.9 && ticksThisSec < 9 && now - lastTick > 0.045) {
           const pan = (ev.x / SIM.W) * 2 - 1;
           oneShot(tickBuf[(rand() * tickBuf.length) | 0], clamp(0.05 * Math.pow(ev.D, 1.5), 0.02, 0.32), pan * 0.7, 0.85 + rand() * 0.35 + (2 - ev.D) * 0.05, 0.25, 5200);
           lastTick = now; ticksThisSec++;
@@ -2526,25 +2620,47 @@ function start() {
 function stop() { running = false; }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); AUDIO.suspend(); } else { start(); AUDIO.resume(); } });
 
-function boot() {
-  if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, pickGlass, camRay };
-  if (!initGL()) { fail('no webgl2'); return; }
-  buildOutside();
-  for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
-  const t0 = performance.now();
-  prewarm(+(QS.get('warm') || 90));
-  console.log('prewarm', (performance.now() - t0).toFixed(0) + 'ms', JSON.stringify(simStats()));
-  buildPrograms();
+// initial render scales from the pixel count; adaptQuality() refines them from measured frame times
+function initialScales() {
+  if (QS.get('q')) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, R.dprCap);
+  const px = Math.max(1, window.innerWidth * window.innerHeight) * dpr * dpr;
+  R.mainScale = clamp(Math.sqrt((IS_MOBILE ? 2.2e6 : 4.2e6) / px), 0.6, 1);
+  R.roomScale = clamp(Math.sqrt((IS_MOBILE ? 0.45e6 : 1.3e6) / (px * R.mainScale * R.mainScale)), 0.4, R.roomMax);
+}
+function whenProgramsReady(then) {
   const wait = () => {
     if (!programsReady()) { setTimeout(wait, 30); return; }
     try { finishPrograms(); } catch (e) { console.error(e.message); fail(e.message); return; }
-    resize();
-    start();
+    then();
   };
   wait();
 }
+function boot() {
+  if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, OUT, pickGlass, camRay, simAdvance, simStats, spawnCar, updateOutside };
+  if (!initGL()) { fail('no webgl2'); return; }
+  buildOutside();
+  for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
+  initialScales();
+  buildPrograms();                      // compile on the GPU (in parallel where supported) while the CPU prewarms the rain
+  const total = Math.round((+(QS.get('warm') || 150)) * 30), t0 = performance.now();
+  let done = 0;
+  const slice = () => {
+    const t1 = performance.now();
+    while (done < total && performance.now() - t1 < 35) { const n = Math.min(30, total - done); prewarmSlice(1 / 30, n); done += n; }
+    if (done < total) { setTimeout(slice, 0); return; }
+    SIM.events.length = 0;
+    console.log('prewarm', (performance.now() - t0).toFixed(0) + 'ms', JSON.stringify(simStats()));
+    whenProgramsReady(() => { resize(); start(); });
+  };
+  slice();
+}
 canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); stop(); });
-canvas.addEventListener('webglcontextrestored', () => { R.tg = {}; buildPrograms(); finishPrograms(); resize(); start(); });
+canvas.addEventListener('webglcontextrestored', () => {
+  R.tg = {}; R.progs = {};
+  createResources(); buildPrograms();
+  whenProgramsReady(() => { canvas.width = 1; resize(); start(); });
+});
 setTimeout(boot, 30);
 })();
 </script>
