@@ -1,0 +1,1498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0c0a09">
+<title>傍晚 · 雨窗</title>
+<style>
+  html,body{margin:0;height:100%;background:#0c0a09;overflow:hidden;overscroll-behavior:none}
+  body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #veil{position:fixed;inset:0;background:#0c0a09;display:flex;align-items:center;justify-content:center;
+    color:rgba(232,214,188,.5);font:300 13px/1.9 "Songti SC","Noto Serif SC","STSong",serif;letter-spacing:.6em;
+    transition:opacity 3.2s ease;pointer-events:none;z-index:5}
+  #veil.gone{opacity:0}
+  #veil span{animation:breathe 4.5s ease-in-out infinite}
+  @keyframes breathe{0%,100%{opacity:.35}50%{opacity:.8}}
+  #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+    color:rgba(232,214,188,.72);font:300 15px/2 "Songti SC","Noto Serif SC",serif;letter-spacing:.2em;text-align:center;padding:24px;
+    background:radial-gradient(ellipse at 50% 60%,#2a2219 0%,#0c0a09 70%)}
+  #fallback small{opacity:.5;letter-spacing:.08em;font-size:12px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="veil"><span>雨还在下</span></div>
+<div id="fallback"><div>这台设备暂时打不开这扇窗。</div><small>需要 WebGL2 支持 —— 换一个较新的浏览器，雨还会在那里。</small></div>
+<script>
+(() => {
+'use strict';
+/* ============================================================================
+   傍晚 · 雨窗 —— 一个永远停在傍晚的旧房间，窗外下着雨
+   ----------------------------------------------------------------------------
+   架构（详见 PLAN.md）：WebGL2，全程线性 HDR（RGBA16F），最后 ACES + sRGB。
+     outside(sharp)   程序化街景，等距柱状广角，供雨滴折射取样（带 mip）
+     outside(defocus) 同一街景按屏幕视角渲染，点光源为解析 bokeh 圆盘
+     room             SDF raymarch 室内（动态分辨率），输出颜色 + 玻璃覆盖率 + 深度
+     composite        全分辨率：玻璃（透射/反射/雾）叠加室内
+     final            曝光 → ACES → sRGB → 抖动
+   单位：米；x 向右，y 向上，z 指向观者（窗墙内表面 z = 0，窗外 z < 0）。
+   ========================================================================== */
+
+// ---------------------------------------------------------------- params ---
+const QS = new URLSearchParams(location.search);
+const DBG = {
+  shot: QS.has('shot'),                 // screenshot mode: no fade, preserve buffer
+  seed: +(QS.get('seed') || 0) || ((Math.random() * 1e9) | 0),
+  lamp: QS.get('lamp') !== '0',
+  still: QS.has('still'),               // freeze handheld drift
+  view: QS.get('view') || '',           // debug buffer view
+  t0: +(QS.get('t') || 0),              // start time offset (s)
+};
+
+// ------------------------------------------------------------------ math ---
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rnd = mulberry32(DBG.seed);
+const V = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  mul: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+// smooth pseudo-random 1D signal (sum of incommensurate sines) for camera drift
+const drift = (t, s) => (Math.sin(t * 0.71 + s) * 0.5 + Math.sin(t * 1.37 + s * 2.1) * 0.3 + Math.sin(t * 2.29 + s * 3.7) * 0.2);
+
+// ----------------------------------------------------------------- color ---
+// 黑体色温 → 线性 sRGB：Planck 轨迹的 Kim et al.(2002) 三次拟合给出 CIE xy，
+// XYZ→sRGB(D65)；再对 3900K 做 von Kries 式白平衡（模拟眼睛对暖色室内的部分适应），
+// 亮度归一化为 1。这样 2700K 白炽灯呈琥珀色、9000K 阴天傍晚天光呈冷青蓝，
+// 两者的相对关系符合物理直觉。
+function bbXYZ(T) {
+  const x = T < 4000 ? -0.2661239e9 / T ** 3 - 0.2343589e6 / T ** 2 + 0.8776956e3 / T + 0.179910
+                     : -3.0258469e9 / T ** 3 + 2.1070379e6 / T ** 2 + 0.2226347e3 / T + 0.240390;
+  const y = T < 2222 ? -1.1063814 * x ** 3 - 1.34811020 * x ** 2 + 2.18555832 * x - 0.20219683
+          : T < 4000 ? -0.9549476 * x ** 3 - 1.37418593 * x ** 2 + 2.09137015 * x - 0.16748867
+                     : 3.0817580 * x ** 3 - 5.87338670 * x ** 2 + 3.75112997 * x - 0.37001483;
+  return [x / y, 1, (1 - x - y) / y];
+}
+const xyz2rgb = ([X, Y, Z]) => [3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z, -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z, 0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z];
+const WB = xyz2rgb(bbXYZ(3900));
+function bb(T, sat = 1) {
+  const c = xyz2rgb(bbXYZ(clamp(T, 1667, 25000)));
+  let r = [c[0] / WB[0], c[1] / WB[1], c[2] / WB[2]].map(v => Math.max(v, 0));
+  const L = 0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2];
+  return r.map(v => lerp(1, v / L, sat));
+}
+const mulc = (c, s) => [c[0] * s, c[1] * s, c[2] * s];
+
+// ------------------------------------------------------------ scene (m) ---
+// 房间与窗户几何：JS 与 GLSL 共用（注入为 #define），保证拾取/擦拭与渲染一致。
+const S = {
+  ROOM_X0: -0.93, ROOM_X1: 2.4, ROOM_H: 2.78, ROOM_Z1: 3.6,
+  WIN_X0: -0.52, WIN_X1: 0.52, WIN_Y0: 0.93, WIN_Y1: 2.30,
+  GLASS_Z: -0.12, FRAME_Z0: -0.16, FRAME_Z1: -0.085,
+  FW: 0.056, MW: 0.036, TRANSOM_Y: 1.90, TW: 0.03,
+  DESK_TOP: 0.76, DESK_X0: -0.905, DESK_X1: 0.88, DESK_Z0: 0.004, DESK_Z1: 0.66,
+  LAMP_X: -0.535, LAMP_Z: 0.21,
+  SHADE_Y0: 0.30, SHADE_Y1: 0.475, SHADE_R0: 0.138, SHADE_R1: 0.09, BULB_Y: 0.385, BULB_R: 0.026,
+  MUG_X: -0.17, MUG_Z: 0.17, MUG_R: 0.041, MUG_H: 0.092, MUG_HANG: 0.55,
+  BOOK_X: 0.36, BOOK_Z: 0.20,
+  CURT_X0: 0.47, CURT_X1: 0.98, CURT_Z: 0.075,
+  // outside world: we are on the 2nd floor of an old building facing a wide street
+  GROUND_Y: -3.4, CURB_Z: -26.0, FACADE_Z: -30.5, FAR_Z: -170.0,
+  // equirect range of the sharp outside texture (rad)
+  AZM: 1.45, ELMIN: -1.25, ELMAX: 1.15,
+};
+S.WIN_CX = (S.WIN_X0 + S.WIN_X1) / 2; S.WIN_CY = (S.WIN_Y0 + S.WIN_Y1) / 2;
+S.WIN_HW = (S.WIN_X1 - S.WIN_X0) / 2; S.WIN_HH = (S.WIN_Y1 - S.WIN_Y0) / 2;
+// glass panes (inside the frame members): lower-left, lower-right, upper-left, upper-right
+S.PANES = [
+  [S.WIN_X0 + S.FW, S.WIN_Y0 + S.FW, -S.MW, S.TRANSOM_Y - S.TW],
+  [S.MW, S.WIN_Y0 + S.FW, S.WIN_X1 - S.FW, S.TRANSOM_Y - S.TW],
+  [S.WIN_X0 + S.FW, S.TRANSOM_Y + S.TW, -S.MW, S.WIN_Y1 - S.FW],
+  [S.MW, S.TRANSOM_Y + S.TW, S.WIN_X1 - S.FW, S.WIN_Y1 - S.FW],
+];
+S.BULB = [S.LAMP_X, S.DESK_TOP + S.BULB_Y, S.LAMP_Z];
+
+function glslDefines() {
+  const f = v => { const s = (+v).toFixed(6); return v < 0 ? `(${s})` : s; };
+  let out = '';
+  for (const k in S) if (typeof S[k] === 'number') out += `#define ${k} ${f(S[k])}\n`;
+  S.PANES.forEach((p, i) => {
+    out += `#define PANE${i}_C vec2(${f((p[0] + p[2]) / 2)},${f((p[1] + p[3]) / 2)})\n`;
+    out += `#define PANE${i}_H vec2(${f((p[2] - p[0]) / 2)},${f((p[3] - p[1]) / 2)})\n`;
+  });
+  return out;
+}
+
+/* ============================================================================
+   GLSL
+   ========================================================================== */
+const GLSL_HEAD = () => `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+${glslDefines()}
+#define PI 3.14159265359
+float sat(float x){ return clamp(x, 0.0, 1.0); }
+float hash11(float p){ p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+vec2 hash22(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.xx + p3.yz) * p3.zy); }
+vec3 hash32(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yzz) * p3.zyx); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+const mat2 FBM_R = mat2(1.6, 1.2, -1.2, 1.6);
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a * vnoise(p); p = FBM_R * p + vec2(3.1, 1.7); a *= 0.5; } return s; }
+float fbm3(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 3; i++){ s += a * vnoise(p); p = FBM_R * p + vec2(3.1, 1.7); a *= 0.5; } return s / 0.875; }
+`;
+
+const VS_FULL = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+// --------------------------------------------------------------------------
+// Shared lamp / room-light model (used by the room raymarcher and by the
+// analytic interior used for reflections in the glass and in rain drops).
+// --------------------------------------------------------------------------
+const GLSL_LIGHT = `
+uniform vec3 uLampI;     // bulb radiant intensity (linear rgb, incl. flicker / on-off / filament colour)
+uniform vec3 uShadeTau;  // diffuse transmittance of the shade fabric (warm tint)
+uniform vec3 uSkyL;      // radiance seen through the upper window (dusk sky)
+uniform vec3 uCityL;     // radiance seen through the lower window (street, facades)
+uniform vec3 uAmbL;      // radiosity-style ambient irradiance from the lamp
+uniform vec3 uAmbS;      // ambient irradiance from the window
+const vec3 BULB = vec3(LAMP_X, DESK_TOP + BULB_Y, LAMP_Z);
+
+// 灯罩对点光源的调制：从灯泡出发的方向若穿过下/上开口则全透，穿过布面则按 τ 透射。
+// 开口边缘按灯泡角半径做线性软化（灯泡不是点，边缘有半影）。
+vec3 lampEmitFactor(vec3 dir){
+  float a = acos(clamp(-dir.y, -1.0, 1.0));              // angle from straight down
+  float aDown = atan(SHADE_R0, BULB_Y - SHADE_Y0);
+  float aUp = PI - atan(SHADE_R1, SHADE_Y1 - BULB_Y);
+  float open = smoothstep(aDown + 0.2, aDown - 0.2, a) + smoothstep(aUp - 0.22, aUp + 0.22, a);
+  return mix(uShadeTau, vec3(1.0), sat(open));
+}
+// fabric shade radiance seen from outside at point p (Lambertian transmission: L = τ E / π)
+vec3 shadeRadiance(vec3 p){
+  vec3 q = p - vec3(LAMP_X, DESK_TOP, LAMP_Z);
+  vec3 L = BULB - p; float d2 = dot(L, L);
+  float y01 = (q.y - SHADE_Y0) / (SHADE_Y1 - SHADE_Y0);
+  float ang = atan(q.z, q.x);
+  float pleat = 0.9 + 0.1 * cos(ang * 46.0);
+  float trim = 1.0 - 0.45 * (smoothstep(0.06, 0.0, y01) + smoothstep(0.94, 1.0, y01)); // bias binding at the rims
+  float seam = 1.0 - 0.3 * smoothstep(0.02, 0.0, abs(ang - 2.2));
+  return uLampI * uShadeTau * (0.62 / d2) / PI * pleat * trim * seam;
+}
+// rectangular Lambertian emitter → irradiance / radiance (Lambert polygon formula, exact w/o horizon clipping)
+float edgeT(vec3 a, vec3 b, vec3 n){ float c = clamp(dot(a, b), -0.9999, 0.9999); vec3 cr = cross(a, b); return acos(c) * dot(n, cr) * inversesqrt(max(dot(cr, cr), 1e-10)); }
+float rectIrr(vec3 p, vec3 n, vec2 lo, vec2 hi, float z){
+  vec3 a = normalize(vec3(lo.x, lo.y, z) - p), b = normalize(vec3(hi.x, lo.y, z) - p);
+  vec3 c = normalize(vec3(hi.x, hi.y, z) - p), d = normalize(vec3(lo.x, hi.y, z) - p);
+  return max(0.0, -0.5 * (edgeT(a, b, n) + edgeT(b, c, n) + edgeT(c, d, n) + edgeT(d, a, n)));
+}
+`;
+
+// --------------------------------------------------------------------------
+// ROOM: SDF raymarcher
+// --------------------------------------------------------------------------
+const FS_ROOM = () => GLSL_HEAD() + GLSL_LIGHT + `
+uniform vec2 uRes;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform float uTime;
+uniform vec4 uCarIn;     // passing-car light entering the room: xyz position, w intensity
+layout(location = 0) out vec4 oCol;   // rgb: room radiance (premultiplied by 1-coverage), a: glass coverage
+layout(location = 1) out vec4 oAux;   // r: view depth
+
+#define M_WALL 1.0
+#define M_FRAME 2.0
+#define M_SILL 3.0
+#define M_DESK 4.0
+#define M_BRASS 5.0
+#define M_SHADE 6.0
+#define M_BULB 7.0
+#define M_MUG 8.0
+#define M_TEA 9.0
+#define M_BOOK0 10.0
+#define M_BOOK1 11.0
+#define M_BOOK2 12.0
+#define M_CURTAIN 14.0
+#define M_CORD 15.0
+
+float sdBox(vec3 p, vec3 b){ vec3 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }
+float sdBox2(vec2 p, vec2 b){ vec2 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
+float sdRBox(vec3 p, vec3 b, float r){ return sdBox(p, b - r) - r; }
+float sdCylY(vec3 p, float r, float h){ vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h); return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)); }
+float sdSeg2(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+vec2 opU(vec2 a, vec2 b){ return a.x < b.x ? a : b; }
+vec2 rot2(vec2 v, float a){ float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+
+// ---- walls with the window opening carved through
+float sdRoom(vec3 p){
+  vec3 c = vec3((ROOM_X0 + ROOM_X1) * 0.5, ROOM_H * 0.5, ROOM_Z1 * 0.5);
+  vec3 h = vec3((ROOM_X1 - ROOM_X0) * 0.5, ROOM_H * 0.5, ROOM_Z1 * 0.5);
+  float d = -sdBox(p - c, h);
+  float op = sdBox(p - vec3(WIN_CX, WIN_CY, -0.26), vec3(WIN_HW, WIN_HH, 0.265));
+  return max(d, -op);
+}
+// ---- old wooden casement: outer frame, centre mullion, transom; pane openings bevelled toward the room
+float sdFrame(vec3 p){
+  vec3 q = p - vec3(WIN_CX, WIN_CY, (FRAME_Z0 + FRAME_Z1) * 0.5);
+  float slab = sdBox(q, vec3(WIN_HW, WIN_HH, (FRAME_Z1 - FRAME_Z0) * 0.5));
+  float bev = max(p.z - GLASS_Z, 0.0) * 0.55;
+  float holes = sdBox2(p.xy - PANE0_C, PANE0_H + bev);
+  holes = min(holes, sdBox2(p.xy - PANE1_C, PANE1_H + bev));
+  holes = min(holes, sdBox2(p.xy - PANE2_C, PANE2_H + bev));
+  holes = min(holes, sdBox2(p.xy - PANE3_C, PANE3_H + bev));
+  float d = max(slab, -holes * 0.87);
+  // the two casements meet on the mullion: a thin shadow gap; plus the sash / casing joint lines
+  float gap = sdBox(p - vec3(0.0, (WIN_Y0 + TRANSOM_Y) * 0.5, FRAME_Z1), vec3(0.0012, (TRANSOM_Y - WIN_Y0) * 0.5 - FW * 0.5, 0.01));
+  d = max(d, -gap);
+  // window latch (brass hook) on the mullion
+  float latch = sdRBox(p - vec3(0.0, 1.42, FRAME_Z1 + 0.006), vec3(0.008, 0.028, 0.006), 0.003);
+  return min(d, latch);
+}
+float sdSill(vec3 p){ return sdRBox(p - vec3(WIN_CX, WIN_Y0 - 0.017, -0.07), vec3(WIN_HW + 0.055, 0.017, 0.105), 0.004); }
+
+vec2 sdDesk(vec3 p){
+  float top = sdRBox(p - vec3((DESK_X0 + DESK_X1) * 0.5, DESK_TOP - 0.017, (DESK_Z0 + DESK_Z1) * 0.5),
+                     vec3((DESK_X1 - DESK_X0) * 0.5, 0.017, (DESK_Z1 - DESK_Z0) * 0.5), 0.006);
+  float apron = sdRBox(p - vec3((DESK_X0 + DESK_X1) * 0.5, DESK_TOP - 0.034 - 0.06, DESK_Z1 - 0.035),
+                       vec3((DESK_X1 - DESK_X0) * 0.5 - 0.035, 0.06, 0.014), 0.003);
+  // drawer seam
+  float seam = sdBox(p - vec3(0.12, DESK_TOP - 0.094, DESK_Z1 - 0.02), vec3(0.31, 0.047, 0.004));
+  seam = abs(seam) - 0.0012;
+  apron = max(apron, -seam);
+  float knob = length(p - vec3(0.12, DESK_TOP - 0.094, DESK_Z1 - 0.016)) - 0.011;
+  vec2 r = vec2(min(top, apron), M_DESK);
+  return opU(r, vec2(knob, M_BRASS));
+}
+
+vec2 sdLamp(vec3 p, bool solidShade){
+  vec3 q = p - vec3(LAMP_X, DESK_TOP, LAMP_Z);
+  float bound = sdCylY(q - vec3(0.0, 0.25, 0.0), 0.15, 0.255);
+  // 灯体本身紧贴灯泡：半影估计对「贴着光源的遮挡物」无效，且真实灯座/灯杆的影子可忽略 → 不参与阴影
+  if (!solidShade) return vec2(max(bound, 0.002), -1.0);
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float r = length(q.xz);
+  float base = sdCylY(q - vec3(0.0, 0.008, 0.0), 0.066, 0.008) - 0.003;
+  float dome = (length(vec3(q.x, (q.y - 0.016) * 1.8, q.z)) - 0.046) / 1.8;
+  float collar = sdCylY(q - vec3(0.0, 0.05, 0.0), 0.012, 0.012) - 0.002;
+  float stem = sdCylY(q - vec3(0.0, 0.19, 0.0), 0.0062, 0.17);
+  float socket = sdCylY(q - vec3(0.0, 0.338, 0.0), 0.016, 0.026) - 0.002;
+  float knob = length(q - vec3(0.024, 0.347, 0.004)) - 0.0065;
+  // harp: two thin wires from the socket to the top finial
+  vec3 hq = q; hq.x = abs(hq.x);
+  float harp = sdSeg2(vec2(length(vec2(hq.x - 0.0, hq.z)), q.y), vec2(0.02, 0.356), vec2(0.004, SHADE_Y1 + 0.012));
+  harp = max(abs(q.z) - 0.0016, harp - 0.0016);
+  float finial = length(q - vec3(0.0, SHADE_Y1 + 0.016, 0.0)) - 0.009;
+  float brass = min(min(min(base, dome), min(collar, stem)), min(min(socket, knob), min(harp, finial)));
+  vec2 res = vec2(brass, M_BRASS);
+  if (solidShade){
+    float sh = sdSeg2(vec2(r, q.y), vec2(SHADE_R0, SHADE_Y0), vec2(SHADE_R1, SHADE_Y1)) - 0.0018;
+    res = opU(res, vec2(sh, M_SHADE));
+    res = opU(res, vec2(length(q - vec3(0.0, BULB_Y, 0.0)) - BULB_R, M_BULB));
+  }
+  // fabric cord running from the base to the wall
+  vec3 cq = q - vec3(-0.02, 0.0045, -0.09);
+  float cx = cq.x + 0.03 * sin(cq.z * 22.0);
+  float cord = length(vec2(cx, cq.y)) - 0.0042;
+  cord = max(cord, abs(cq.z + 0.0) - 0.105);
+  res = opU(res, vec2(cord, M_CORD));
+  return res;
+}
+
+vec2 sdMug(vec3 p){
+  vec3 q = p - vec3(MUG_X, DESK_TOP, MUG_Z);
+  float bound = sdCylY(q - vec3(0.0, MUG_H * 0.5, 0.0), MUG_R + 0.045, MUG_H * 0.5 + 0.01);
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float r = length(q.xz);
+  float rr = MUG_R - 0.0025 + 0.0025 * q.y / MUG_H;
+  float outer = sdCylY(q - vec3(0.0, MUG_H * 0.5, 0.0), rr - 0.002, MUG_H * 0.5 - 0.002) - 0.002;
+  float inner = sdCylY(q - vec3(0.0, MUG_H * 0.5 + 0.004, 0.0), rr - 0.0024, MUG_H * 0.5);
+  float body = max(outer, -inner);
+  float rim = length(vec2(r - (rr - 0.0012), q.y - MUG_H)) - 0.0027;
+  body = min(body, rim);
+  // handle: half torus in the handle's local plane
+  vec2 hd = vec2(cos(MUG_HANG), sin(MUG_HANG));
+  vec3 h = vec3(dot(q.xz, hd), q.y - MUG_H * 0.53, dot(q.xz, vec2(-hd.y, hd.x)));
+  h.x -= rr + 0.002;
+  float hdist = length(vec2(length(h.xy * vec2(1.0, 0.92)) - 0.026, h.z * 0.75)) - 0.0042;
+  hdist = max(hdist, -h.x - 0.002);
+  body = min(body, hdist);
+  vec2 res = vec2(body, M_MUG);
+  float tea = sdCylY(q - vec3(0.0, MUG_H * 0.70, 0.0), rr - 0.0025, 0.0008);
+  return opU(res, vec2(tea, M_TEA));
+}
+
+vec2 sdBooks(vec3 p){
+  vec3 q = p - vec3(BOOK_X, DESK_TOP, BOOK_Z);
+  float bound = sdBox(q - vec3(0.0, 0.045, 0.0), vec3(0.17, 0.05, 0.15));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  vec3 b0 = q - vec3(0.0, 0.0165, 0.0); b0.xz = rot2(b0.xz, 0.10);
+  vec3 b1 = q - vec3(-0.012, 0.033 + 0.012, 0.01); b1.xz = rot2(b1.xz, -0.08);
+  vec3 b2 = q - vec3(0.02, 0.057 + 0.009, -0.004); b2.xz = rot2(b2.xz, 0.22);
+  vec2 r = vec2(sdRBox(b0, vec3(0.132, 0.0165, 0.094), 0.0025), M_BOOK0);
+  r = opU(r, vec2(sdRBox(b1, vec3(0.118, 0.012, 0.084), 0.002), M_BOOK1));
+  r = opU(r, vec2(sdRBox(b2, vec3(0.09, 0.009, 0.064), 0.0018), M_BOOK2));
+  return r;
+}
+
+float curtainZ(vec3 p){
+  float bunch = smoothstep(1.15, 0.78, p.y);
+  float a = 0.021 + 0.011 * bunch;
+  float ph = p.x * 57.0 + 1.3 * sin(p.x * 19.0 + p.y * 1.6) + 0.5 * sin(p.y * 2.9);
+  return CURT_Z + a * sin(ph);
+}
+vec2 sdCurtain(vec3 p){
+  float bound = sdBox(p - vec3((CURT_X0 + CURT_X1) * 0.5, 1.8, CURT_Z), vec3((CURT_X1 - CURT_X0) * 0.5 + 0.03, 1.05, 0.065));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float d = (abs(p.z - curtainZ(p)) - 0.0035) * 0.42;
+  float x0 = CURT_X0 + 0.012 * sin(p.y * 2.3 + 0.4) + 0.035 * smoothstep(1.25, 0.78, p.y);
+  d = max(d, (x0 - p.x) * 0.9);
+  d = max(d, DESK_TOP + 0.003 - p.y);
+  return vec2(d, M_CURTAIN);
+}
+
+vec2 mapObj(vec3 p, bool solidShade){
+  vec2 res = vec2(1e9, 0.0);
+  float bw = sdBox(p - vec3(WIN_CX, WIN_CY - 0.02, -0.07), vec3(WIN_HW + 0.07, WIN_HH + 0.05, 0.12));
+  if (bw < res.x){
+    res = opU(res, vec2(sdFrame(p), M_FRAME));
+    res = opU(res, vec2(sdSill(p), M_SILL));
+  }
+  float bd = sdBox(p - vec3((DESK_X0 + DESK_X1) * 0.5, DESK_TOP - 0.08, (DESK_Z0 + DESK_Z1) * 0.5), vec3((DESK_X1 - DESK_X0) * 0.5, 0.085, (DESK_Z1 - DESK_Z0) * 0.5 + 0.01));
+  if (bd < res.x) res = opU(res, sdDesk(p));
+  res = opU(res, sdLamp(p, solidShade));
+  res = opU(res, sdMug(p));
+  res = opU(res, sdBooks(p));
+  res = opU(res, sdCurtain(p));
+  return res;
+}
+// 房间内部是凸的（盒子），墙面不可能遮挡室内光源 → 阴影射线只测试物体，既消除掠射自遮挡条纹又省一半开销
+vec2 map(vec3 p, bool solidShade){ return opU(vec2(sdRoom(p), M_WALL), mapObj(p, solidShade)); }
+
+vec3 calcNormal(vec3 p){
+  const vec2 k = vec2(1.0, -1.0); const float e = 0.0005;
+  return normalize(k.xyy * map(p + k.xyy * e, true).x + k.yyx * map(p + k.yyx * e, true).x +
+                   k.yxy * map(p + k.yxy * e, true).x + k.xxx * map(p + k.xxx * e, true).x);
+}
+// soft shadow (Quilez' improved penumbra estimate); k ~ distance / light radius
+float softShadow(vec3 ro, vec3 rd, float tmax, float k){
+  float res = 1.0, t = 0.004, ph = 1e10;
+  for (int i = 0; i < 30; i++){
+    vec2 hm = mapObj(ro + rd * t, false); float h = hm.x;
+    // 包围体返回的是距离下界，只能用来加速步进，不能当作真实遮挡物去估计半影
+    if (hm.y >= 0.0){
+      // Quilez 的改进半影：用前后两次距离三角化最近点。步长被下限截断时 h 可能大于 2·ph，
+      // 此时 y > h 公式失效（会造成假阴影条纹），退化为经典 k·h/t。
+      float y = h * h / (2.0 * ph);
+      float d = y < h ? sqrt(h * h - y * y) : h;
+      res = min(res, k * d / max(1e-4, t - min(y, h)));
+      ph = h;
+    } else ph = 1e10;
+    t += clamp(h, 0.004, 0.09);
+    if (res < 0.003 || t > tmax) break;
+  }
+  res = sat(res);
+  return res * res * (3.0 - 2.0 * res);
+}
+float softShadowWide(vec3 ro, vec3 rd, float tmax, float k){
+  float res = 1.0, t = 0.01;
+  for (int i = 0; i < 16; i++){
+    vec2 hm = mapObj(ro + rd * t, false); float h = hm.x;
+    if (hm.y >= 0.0) res = min(res, k * h / t);
+    t += clamp(h, 0.02, 0.15);
+    if (res < 0.01 || t > tmax) break;
+  }
+  return sat(res);
+}
+float calcAO(vec3 p, vec3 n){
+  float occ = 0.0, sca = 1.0;
+  for (int i = 0; i < 5; i++){
+    float h = 0.01 + 0.12 * float(i) / 4.0;
+    occ += (h - map(p + n * h, true).x) * sca; sca *= 0.8;
+  }
+  return sat(1.0 - 2.4 * occ);
+}
+
+// ---- materials ------------------------------------------------------------
+struct Mat { vec3 alb; float rough; float metal; vec3 emis; vec3 trans; };
+
+vec3 wallpaper(vec2 uv, inout vec3 n, vec3 nAxis){
+  vec3 base = vec3(0.47, 0.47, 0.37);                      // faded mint-cream paper
+  float col = uv.x / 0.0883;
+  float line = smoothstep(0.43, 0.48, abs(fract(col) - 0.5));
+  vec2 cell = vec2(fract(col) - 0.5, fract(uv.y / 0.104 + 0.5 * mod(floor(col), 2.0)) - 0.5) * vec2(0.0883, 0.104);
+  float r = length(cell), a = atan(cell.y, cell.x);
+  float petal = smoothstep(0.0009, 0.0, r - 0.0105 * (0.5 + 0.5 * abs(cos(2.0 * a + 0.785))));
+  float leaf = smoothstep(0.0008, 0.0, abs(r - 0.019) - 0.0012) * smoothstep(0.3, 0.9, abs(sin(a * 2.0)));
+  float dotc = smoothstep(0.0024, 0.0016, r);
+  vec3 c = base;
+  c = mix(c, base * vec3(0.9, 0.93, 0.87), line);
+  c = mix(c, vec3(0.30, 0.37, 0.29), petal * 0.5);
+  c = mix(c, vec3(0.33, 0.38, 0.30), leaf * 0.3);
+  c = mix(c, vec3(0.52, 0.38, 0.25), dotc * 0.45);
+  // roll seams every 53 cm, slightly lifted
+  float sx = abs(fract(uv.x / 0.53 + 0.37) - 0.5) * 0.53;
+  float seam = smoothstep(0.0025, 0.0, sx);
+  c *= 1.0 - 0.12 * seam;
+  // age: water stains, yellowing, fibre mottling
+  float stain = smoothstep(0.52, 0.78, fbm(uv * 1.4 + 7.3));
+  c *= mix(vec3(1.0), vec3(0.84, 0.76, 0.6), stain * 0.55);
+  float tide = smoothstep(0.012, 0.0, abs(fbm(uv * 1.4 + 7.3) - 0.62)) * 0.12;
+  c *= 1.0 - tide;
+  c *= 0.9 + 0.2 * vnoise(uv * 160.0);
+  c *= mix(0.86, 1.0, smoothstep(2.75, 2.1, uv.y));
+  // paper texture bump (visible under grazing lamp light)
+  float e = 0.002;
+  float b0 = vnoise(uv * 220.0), bx = vnoise((uv + vec2(e, 0.0)) * 220.0), by = vnoise((uv + vec2(0.0, e)) * 220.0);
+  vec3 t = normalize(cross(nAxis, vec3(0.0, 1.0, 0.0)));
+  n = normalize(n + (t * (b0 - bx) + vec3(0.0, 1.0, 0.0) * (b0 - by)) * 0.18 + t * seam * 0.08);
+  return c;
+}
+
+Mat getMat(float id, vec3 p, inout vec3 n){
+  Mat m; m.alb = vec3(0.5); m.rough = 0.85; m.metal = 0.0; m.emis = vec3(0.0); m.trans = vec3(0.0);
+  if (id == M_WALL){
+    if (p.z < -0.003){                                     // plaster reveal inside the window opening
+      m.alb = vec3(0.50, 0.49, 0.44) * (0.9 + 0.1 * fbm(p.xy * 30.0)); m.rough = 0.9;
+      m.alb *= 1.0 - 0.3 * smoothstep(0.55, 0.8, fbm(p.yz * 9.0 + 3.0));
+    } else if (p.y > ROOM_H - 0.004){
+      m.alb = vec3(0.56, 0.55, 0.5) * (0.92 + 0.08 * fbm(p.xz * 3.0));
+    } else if (p.y < 0.004){
+      m.alb = vec3(0.12, 0.08, 0.05); m.rough = 0.6;
+    } else {
+      bool left = abs(p.x - ROOM_X0) < 0.004;
+      vec2 uv = left ? vec2(4.0 - p.z, p.y) : vec2(p.x, p.y);
+      m.alb = wallpaper(uv, n, left ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0));
+      m.rough = 0.92;
+    }
+  } else if (id == M_FRAME){
+    if (abs(p.x) < 0.012 && abs(p.y - 1.42) < 0.034 && p.z > FRAME_Z1 - 0.001){ m.alb = vec3(0.5, 0.36, 0.17); m.metal = 1.0; m.rough = 0.45; return m; }
+    vec3 paint = vec3(0.16, 0.29, 0.255) * (0.88 + 0.24 * fbm(p.xy * 11.0 + p.z * 7.0));
+    float chip = fbm(vec2(p.x + p.z, p.y) * 46.0);
+    float chipped = smoothstep(0.725, 0.735, chip);
+    float bare = smoothstep(0.77, 0.79, chip);
+    vec3 primer = vec3(0.50, 0.50, 0.45), wood = vec3(0.20, 0.14, 0.09);
+    m.alb = mix(paint, mix(primer, wood, bare), chipped);
+    m.alb *= 1.0 - 0.25 * smoothstep(0.012, 0.0, abs(p.z - GLASS_Z - 0.004)); // grime along the putty line
+    m.rough = mix(0.42, 0.78, chipped);
+  } else if (id == M_SILL){
+    m.alb = vec3(0.50, 0.47, 0.40) * (0.88 + 0.12 * fbm(p.xz * 20.0));
+    m.alb *= 1.0 - 0.25 * smoothstep(0.6, 0.85, fbm(p.xz * 6.0 + 2.0));
+    m.rough = 0.55;
+  } else if (id == M_DESK){
+    float g = fbm(vec2(p.x * 1.3, p.z * 24.0));
+    float grain = 0.5 + 0.5 * sin(p.z * 160.0 + 9.0 * fbm(vec2(p.x * 0.9, p.z * 5.0)) + p.x * 2.0);
+    grain = pow(grain, 2.5);
+    vec3 dark = vec3(0.038, 0.017, 0.008), light = vec3(0.10, 0.05, 0.024);
+    vec3 c = mix(light, dark, sat(grain * 0.55 + 0.45 * g));
+    float wear = smoothstep(0.48, 0.66, p.z) * (0.5 + 0.5 * fbm(p.xz * 18.0));
+    c = mix(c, c * 1.45 + vec3(0.015, 0.009, 0.004), wear * 0.55);
+    // old tea ring next to the mug, scratches
+    float ring = abs(length(p.xz - vec2(MUG_X + 0.085, MUG_Z + 0.06)) - 0.0405);
+    c *= 1.0 - 0.35 * smoothstep(0.0025, 0.0, ring) * smoothstep(0.3, 0.6, vnoise(p.xz * 90.0));
+    float scr = smoothstep(0.985, 1.0, vnoise(vec2(p.x * 3.0 + p.z * 40.0, p.z * 2.0) * vec2(9.0, 1.0)));
+    c += vec3(0.02, 0.012, 0.007) * scr;
+    if (p.y < DESK_TOP - 0.03) c *= 0.85;
+    m.alb = c; m.rough = mix(0.26, 0.5, wear) + 0.08 * vnoise(p.xz * 70.0);
+  } else if (id == M_BRASS){
+    float tarn = smoothstep(0.35, 0.75, fbm(p.xy * 40.0 + p.z * 20.0));
+    m.alb = mix(vec3(0.74, 0.55, 0.28), vec3(0.32, 0.25, 0.14), tarn * 0.7);
+    m.metal = 1.0; m.rough = mix(0.28, 0.5, tarn);
+  } else if (id == M_CORD){
+    m.alb = vec3(0.07, 0.055, 0.045); m.rough = 0.7;
+  } else if (id == M_SHADE){
+    m.alb = vec3(0.6, 0.53, 0.38); m.rough = 0.95; m.emis = shadeRadiance(p);
+  } else if (id == M_BULB){
+    m.emis = uLampI * 22.0;
+  } else if (id == M_MUG){
+    vec3 q = p - vec3(MUG_X, DESK_TOP, MUG_Z);
+    float r = length(q.xz);
+    float ang = atan(q.z, q.x);
+    vec3 enamel = vec3(0.72, 0.71, 0.66);
+    vec3 blue = vec3(0.05, 0.10, 0.22);
+    float rimBand = smoothstep(MUG_H - 0.007, MUG_H - 0.0055, q.y);
+    float inside = step(r, MUG_R - 0.004) * step(q.y, MUG_H - 0.004);
+    vec3 c = mix(enamel, blue, rimBand);
+    c = mix(c, enamel * 0.95, inside);
+    // red flower motif on the side facing the room
+    vec2 fm = vec2((ang - 0.85) * MUG_R, q.y - MUG_H * 0.48);
+    float fr = length(fm), fa = atan(fm.y, fm.x);
+    float flower = smoothstep(0.0012, 0.0, fr - 0.0105 * (0.6 + 0.4 * cos(5.0 * fa)));
+    float centre = smoothstep(0.0028, 0.0022, fr);
+    float stemL = smoothstep(0.0009, 0.0, abs(fm.x + 0.004 * sin(fm.y * 160.0)) - 0.0006) * step(fm.y, -0.008) * step(-0.03, fm.y);
+    float leaf = smoothstep(0.001, 0.0, length((fm - vec2(0.006, -0.018)) * vec2(1.0, 1.8)) - 0.005);
+    float motif = (1.0 - inside) * step(r, MUG_R + 0.002);
+    c = mix(c, vec3(0.42, 0.04, 0.03), flower * motif);
+    c = mix(c, vec3(0.6, 0.45, 0.06), centre * motif);
+    c = mix(c, vec3(0.05, 0.18, 0.06), max(stemL, leaf) * motif);
+    // enamel chips: dark iron showing through, mostly near the rim and the base
+    float ch = vnoise(vec2(ang * 9.0, q.y * 140.0));
+    float chips = smoothstep(0.80, 0.83, ch) * (smoothstep(MUG_H - 0.02, MUG_H, q.y) + smoothstep(0.012, 0.0, q.y));
+    c = mix(c, vec3(0.025, 0.022, 0.02), sat(chips));
+    m.alb = c; m.rough = mix(0.1, 0.5, sat(chips));
+  } else if (id == M_TEA){
+    m.alb = vec3(0.05, 0.022, 0.006); m.rough = 0.06;
+  } else if (id >= M_BOOK0 && id <= M_BOOK2){
+    vec3 q = p - vec3(BOOK_X, DESK_TOP, BOOK_Z);
+    vec3 b; vec3 hs; vec3 cover;
+    if (id == M_BOOK0){ b = q - vec3(0.0, 0.0165, 0.0); b.xz = rot2(b.xz, 0.10); hs = vec3(0.132, 0.0165, 0.094); cover = vec3(0.22, 0.05, 0.04); }
+    else if (id == M_BOOK1){ b = q - vec3(-0.012, 0.045, 0.01); b.xz = rot2(b.xz, -0.08); hs = vec3(0.118, 0.012, 0.084); cover = vec3(0.05, 0.12, 0.11); }
+    else { b = q - vec3(0.02, 0.066, -0.004); b.xz = rot2(b.xz, 0.22); hs = vec3(0.09, 0.009, 0.064); cover = vec3(0.30, 0.22, 0.08); }
+    bool pages = abs(b.y) < hs.y - 0.0022 && (b.x > -hs.x + 0.004) && (abs(b.x) > hs.x - 0.004 || abs(b.z) > hs.z - 0.004);
+    if (pages){ m.alb = vec3(0.46, 0.41, 0.3) * (0.85 + 0.15 * sin(b.y * 3000.0)); m.rough = 0.9; }
+    else { m.alb = cover * (0.8 + 0.3 * fbm(b.xz * 60.0)) * (1.0 - 0.3 * smoothstep(0.7, 0.9, fbm(b.xz * 12.0))); m.rough = 0.75; }
+  } else if (id == M_CURTAIN){
+    vec2 cu = vec2(p.x * 1.0, p.y);
+    vec3 c = vec3(0.56, 0.45, 0.25);
+    // faded floral print: small sprigs on a 9 cm half-drop repeat
+    vec2 g = vec2(p.x / 0.09, p.y / 0.11 + 0.5 * mod(floor(p.x / 0.09), 2.0));
+    vec2 f = (fract(g) - 0.5) * vec2(0.09, 0.11);
+    float fr = length(f), fa = atan(f.y, f.x);
+    float sprig = smoothstep(0.0015, 0.0, fr - 0.012 * (0.55 + 0.45 * cos(5.0 * fa)));
+    c = mix(c, vec3(0.42, 0.17, 0.10), sprig * 0.35);
+    c = mix(c, vec3(0.22, 0.30, 0.20), smoothstep(0.0015, 0.0, abs(fr - 0.022) - 0.002) * step(0.3, sin(fa * 3.0)) * 0.25);
+    m.alb = c * (0.88 + 0.12 * fbm(vec2(p.x * 30.0, p.y * 3.0)));
+    m.rough = 0.95;
+    m.trans = vec3(0.36, 0.26, 0.12);
+  }
+  return m;
+}
+
+// ---- lighting -------------------------------------------------------------
+float D_GGX(float nh, float a){ float a2 = a * a; float d = nh * nh * (a2 - 1.0) + 1.0; return a2 / (PI * d * d); }
+vec3 F_Schlick(vec3 f0, float c){ return f0 + (1.0 - f0) * pow(1.0 - c, 5.0); }
+float V_Smith(float nv, float nl, float a){ float k = a * 0.5; return 0.25 / ((nv * (1.0 - k) + k) * (nl * (1.0 - k) + k)); }
+
+vec3 windowRadiance(vec3 d){ return mix(uCityL, uSkyL, smoothstep(0.03, 0.32, d.y)); }
+
+vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
+  vec3 nGeo = n;
+  Mat m = getMat(id, p, n);
+  vec3 v = -rd;
+  float nv = max(dot(n, v), 1e-3);
+  vec3 f0 = mix(vec3(0.04), m.alb, m.metal);
+  vec3 dif = m.alb * (1.0 - m.metal) / PI;
+  float a = max(m.rough * m.rough, 0.002);
+  vec3 col = m.emis;
+  vec3 pe = p + nGeo * 0.0015;
+
+  // 1) desk lamp: bulb as a small sphere light, modulated by the shade
+  vec3 L = BULB - p; float d2 = dot(L, L); float d = sqrt(d2); vec3 l = L / d;
+  float nl = dot(n, l);
+  if (nl > 0.0 && dot(uLampI, vec3(1.0)) > 1e-4 && id != M_SHADE && id != M_BULB){
+    float sh = softShadow(pe, l, d - BULB_R * 1.5, d / (BULB_R * 3.2));
+    vec3 E = uLampI * lampEmitFactor(-l) * (nl / d2) * sh;
+    vec3 hv = normalize(l + v); float nh = max(dot(n, hv), 0.0);
+    float aL = sat(a + BULB_R / (2.0 * d));
+    vec3 spec = D_GGX(nh, aL) * V_Smith(nv, nl, aL) * F_Schlick(f0, max(dot(l, hv), 0.0)) * (a * a / (aL * aL));
+    col += E * (dif + spec);
+  }
+  // 1b) glowing shade seen as a large sphere light (specular only: its diffuse light is already in τ above)
+  if (id != M_SHADE && id != M_BULB){
+    vec3 sc = vec3(LAMP_X, DESK_TOP + (SHADE_Y0 + SHADE_Y1) * 0.5, LAMP_Z);
+    vec3 Ls = sc - p; float ds = length(Ls); vec3 ls = Ls / ds;
+    float nls = dot(n, ls);
+    if (nls > 0.0){
+      vec3 hv = normalize(ls + v); float nh = max(dot(n, hv), 0.0);
+      float R = 0.11; float aS = sat(a + R / (2.0 * ds));
+      vec3 Ls_rad = uLampI * uShadeTau * (0.62 / (0.11 * 0.11)) / PI;
+      float omega = PI * R * R / (ds * ds);
+      col += Ls_rad * omega * nls * D_GGX(nh, aS) * V_Smith(nv, nls, aS) * F_Schlick(f0, max(dot(ls, hv), 0.0)) * (a * a / (aS * aS));
+    }
+  }
+
+  // 2) the window as two rectangular area lights (sky above, lit street below), soft-shadowed
+  vec2 lo = vec2(WIN_X0, WIN_Y0), hi = vec2(WIN_X1, WIN_Y1);
+  float split = 1.62;
+  vec3 Ew = uSkyL * rectIrr(p, n, vec2(lo.x, split), hi, GLASS_Z) + uCityL * rectIrr(p, n, lo, vec2(hi.x, split), GLASS_Z);
+  if (dot(Ew, vec3(1.0)) > 1e-5){
+    vec3 wc = vec3(clamp(p.x, WIN_X0 + 0.1, WIN_X1 - 0.1), clamp(p.y + 0.35, WIN_Y0 + 0.15, WIN_Y1 - 0.15), GLASS_Z);
+    vec3 wl = wc - p; float wd = length(wl);
+    Ew *= 0.82 * softShadowWide(pe, wl / wd, wd - 0.02, 2.6);
+  }
+  col += dif * Ew;
+
+  // 3) indirect light: virtual point lights at the brightest bounce surfaces + radiosity ambient
+  float ao = calcAO(pe, n);
+  vec3 dpos = vec3(LAMP_X + 0.05, DESK_TOP + 0.01, LAMP_Z + 0.12);
+  vec3 Ld = dpos - p; float dd2 = dot(Ld, Ld) + 0.03; vec3 ld = Ld * inversesqrt(dd2);
+  vec3 Eb = uLampI * vec3(0.10, 0.05, 0.026) * 2.6 * (max(dot(n, ld), 0.0) * max(-ld.y, 0.0) / (PI * dd2));
+  vec3 wpos = vec3(LAMP_X, DESK_TOP + 0.42, 0.002);
+  vec3 Lw = wpos - p; float wd2 = dot(Lw, Lw) + 0.04; vec3 lw = Lw * inversesqrt(wd2);
+  Eb += uLampI * uShadeTau * 0.47 * 2.4 * (max(dot(n, lw), 0.0) * max(-lw.z, 0.0) / (PI * wd2));
+  vec3 cpos = vec3(LAMP_X, ROOM_H - 0.01, LAMP_Z + 0.2);
+  vec3 Lc = cpos - p; float cd2 = dot(Lc, Lc) + 0.3; vec3 lc = Lc * inversesqrt(cd2);
+  Eb += uLampI * 0.55 * 1.6 * (max(dot(n, lc), 0.0) * max(lc.y, 0.0) / (PI * cd2));
+  float nearLamp = exp(-length(p - BULB) * 0.9);
+  vec3 Ea = (uAmbL * (0.45 + 0.9 * nearLamp) + uAmbS) * (0.4 + 0.6 * max(n.z * 0.5 + 0.5, 0.0));
+  col += dif * (Eb * mix(1.0, ao, 0.5) + Ea * ao);
+
+  // 4) glossy reflection of the window (environment specular), the main cold highlight on desk / mug / brass
+  vec3 R = reflect(rd, n);
+  if (R.z < 0.0 && m.rough < 0.7){
+    float tR = (GLASS_Z - p.z) / R.z; vec2 hp = p.xy + R.xy * tR;
+    float blur = 0.02 + a * tR * 1.5;
+    float inW = smoothstep(-blur, blur, WIN_HW - abs(hp.x - WIN_CX)) * smoothstep(-blur, blur, WIN_HH - abs(hp.y - WIN_CY));
+    float bars = 1.0 - 0.8 * smoothstep(MW + blur, MW - blur, abs(hp.x)) - 0.8 * smoothstep(TW + blur, TW - blur, abs(hp.y - TRANSOM_Y));
+    vec3 Fr = F_Schlick(f0, nv) * (1.0 - a * 0.7);
+    col += Fr * windowRadiance(R) * inW * sat(bars) * ao;
+  }
+  // diffuse-ish ambient specular for everything else
+  col += F_Schlick(f0, nv) * (uAmbL * 0.5 + uAmbS) / PI * ao * (1.0 - m.rough) * 0.6;
+
+  // 5) curtain transmission: cold window light passing through the fabric where it hangs over the glass
+  if (id == M_CURTAIN){
+    float over = smoothstep(WIN_X1 + 0.01, WIN_X1 - 0.02, p.x) * smoothstep(WIN_Y0 - 0.02, WIN_Y0 + 0.03, p.y) * smoothstep(WIN_Y1 + 0.02, WIN_Y1 - 0.03, p.y);
+    col += m.trans * windowRadiance(vec3(0.0, (p.y - 1.4) * 0.5, -1.0)) * 0.5 * over;
+    col += m.trans * dot(Ew, vec3(0.3)) * 0.02;
+  }
+
+  // 6) light of a passing car sweeping across the room (projected through the window, stage 3)
+  if (uCarIn.w > 0.0){
+    vec3 Lc2 = uCarIn.xyz - p; float lcd = length(Lc2); vec3 lcn = Lc2 / lcd;
+    float tg = (GLASS_Z - p.z) / lcn.z;
+    vec2 gp = p.xy + lcn.xy * tg;
+    float through = step(0.0, -lcn.z) * step(abs(gp.x - WIN_CX), WIN_HW - FW) * step(abs(gp.y - WIN_CY), WIN_HH - FW);
+    through *= smoothstep(MW * 0.6, MW, abs(gp.x)) * smoothstep(TW * 0.6, TW, abs(gp.y - TRANSOM_Y));
+    col += dif * vec3(1.0, 0.92, 0.8) * uCarIn.w * max(dot(n, lcn), 0.0) * through;
+  }
+  return col;
+}
+
+void main(){
+  vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  vec3 ro = uCamPos;
+  float tG = (GLASS_Z - ro.z) / rd.z;
+  vec3 pg = ro + rd * tG;
+  bool inWin = rd.z < 0.0 && abs(pg.x - WIN_CX) < WIN_HW && abs(pg.y - WIN_CY) < WIN_HH;
+  float tmax = inWin ? tG : 9.0;
+  float t = 0.05; vec2 h = vec2(1.0, 0.0); bool hit = false;
+  for (int i = 0; i < 120; i++){
+    h = map(ro + rd * t, true);
+    if (h.x < 0.0003 * t + 0.00008){ hit = true; break; }
+    t += h.x * 0.96;
+    if (t > tmax) break;
+  }
+  if (!hit){ oCol = vec4(0.0, 0.0, 0.0, 1.0); oAux = vec4(tG * dot(rd, uCamFwd)); return; }
+  vec3 p = ro + rd * t;
+  vec3 n = calcNormal(p);
+  vec3 col = shade(p, n, rd, h.y);
+  oCol = vec4(max(col, 0.0), 0.0);
+  oAux = vec4(t * dot(rd, uCamFwd));
+}
+`;
+
+// --------------------------------------------------------------------------
+// OUTSIDE: procedural rainy street (background only; point lights are sprites)
+// --------------------------------------------------------------------------
+const GLSL_CITY = `
+// opposite row: old 2-4 storey shophouses; far city: towers seen over their roofs
+float bldTop(float x){ float i = floor(x / 9.0); return 7.2 + 5.6 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
+float farTop(float x){ float i = floor(x / 26.0); return 16.0 + 50.0 * pow(hash11(i * 1.7 + 9.0), 1.6); }
+`;
+const GLSL_OUTSIDE = GLSL_CITY + `
+uniform float uTime;
+uniform vec4 uStreetLamps[4];   // xyz, w = intensity
+uniform vec4 uCars[4];          // x, z(lane), heading(+-1), intensity
+vec3 skyCol(vec3 rd){
+  float e = rd.y;
+  vec3 zen = vec3(0.030, 0.056, 0.105);
+  vec3 mid = vec3(0.064, 0.094, 0.135);
+  vec3 hor = vec3(0.125, 0.112, 0.112);
+  vec3 c = mix(hor, mid, smoothstep(-0.02, 0.2, e));
+  c = mix(c, zen, smoothstep(0.18, 0.75, e));
+  vec2 cp = rd.xz / max(e + 0.12, 0.06) * 0.8 + vec2(uTime * 0.006, 0.0);
+  float cl = fbm3(cp);
+  c *= 0.8 + 0.4 * cl;
+  c += vec3(0.05, 0.028, 0.018) * exp(-max(e, 0.0) * 7.0) * (0.6 + 0.6 * cl);   // sodium skyglow on the cloud base
+  return c;
+}
+float rectSoft(vec2 p, vec2 hs, vec2 w){
+  vec2 q = abs(p) - hs;
+  return smoothstep(w.x, -w.x, q.x) * smoothstep(w.y, -w.y, q.y);
+}
+vec3 windowLight(float id, vec2 cell){
+  float k = fract(id * 13.7);
+  vec3 warm = vec3(1.0, 0.70, 0.40), fluo = vec3(0.62, 0.92, 0.92), tv = vec3(0.45, 0.6, 1.0), curt = vec3(0.95, 0.42, 0.18);
+  vec3 c = k < 0.62 ? warm : k < 0.82 ? fluo : k < 0.9 ? curt : tv;
+  float I = 0.18 + 0.32 * fract(id * 71.3);
+  if (k >= 0.9) I *= 0.6 + 0.4 * sin(uTime * (2.0 + 3.0 * fract(id * 5.1)) + id) * sin(uTime * 0.7 + id * 3.0);
+  return c * I;
+}
+vec3 facade(vec3 p, vec2 bw){
+  float fx = p.x, fy = p.y - GROUND_Y;
+  float bi = floor(fx / 9.0);
+  float hb = hash11(bi * 3.17 + 0.3);
+  vec3 wall = mix(vec3(0.011, 0.011, 0.012), vec3(0.022, 0.019, 0.017), hb);
+  // light from the street lamps and shop windows below washes up the wet facade
+  float glow = 0.0;
+  for (int i = 0; i < 4; i++){ float dx = fx - uStreetLamps[i].x; glow += uStreetLamps[i].w * exp(-dx * dx * 0.012); }
+  wall *= 1.0 + (1.6 * glow + 1.2) * exp(-fy * 0.32);
+  vec3 c = wall;
+  float wx = fx - bi * 9.0;
+  // upper floors: 3 windows per block, 3 m floors
+  if (fy > 3.6){
+    float row = floor((fy - 3.6) / 3.0);
+    float colI = floor(wx / 3.0);
+    vec2 lc = vec2(fract(wx / 3.0) - 0.5, fract((fy - 3.6) / 3.0) - 0.48) * 3.0;
+    float id = hash12(vec2(bi * 5.0 + colI, row + 11.0));
+    vec2 hs = vec2(0.58 + 0.12 * hb, 0.68);
+    float m = rectSoft(lc, hs, bw + 0.03);
+    vec3 wc = id < 0.4 ? windowLight(id, lc) : vec3(0.006, 0.008, 0.012) + skyCol(vec3(0.0, 0.25, -1.0)) * 0.25;
+    // curtains / blinds inside lit windows: break up the flat rectangles
+    if (id < 0.4) wc *= 0.7 + 0.3 * smoothstep(-0.4, 0.4, sin(lc.x * 2.2 + id * 40.0) + (fract(id * 9.0) - 0.5) * 2.0);
+    c = mix(c, wc, m);
+    c += (id < 0.4 ? wc : vec3(0.0)) * 0.06 * rectSoft(lc, hs, bw + 0.6);   // rain-scattered glow
+  }
+  // ground floor: shopfronts with signboards
+  float shop = hash11(bi * 1.93 + 4.0);
+  if (shop > 0.25){
+    float si = floor(wx / 4.5);
+    float sh2 = hash11(bi * 7.7 + si * 3.1);
+    vec2 sc = vec2(fract(wx / 4.5) * 4.5 - 2.25, fy - 1.5);
+    float m = rectSoft(sc, vec2(1.75, 1.15), bw + 0.03) * step(0.3, sh2);
+    float shutter = step(0.55, fract(sh2 * 3.3)) * smoothstep(-0.1, 0.1, sc.y - (1.0 - 1.9 * fract(sh2 * 7.7)));
+    vec3 lit = (sh2 > 0.45 ? vec3(1.0, 0.74, 0.46) : vec3(0.78, 0.92, 0.88)) * (0.14 + 0.22 * fract(sh2 * 31.0));
+    lit *= 0.7 + 0.3 * smoothstep(-1.2, 1.0, sc.y) * (0.8 + 0.2 * sin(sc.x * 1.7 + sh2 * 9.0));   // ceiling lights, depth
+    lit *= 1.0 - 0.55 * smoothstep(0.35, 0.05, abs(sc.x - 0.6 * fract(sh2 * 17.0))) * smoothstep(0.3, -0.6, sc.y) * step(0.5, fract(sh2 * 13.0)); // a figure
+    vec3 shut = vec3(0.022, 0.022, 0.024);
+    c = mix(c, mix(lit, shut, shutter), m);
+    vec2 sb = vec2(wx - 4.5, fy - 3.15);
+    float ms = rectSoft(sb, vec2(3.9, 0.32), bw + 0.02);
+    vec3 boardC = (fract(shop * 5.3) < 0.5 ? vec3(0.55, 0.06, 0.04) : fract(shop * 5.3) < 0.8 ? vec3(0.05, 0.16, 0.42) : vec3(0.6, 0.45, 0.08)) * 0.6;
+    float chars = 0.6 + 0.4 * smoothstep(0.2, 0.8, sin(sb.x * 5.0 + shop * 20.0) * sin(sb.y * 14.0));
+    c = mix(c, boardC * chars * 0.8, ms);
+    c += (lit * 0.06 * step(0.3, sh2) + boardC * 0.04) * rectSoft(sc, vec2(1.75, 1.15), bw + 1.2);
+  }
+  return c;
+}
+vec3 farCity(vec3 p, float bw){
+  float i = floor(p.x / 26.0);
+  float top = GROUND_Y + farTop(p.x);
+  float m = smoothstep(bw, -bw, p.y - top);
+  vec3 c = vec3(0.018, 0.024, 0.034);
+  // sparse lit windows statistically averaged once defocused
+  vec2 g = vec2(p.x / 2.6, (p.y - GROUND_Y) / 3.2);
+  float on = step(0.82, hash12(floor(g) + i * 31.0));
+  float dotM = rectSoft(fract(g) - 0.5, vec2(0.22, 0.2), vec2(bw / 2.6, bw / 3.2) + 0.02);
+  float avg = 0.18 * 0.18 * 0.35;
+  float lights = mix(on * dotM, avg * 4.0, smoothstep(0.4, 2.0, bw));
+  c += vec3(1.0, 0.72, 0.42) * 0.22 * lights;
+  return c * m + vec3(0.0) * (1.0 - m);
+}
+// everything that is not the ground plane
+vec3 aboveGround(vec3 ro, vec3 rd, float blur, out float dist){
+  vec3 c = skyCol(rd);
+  dist = 400.0;
+  if (rd.z > -0.03) return mix(c, skyCol(vec3(rd.x, 0.02, -0.5)) * 0.8, 0.6);
+  // far skyline
+  float tf = (FAR_Z - ro.z) / rd.z;
+  vec3 pf = ro + rd * tf;
+  float bwf = blur * tf;
+  float h = GROUND_Y + farTop(pf.x);
+  float hL = GROUND_Y + farTop(pf.x - bwf), hR = GROUND_Y + farTop(pf.x + bwf);
+  float mf = (smoothstep(bwf, -bwf, pf.y - h) * 2.0 + smoothstep(bwf, -bwf, pf.y - hL) + smoothstep(bwf, -bwf, pf.y - hR)) * 0.25;
+  c = mix(c, farCity(pf, bwf), mf);
+  c = mix(c, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.9, mf * 0.55);       // heavy rain haze on far blocks
+  if (mf > 0.5) dist = tf;
+  // opposite buildings
+  float tb = (FACADE_Z - ro.z) / rd.z;
+  vec3 pb = ro + rd * tb;
+  float bw = blur * tb;
+  float topY = GROUND_Y + bldTop(pb.x);
+  float topL = GROUND_Y + bldTop(pb.x - bw), topR = GROUND_Y + bldTop(pb.x + bw);
+  float mb = (smoothstep(bw, -bw, pb.y - topY) * 2.0 + smoothstep(bw, -bw, pb.y - topL) + smoothstep(bw, -bw, pb.y - topR)) * 0.25;
+  vec3 fc = facade(pb, vec2(bw));
+  fc = mix(fc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.8, 1.0 - exp(-tb * 0.012));
+  c = mix(c, fc, mb);
+  if (mb > 0.5) dist = tb;
+  return c;
+}
+vec3 outside(vec3 ro, vec3 rd, float blur){
+  float dist;
+  vec3 c = aboveGround(ro, rd, blur, dist);
+  if (rd.y < -1e-3 && rd.z < -0.02){
+    float tg = min((GROUND_Y - ro.y) / rd.y, 600.0);
+    vec3 pg = ro + rd * tg;
+    float tb = (FACADE_Z - ro.z) / rd.z;
+    // street: wet asphalt, far sidewalk, light pools; mirror reflection of the facades
+    float side = smoothstep(CURB_Z + 0.1, CURB_Z - 0.1, pg.z);
+    vec3 base = mix(vec3(0.006, 0.006, 0.007), vec3(0.016, 0.015, 0.014), side);
+    vec3 E = vec3(0.0);
+    for (int i = 0; i < 4; i++){
+      vec2 dd = pg.xz - uStreetLamps[i].xz;
+      E += vec3(1.0, 0.55, 0.18) * uStreetLamps[i].w * 9.0 / (dot(dd, dd) + 40.0);
+    }
+    for (int i = 0; i < 4; i++){
+      if (uCars[i].w <= 0.0) continue;
+      vec2 dd = vec2((pg.x - uCars[i].x) * uCars[i].z - 9.0, (pg.z - uCars[i].y) * 3.0);
+      E += vec3(1.0, 0.9, 0.75) * uCars[i].w * 0.6 * exp(-dot(dd, dd) * 0.02) * step(0.0, (pg.x - uCars[i].x) * uCars[i].z);
+    }
+    vec3 rr = vec3(rd.x, -rd.y, rd.z);
+    float rdist;
+    float rough = 0.04 + 0.03 * fbm3(pg.xz * 0.15);
+    vec3 refl = aboveGround(pg, rr, blur + rough, rdist);
+    float fres = 0.02 + 0.98 * pow(1.0 - min(-rd.y * 1.0, 1.0), 5.0);
+    float puddle = smoothstep(0.42, 0.62, fbm3(pg.xz * vec2(0.18, 0.5)));
+    vec3 gc = base * (1.0 + E * 6.0) + refl * fres * mix(0.45, 0.95, puddle);
+    float m = smoothstep(-blur * tb, blur * tb, (ro.y + rd.y * tb) - GROUND_Y);
+    gc = mix(gc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.7, 1.0 - exp(-tg * 0.012));
+    c = mix(gc, c, m);
+  }
+  return c;
+}
+`;
+
+const FS_OUTSIDE = () => GLSL_HEAD() + GLSL_OUTSIDE + `
+uniform int uMode;           // 0: equirect wide (sharp, for drop refraction), 1: camera view (defocused)
+uniform vec2 uRes;
+uniform vec3 uEye, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform float uBlur;         // angular blur radius (rad)
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 rd;
+  if (uMode == 0){
+    float az = (uv.x * 2.0 - 1.0) * AZM, el = mix(ELMIN, ELMAX, uv.y);
+    rd = vec3(sin(az) * cos(el), sin(el), -cos(az) * cos(el));
+  } else {
+    vec2 ndc = uv * 2.0 - 1.0;
+    rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  }
+  o = vec4(outside(uEye, rd, uBlur), 1.0);
+}
+`;
+
+// point lights of the street, drawn as energy-conserving sprites
+const VS_SPRITE = () => GLSL_HEAD() + GLSL_CITY + `
+layout(location = 0) in vec4 aPos;     // xyz world position, w core radius (m)
+layout(location = 1) in vec4 aE;       // rgb irradiance at the eye (∫L dΩ), a vertical elongation
+layout(location = 2) in vec4 aX;       // x halo fraction, y halo radius (rad), z flags (1: far city light, 2: on a far roof top)
+uniform int uMode;
+uniform vec2 uRes;
+uniform vec3 uEye, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform float uCoC;                    // defocus disc radius (rad)
+out vec2 vLocal; out vec3 vE; out vec4 vShape; out vec2 vNdc;
+void main(){
+  int vid = gl_VertexID;
+  vec2 corner = vec2(float(vid & 1), float((vid >> 1) & 1)) * 2.0 - 1.0;
+  vec3 wp = aPos.xyz;
+  float vis = 1.0;
+  if (aX.z > 0.5){
+    // far-city light: must sit on a tower (below its roof) and not be hidden by the opposite row
+    float top = GROUND_Y + farTop(wp.x);
+    if (aX.z > 1.5) wp.y = top + 1.2; else vis *= step(wp.y, top - 1.0);
+    vec3 dd = wp - uEye;
+    float tb = (FACADE_Z - uEye.z) / dd.z;
+    float yb = uEye.y + dd.y * tb, xb = uEye.x + dd.x * tb;
+    vis *= smoothstep(-0.25, 0.25, yb - (GROUND_Y + bldTop(xb)));
+  }
+  vec3 d = wp - uEye; float dist = length(d); vec3 dir = d / dist;
+  vec2 c; float pxPerRad; vec2 aspect;
+  if (uMode == 0){
+    float az = atan(dir.x, -dir.z), el = asin(clamp(dir.y, -1.0, 1.0));
+    c = vec2(az / AZM, (el - ELMIN) / (ELMAX - ELMIN) * 2.0 - 1.0);
+    pxPerRad = uRes.x / (2.0 * AZM);
+    aspect = vec2(1.0 / AZM, 2.0 / (ELMAX - ELMIN));          // ndc per radian
+  } else {
+    float z = dot(d, uCamFwd);
+    c = vec2(dot(d, uCamRight) / z / uTan.x, dot(d, uCamUp) / z / uTan.y);
+    if (z < 0.1) c = vec2(9.0);
+    pxPerRad = uRes.y * 0.5 / uTan.y;
+    aspect = vec2(1.0 / uTan.x, 1.0 / uTan.y);
+  }
+  float core = max(aPos.w / dist, 0.7 / pxPerRad);           // angular core radius, at least ~1px
+  float disc = uMode == 1 ? max(uCoC, core) : core;
+  float elong = aE.a;
+  float halo = aX.y;
+  vec2 ext = vec2(max(disc, halo * 3.2), max(disc * elong, halo * 3.2 * mix(1.0, elong, 0.5)) * 1.05);
+  vLocal = corner * ext;                                      // in radians
+  vE = aE.rgb * vis;
+  if (vis <= 0.0) c = vec2(9.0);
+  vShape = vec4(disc, elong, aX.x, halo);
+  vNdc = c;
+  gl_Position = vec4(c + corner * ext * aspect, 0.0, 1.0);
+}`;
+const FS_SPRITE = () => GLSL_HEAD() + `
+in vec2 vLocal; in vec3 vE; in vec4 vShape; in vec2 vNdc;
+uniform int uMode;
+out vec4 o;
+void main(){
+  float R = vShape.x, elong = vShape.y, hf = vShape.z, hr = vShape.w;
+  vec2 q = vLocal;
+  // body: defocused disc (mode 1) or sharp core (mode 0); elongated for wet-road reflections
+  vec2 qe = vec2(q.x, q.y / elong);
+  float r = length(qe) / R;
+  vec3 body;
+  if (uMode == 1){
+    // 肥皂泡式 bokeh：边缘略亮（老镜头球差），轴向色差使 R/B 圆盘半径略不同，边缘柔化约 6%。
+    vec3 rad = vec3(1.012, 1.0, 0.985);
+    vec3 disc = smoothstep(rad, rad - 0.07, vec3(r));
+    float rim = 1.0 + 0.28 * smoothstep(0.55, 0.97, r);
+    // cat's eye: clipped by a second circle offset toward the frame centre (mechanical vignetting)
+    vec2 off = vNdc * R * 0.55;
+    float r2 = length((qe + off)) / (R * 1.08);
+    float cat = smoothstep(1.0, 0.93, r2);
+    body = vE * disc * rim * cat / (PI * R * R * elong * 1.06);
+  } else {
+    float s = R * 0.8;
+    body = vE * exp(-dot(qe, qe) / (2.0 * s * s)) / (2.0 * PI * s * s * elong);
+  }
+  // forward-scattering halo in the rain (focus independent)
+  float hh = hr * (uMode == 1 ? 1.15 : 1.0);
+  vec2 qh = vec2(q.x, q.y / mix(1.0, elong, 0.5));
+  vec3 halo = vE * hf * exp(-dot(qh, qh) / (2.0 * hh * hh)) / (2.0 * PI * hh * hh);
+  o = vec4((body * (1.0 - hf) + halo), 1.0);
+}`;
+
+// --------------------------------------------------------------------------
+// interior seen in reflections (glass, drops): an analytic stand-in for the room
+// --------------------------------------------------------------------------
+const GLSL_INTERIOR = `
+vec3 interiorRad(vec3 ro, vec3 rd){
+  // lamp shade: closest approach of the ray to the lamp axis, compared with the shade's tapered radius
+  vec2 oc = ro.xz - vec2(LAMP_X, LAMP_Z);
+  float a = max(dot(rd.xz, rd.xz), 1e-5);
+  float tc = max(-dot(oc, rd.xz) / a, 0.0);
+  float rad = length(oc + rd.xz * tc);
+  float ys = ro.y + rd.y * tc - DESK_TOP;
+  float yr = sat((ys - SHADE_Y0) / (SHADE_Y1 - SHADE_Y0));
+  float rsh = mix(SHADE_R0, SHADE_R1, yr);
+  float shadeM = smoothstep(rsh + 0.012, rsh - 0.012, rad) * smoothstep(-0.01, 0.01, ys - SHADE_Y0) * smoothstep(0.01, -0.01, ys - SHADE_Y1);
+  float tS = shadeM > 0.0 ? tc : 1e9;
+  // room box + desk top
+  float tx = rd.x < 0.0 ? (ROOM_X0 - ro.x) / rd.x : (ROOM_X1 - ro.x) / rd.x;
+  float ty = rd.y < 0.0 ? (0.0 - ro.y) / rd.y : (ROOM_H - ro.y) / rd.y;
+  float tz = (ROOM_Z1 - ro.z) / max(rd.z, 1e-4);
+  float tB = min(tx, min(ty, tz));
+  float tD = rd.y < 0.0 ? (DESK_TOP - ro.y) / rd.y : 1e9;
+  vec3 pd = ro + rd * tD;
+  if (pd.x < DESK_X0 || pd.x > DESK_X1 || pd.z > DESK_Z1) tD = 1e9;
+  vec3 shadeC = shadeM > 0.0 ? shadeRadiance(vec3(LAMP_X + rsh, DESK_TOP + ys, LAMP_Z)) * shadeM : vec3(0.0);
+  vec3 p, n, alb;
+  if (tD < tB){ p = pd; n = vec3(0.0, 1.0, 0.0); alb = vec3(0.07, 0.035, 0.018); }
+  else {
+    p = ro + rd * tB;
+    if (tB == tx){ n = vec3(-sign(rd.x), 0.0, 0.0); alb = vec3(0.42, 0.42, 0.33); }
+    else if (tB == ty){ n = vec3(0.0, -sign(rd.y), 0.0); alb = rd.y > 0.0 ? vec3(0.5) : vec3(0.1, 0.07, 0.045); }
+    else { n = vec3(0.0, 0.0, -1.0); alb = vec3(0.38, 0.37, 0.3); }
+  }
+  vec3 L = BULB - p; float d2 = dot(L, L); vec3 l = L * inversesqrt(d2);
+  vec3 E = uLampI * lampEmitFactor(-l) * max(dot(n, l), 0.0) / d2;
+  E += uAmbL * 1.1 + uAmbS;
+  vec3 room = alb / PI * E;
+  return tS < min(tB, tD) ? mix(room, shadeC / max(shadeM, 1e-3), shadeM) : room;
+}
+`;
+
+// --------------------------------------------------------------------------
+// COMPOSITE: glass over room (full resolution)
+// --------------------------------------------------------------------------
+const FS_COMPOSITE = () => GLSL_HEAD() + GLSL_LIGHT + GLSL_INTERIOR + `
+uniform vec2 uRes;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform sampler2D uRoom, uDefocus;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec4 room = texture(uRoom, uv);
+  vec3 col = room.rgb;
+  float cov = room.a;
+  if (cov > 0.002){
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+    vec3 P = uCamPos + rd * ((GLASS_Z - uCamPos.z) / rd.z);
+    vec3 through = textureLod(uDefocus, uv, 0.0).rgb;
+    float cosi = abs(rd.z);
+    float F = 0.04 + 0.96 * pow(1.0 - cosi, 5.0);
+    float T = (1.0 - F) * (1.0 - F);                       // two air/glass interfaces
+    vec3 refl = interiorRad(P, reflect(rd, vec3(0.0, 0.0, 1.0))) * F * 1.9;
+    col += cov * (through * T + refl);
+  }
+  o = vec4(col, 1.0);
+}
+`;
+
+// --------------------------------------------------------------------------
+// FINAL: exposure, ACES, sRGB, dither
+// --------------------------------------------------------------------------
+const FS_FINAL = () => GLSL_HEAD() + `
+uniform sampler2D uHdr;
+uniform vec2 uRes;
+uniform float uExposure, uTime;
+out vec4 o;
+const mat3 ACESIn = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+const mat3 ACESOut = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+vec3 aces(vec3 v){ v = ACESIn * v; vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return clamp(ACESOut * (a / b), 0.0, 1.0); }
+vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texture(uHdr, uv).rgb * uExposure;
+  c = aces(c);
+  c = toSRGB(c);
+  float n = hash12(gl_FragCoord.xy + fract(uTime) * 91.0) + hash12(gl_FragCoord.xy * 1.37 + 17.0 + fract(uTime) * 37.0) - 1.0;
+  o = vec4(c + n / 255.0, 1.0);
+}
+`;
+const FS_BLIT = () => GLSL_HEAD() + `
+uniform sampler2D uTex; uniform vec2 uRes; uniform float uScale; uniform int uChan;
+out vec4 o;
+void main(){ vec4 t = texture(uTex, gl_FragCoord.xy / uRes); vec3 c = uChan == 1 ? vec3(t.a) : uChan == 2 ? t.rrr : t.rgb; o = vec4(pow(c * uScale / (1.0 + c * uScale), vec3(1.0 / 2.2)), 1.0); }
+`;
+
+/* ============================================================================
+   WebGL plumbing
+   ========================================================================== */
+const canvas = document.getElementById('c');
+let gl = null, caps = {};
+function fail(msg) {
+  console.warn(msg);
+  document.getElementById('fallback').style.display = 'flex';
+  document.getElementById('veil').classList.add('gone');
+}
+
+function compile(type, src, name) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  return s;
+}
+function makeProgram(name, vsrc, fsrc) {
+  const p = gl.createProgram();
+  const vs = compile(gl.VERTEX_SHADER, vsrc, name), fs = compile(gl.FRAGMENT_SHADER, fsrc, name);
+  gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+  return { name, p, vs, fs, vsrc, fsrc, u: {} };
+}
+function checkProgram(pr) {
+  if (!gl.getProgramParameter(pr.p, gl.LINK_STATUS)) {
+    const log = (gl.getShaderInfoLog(pr.vs) || '') + '\n' + (gl.getShaderInfoLog(pr.fs) || '') + '\n' + (gl.getProgramInfoLog(pr.p) || '');
+    const lines = pr.fsrc.split('\n');
+    const m = /ERROR: \d+:(\d+)/.exec(log);
+    const ctx = m ? lines.slice(Math.max(0, m[1] - 3), +m[1] + 2).join('\n') : '';
+    throw new Error(`shader "${pr.name}" failed:\n${log}\n${ctx}`);
+  }
+  const n = gl.getProgramParameter(pr.p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const info = gl.getActiveUniform(pr.p, i);
+    const nm = info.name.replace(/\[0\]$/, '');
+    pr.u[nm] = gl.getUniformLocation(pr.p, info.name);
+  }
+}
+// uniform setter: infers the type from the value
+function U(pr, name, v) {
+  const loc = pr.u[name]; if (loc === undefined || loc === null) return;
+  if (typeof v === 'number') gl.uniform1f(loc, v);
+  else if (v.int !== undefined) gl.uniform1i(loc, v.int);
+  else if (v.length === 2) gl.uniform2fv(loc, v);
+  else if (v.length === 3) gl.uniform3fv(loc, v);
+  else if (v.length === 4) gl.uniform4fv(loc, v);
+  else gl.uniform4fv(loc, v);
+}
+const I = n => ({ int: n });
+
+function makeTex(w, h, fmt, opts = {}) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  const F = {
+    rgba16f: [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT],
+    r16f: [gl.R16F, gl.RED, gl.HALF_FLOAT],
+    rgba8: [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE],
+  }[fmt];
+  const levels = opts.mips ? Math.floor(Math.log2(Math.max(w, h))) + 1 : 1;
+  gl.texStorage2D(gl.TEXTURE_2D, levels, F[0], w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, opts.mips ? gl.LINEAR_MIPMAP_LINEAR : opts.nearest ? gl.NEAREST : gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, opts.nearest ? gl.NEAREST : gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return { t, w, h, fmt, mips: !!opts.mips };
+}
+function makeTarget(w, h, fmts, opts = {}) {
+  w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+  const texs = fmts.map(f => makeTex(w, h, f, opts));
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  texs.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t.t, 0));
+  if (texs.length > 1) gl.drawBuffers(texs.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+  const st = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+  if (st !== gl.FRAMEBUFFER_COMPLETE) throw new Error('framebuffer incomplete ' + st + ' ' + fmts);
+  return { fb, w, h, tex: texs[0], texs };
+}
+function freeTarget(t) { if (!t) return; gl.deleteFramebuffer(t.fb); t.texs.forEach(x => gl.deleteTexture(x.t)); }
+function bindTarget(t) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fb : null);
+  if (t) gl.viewport(0, 0, t.w, t.h); else gl.viewport(0, 0, canvas.width, canvas.height);
+}
+function bindTex(pr, name, tex, unit) {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, tex.t || tex);
+  const loc = pr.u[name]; if (loc) gl.uniform1i(loc, unit);
+}
+let emptyVAO;
+function drawFull() { gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+
+/* ============================================================================
+   Outside world: street lamps, signs, cars (JS side, uploaded as sprites)
+   ========================================================================== */
+const OUT = { lights: [], cars: [], nextCar: 6 + rnd() * 10, sprites: new Float32Array(12 * 240), count: 0 };
+function buildOutside() {
+  const GY = S.GROUND_Y, L = OUT.lights, F = S.FACADE_Z;
+  const add = (o) => L.push(Object.assign({ core: 0.08, refl: 0, halo: 0.1, haloR: 0.03, kind: 0, flags: 0, ph: rnd() * 10 }, o));
+  // street lamps: high-pressure sodium (~2050 K). Far side visible through the glass, near side only via drops
+  OUT.lamps = [-31, -4.5, 21, 46];
+  for (const x of OUT.lamps) add({ p: [x, GY + 6.4, S.CURB_Z - 0.6], c: bb(2050), E: 0.010, core: 0.22, refl: 1, halo: 0.32, haloR: 0.05, kind: 1 });
+  for (const x of [-15, 13]) add({ p: [x, GY + 6.4, -4.2], c: bb(2100), E: 0.016, core: 0.22, refl: 1, halo: 0.32, haloR: 0.05, kind: 1 });
+  // neon / lightboxes on the shopfronts: tubes are many overlapping sprites so their bokeh smears into a bar
+  const tube = (x0, y0, x1, y1, n, c, E, kind = 2) => { for (let i = 0; i < n; i++) { const t = n === 1 ? 0.5 : i / (n - 1); add({ p: [lerp(x0, x1, t), GY + lerp(y0, y1, t), F + 0.5], c, E: E / n, core: 0.06, refl: 1, halo: 0.25, haloR: 0.03, kind }); } };
+  tube(-6.2, 3.3, -6.2, 6.6, 12, [1.0, 0.13, 0.22], 0.0042);           // vertical red-pink sign
+  tube(2.2, 3.85, 5.6, 3.85, 11, [0.25, 0.92, 1.0], 0.0032, 3);         // cyan tube (old, flickers)
+  tube(8.6, 4.2, 8.6, 5.7, 6, [0.22, 1.0, 0.42], 0.0018);               // green pharmacy cross
+  tube(7.85, 4.95, 9.35, 4.95, 6, [0.22, 1.0, 0.42], 0.0018);
+  tube(-14.5, 3.6, -10.5, 3.6, 10, bb(2500), 0.0034);                   // warm lightbox
+  // red lanterns hanging at a small restaurant, swaying a little in the wind
+  for (let i = 0; i < 3; i++) add({ p: [-2.6 + i * 1.1, GY + 3.2, F + 1.4], c: [1.0, 0.22, 0.07], E: 0.0011, core: 0.18, refl: 1, halo: 0.3, haloR: 0.035, kind: 7 });
+  // a couple of bare bulbs in windows / under awnings
+  for (const [x, y] of [[0.6, 7.6], [6.2, 4.6], [-9.4, 7.9]]) add({ p: [x, GY + y, F + 0.3], c: bb(2500), E: 0.0006, core: 0.05, refl: 1, halo: 0.2, haloR: 0.02 });
+  // traffic light at the junction (cycles red / green)
+  add({ p: [7.6, GY + 5.0, S.CURB_Z + 1.2], c: [1, 0.08, 0.04], E: 0.0011, core: 0.12, refl: 1, halo: 0.3, haloR: 0.03, kind: 4 });
+  add({ p: [7.6, GY + 4.6, S.CURB_Z + 1.2], c: [0.15, 1.0, 0.65], E: 0.0011, core: 0.12, refl: 1, halo: 0.3, haloR: 0.03, kind: 5 });
+  // the far city: lit windows of towers seen above the opposite roofs (occlusion tested in the vertex shader)
+  for (let i = 0; i < 90; i++) {
+    const x = -110 + rnd() * 230, y = GY + 4 + Math.pow(rnd(), 1.3) * 60;
+    const T = rnd() < 0.75 ? 2300 + rnd() * 1500 : 4500 + rnd() * 2500;
+    add({ p: [x, y, S.FAR_Z + 4 + rnd() * 12], c: bb(T, 0.9), E: 0.00012 + 0.00045 * rnd() ** 2, core: 0.5, halo: 0.12, haloR: 0.02, flags: 1 });
+  }
+  // red aviation obstruction lights on tower tops: slow blink
+  for (const x of [-37, 12, 64]) add({ p: [x, 0, S.FAR_Z], c: [1, 0.05, 0.03], E: 0.0007, core: 0.6, halo: 0.35, haloR: 0.03, kind: 6, flags: 2 });
+}
+function spawnCar() {
+  const dir = rnd() < 0.5 ? 1 : -1;
+  const lane = dir > 0 ? -21.5 - rnd() * 0.8 : -17.0 - rnd() * 0.8;   // far lanes: visible through the lower panes
+  const near = rnd() < 0.3;
+  OUT.cars.push({ x: -dir * 75, z: near ? (dir > 0 ? -9.5 : -6) : lane, dir, v: 4.2 + rnd() * 2.6, I: 0.8 + rnd() * 0.4, age: 0 });
+}
+function updateOutside(dt, t) {
+  OUT.nextCar -= dt;
+  if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = 14 + rnd() * 30; }
+  for (const c of OUT.cars) { c.x += c.dir * c.v * dt; c.age += dt; }
+  OUT.cars = OUT.cars.filter(c => Math.abs(c.x) < 80);
+}
+function pushSprite(i, p, E, elong, core, halo, haloR, flags = 0) {
+  const a = OUT.sprites, o = i * 12;
+  a[o] = p[0]; a[o + 1] = p[1]; a[o + 2] = p[2]; a[o + 3] = core;
+  a[o + 4] = E[0]; a[o + 5] = E[1]; a[o + 6] = E[2]; a[o + 7] = elong;
+  a[o + 8] = halo; a[o + 9] = haloR; a[o + 10] = flags; a[o + 11] = 0;
+}
+function buildSprites(t, eye) {
+  let n = 0;
+  const GY = S.GROUND_Y;
+  const emit = (p, c, E, l) => {
+    const d2 = V.dot(V.sub(p, eye), V.sub(p, eye));
+    if (n >= 238) return;
+    pushSprite(n++, p, mulc(c, E), 1, l.core, l.halo, l.haloR, l.flags || 0);
+    if (l.refl && n < 238) {
+      // 湿路面的镜面反射：光源关于地面镜像，粗糙水面把反射拉成竖直光柱（能量 × 掠射菲涅尔 ~0.3）
+      const pr = [p[0], 2 * GY - p[1] + 0.5, p[2] + 0.5];
+      pushSprite(n++, pr, mulc(c, E * 0.32), 5.5, l.core, l.halo * 0.6, l.haloR);
+    }
+  };
+  for (const l of OUT.lights) {
+    let E = l.E;
+    if (l.kind === 3) E *= (Math.sin(t * 31 + l.ph) > -0.97 ? 1 : 0.25) * (0.94 + 0.06 * Math.sin(t * 2.3 + l.ph));
+    if (l.kind === 2) E *= 0.96 + 0.04 * Math.sin(t * 1.7 + l.ph);
+    if (l.kind === 4 || l.kind === 5) { const ph = (t % 46) / 46; const red = ph < 0.55; E *= (l.kind === 4) === red ? 1 : 0.03; }
+    if (l.kind === 6) E *= Math.pow(Math.max(0, Math.sin(t * Math.PI / 1.6 + l.ph)), 2);
+    if (E <= 1e-7) continue;
+    let p = l.p;
+    if (l.kind === 7) p = [p[0] + 0.06 * Math.sin(t * 1.3 + l.ph) + 0.03 * Math.sin(t * 2.9 + l.ph * 2), p[1], p[2]];
+    emit(p, l.c, E, l);
+  }
+  // cars: headlights brighten as the car faces us, taillights glow red from behind
+  const head = bb(4300, 0.8), tail = [1, 0.06, 0.03];
+  for (const c of OUT.cars) {
+    const toEye = V.norm(V.sub(eye, [c.x, GY + 0.7, c.z]));
+    const facing = Math.max(0, c.dir * toEye[0]);
+    const fade = smooth(0, 3, c.age);
+    const hE = 0.0035 * c.I * (0.06 + 0.94 * facing ** 3) * fade;
+    const tE = 0.0007 * c.I * (0.25 + 0.75 * Math.max(0, -c.dir * toEye[0]) ** 2) * fade;
+    for (const dz of [-0.75, 0.75]) {
+      if (n > 230) break;
+      emit([c.x + c.dir * 2.1, GY + 0.68, c.z + dz], head, hE, { core: 0.09, refl: 1, halo: 0.35, haloR: 0.04 });
+      emit([c.x - c.dir * 2.2, GY + 0.82, c.z + dz], tail, tE, { core: 0.06, refl: 1, halo: 0.25, haloR: 0.03 });
+    }
+  }
+  OUT.count = n;
+}
+
+/* ============================================================================
+   Camera: framing by aspect, handheld drift, parallax
+   ========================================================================== */
+const CAM = { pos: [0, 1.2, 1.4], fwd: [0, 0, -1], right: [1, 0, 0], up: [0, 1, 0], tan: [1, 1], par: [0, 0], parT: [0, 0], focus: 1.4 };
+function framing(aspect) {
+  // landscape: window + lamp + corner + curtain; portrait: step back, taller lens, keep the lamp in frame
+  const L = { pos: [-0.10, 1.26, 1.85], tgt: [-0.12, 1.30, 0.0], vfov: 38 };
+  const P = { pos: [-0.27, 1.22, 2.1], tgt: [-0.25, 1.45, 0.0], vfov: 60 };
+  const t = smooth(Math.log(0.56), Math.log(1.5), Math.log(aspect));
+  const mix3 = (a, b) => a.map((v, i) => lerp(b[i], v, t));
+  return { pos: mix3(L.pos, P.pos), tgt: mix3(L.tgt, P.tgt), vfov: lerp(P.vfov, L.vfov, t) };
+}
+function updateCamera(t, dt, aspect) {
+  const f = framing(aspect);
+  const k = 1 - Math.exp(-dt * 2.2);
+  CAM.par[0] += (CAM.parT[0] - CAM.par[0]) * k; CAM.par[1] += (CAM.parT[1] - CAM.par[1]) * k;
+  const st = DBG.still ? 0 : 1;
+  // 手持感：位置 ±5mm、指向 ±0.15° 的慢速漂移，叠加约 0.22Hz 的呼吸起伏
+  const breath = Math.sin(t * 2 * Math.PI / 4.6) * 0.0016;
+  const pos = [f.pos[0] + st * 0.004 * drift(t * 0.21, 1) + CAM.par[0] * 0.06,
+               f.pos[1] + st * (0.003 * drift(t * 0.19, 2) + breath) + CAM.par[1] * 0.035,
+               f.pos[2] + st * 0.004 * drift(t * 0.17, 3)];
+  const tgt = [f.tgt[0] + st * 0.004 * drift(t * 0.13, 4) + CAM.par[0] * 0.02, f.tgt[1] + st * 0.003 * drift(t * 0.11, 5) + CAM.par[1] * 0.012, f.tgt[2]];
+  const fwd = V.norm(V.sub(tgt, pos));
+  const roll = st * 0.0012 * drift(t * 0.09, 6);
+  let right = V.norm(V.cross(fwd, [0, 1, 0]));
+  let up = V.cross(right, fwd);
+  right = V.add(V.mul(right, Math.cos(roll)), V.mul(up, Math.sin(roll)));
+  up = V.cross(right, fwd);
+  const ty = Math.tan(f.vfov * Math.PI / 360);
+  CAM.pos = pos; CAM.fwd = fwd; CAM.right = right; CAM.up = up; CAM.tan = [ty * aspect, ty];
+  CAM.focus = (S.GLASS_Z - pos[2]) / fwd[2];   // focus distance: the glass, along the view axis
+}
+function camRay(ndcX, ndcY) {
+  return V.norm(V.add(CAM.fwd, V.add(V.mul(CAM.right, ndcX * CAM.tan[0]), V.mul(CAM.up, ndcY * CAM.tan[1]))));
+}
+
+/* ============================================================================
+   Lighting state
+   ========================================================================== */
+const LIGHT = { on: DBG.lamp ? 1 : 0, level: DBG.lamp ? 1 : 0, flick: 1, exposure: 1, expoAdapt: DBG.lamp ? 1 : 2.2 };
+function lightUniforms(t, dt) {
+  // 白炽灯丝的热惯性：开灯 τ≈0.12s，关灯 τ≈0.35s（冷却更慢）；色温随灯丝亮度降低而变红。
+  const tau = LIGHT.on ? 0.12 : 0.35;
+  LIGHT.level += (LIGHT.on - LIGHT.level) * (1 - Math.exp(-dt / tau));
+  const lv = LIGHT.level;
+  // 极轻微的亮度波动：电压的慢漂移（±1.2%）+ 偶发的短暂跌落
+  const fl = 1 + 0.008 * Math.sin(t * 0.9) * Math.sin(t * 0.37 + 1) + 0.005 * Math.sin(t * 5.3 + Math.sin(t * 1.1) * 2) -
+             0.03 * Math.pow(Math.max(0, Math.sin(t * 0.21) * Math.sin(t * 0.077 + 2)), 30);
+  const T = 1800 + 900 * Math.sqrt(lv);
+  const lampI = mulc(bb(T), 2.3 * lv * lv * fl);
+  const tau3 = [0.20, 0.14, 0.075];       // cream fabric: transmits red/yellow better than blue
+  const skyL = mulc(bb(9500, 0.62), 0.085);
+  const cityL = mulc(bb(3400, 0.5), 0.042);
+  const ambL = mulc(lampI, 0.075).map((v, i) => v * [1.0, 0.92, 0.75][i]);
+  const ambS = mulc(skyL, 0.55);
+  // eye adaptation: exposure follows the scene key slowly (dark-adapt 2.6 s, light-adapt 0.7 s)
+  const target = lerp(2.4, 1.0, smooth(0, 1, lv));
+  const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
+  LIGHT.expoAdapt += (target - LIGHT.expoAdapt) * (1 - Math.exp(-dt / at));
+  return { lampI, tau3, skyL, cityL, ambL, ambS };
+}
+
+/* ============================================================================
+   Renderer
+   ========================================================================== */
+const R = { progs: {}, tg: {}, sizes: {}, roomScale: 0.75, mainScale: 1, dprCap: 2 };
+let spriteVAO, spriteBuf;
+
+function initGL() {
+  gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: DBG.shot, powerPreference: 'high-performance' });
+  if (!gl) return false;
+  caps.cbf = !!gl.getExtension('EXT_color_buffer_float');
+  caps.cbhf = !!gl.getExtension('EXT_color_buffer_half_float');
+  caps.parallel = gl.getExtension('KHR_parallel_shader_compile');
+  caps.hdr = caps.cbf || caps.cbhf;
+  emptyVAO = gl.createVertexArray();
+  spriteVAO = gl.createVertexArray();
+  gl.bindVertexArray(spriteVAO);
+  spriteBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, spriteBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, OUT.sprites.byteLength, gl.DYNAMIC_DRAW);
+  for (let i = 0; i < 3; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 48, i * 16); gl.vertexAttribDivisor(i, 1); }
+  gl.bindVertexArray(null);
+  return true;
+}
+function buildPrograms() {
+  const P = R.progs;
+  P.room = makeProgram('room', VS_FULL, FS_ROOM());
+  P.outside = makeProgram('outside', VS_FULL, FS_OUTSIDE());
+  P.sprite = makeProgram('sprite', VS_SPRITE(), FS_SPRITE());
+  P.composite = makeProgram('composite', VS_FULL, FS_COMPOSITE());
+  P.final = makeProgram('final', VS_FULL, FS_FINAL());
+  P.blit = makeProgram('blit', VS_FULL, FS_BLIT());
+}
+function programsReady() {
+  if (!caps.parallel) return true;
+  return Object.values(R.progs).every(p => gl.getProgramParameter(p.p, caps.parallel.COMPLETION_STATUS_KHR));
+}
+function finishPrograms() { Object.values(R.progs).forEach(checkProgram); }
+
+function allocTargets() {
+  const T = R.tg, hdr = caps.hdr ? 'rgba16f' : 'rgba8';
+  Object.values(T).forEach(freeTarget);
+  const W = canvas.width, H = canvas.height;
+  T.hdr = makeTarget(W, H, [hdr]);
+  T.room = makeTarget(W * R.roomScale, H * R.roomScale, [hdr, caps.hdr ? 'r16f' : 'rgba8']);
+  T.defocus = makeTarget(Math.ceil(W / 2), Math.ceil(H / 2), [hdr], { mips: true });
+  const sw = W > 1400 ? 768 : 512;
+  T.sharp = makeTarget(sw, sw * 0.75, [hdr], { mips: true });
+}
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, R.dprCap);
+  const cw = Math.max(1, canvas.clientWidth), ch = Math.max(1, canvas.clientHeight);
+  const w = Math.round(cw * dpr * R.mainScale), h = Math.round(ch * dpr * R.mainScale);
+  if (w === canvas.width && h === canvas.height && R.tg.hdr && R.tg.room && Math.abs(R.tg.room.w - w * R.roomScale) < 2) return;
+  canvas.width = w; canvas.height = h;
+  allocTargets();
+}
+
+function camUniforms(pr) {
+  U(pr, 'uCamPos', CAM.pos); U(pr, 'uCamFwd', CAM.fwd); U(pr, 'uCamRight', CAM.right); U(pr, 'uCamUp', CAM.up); U(pr, 'uTan', CAM.tan);
+}
+function lightU(pr, Lt) {
+  U(pr, 'uLampI', Lt.lampI); U(pr, 'uShadeTau', Lt.tau3); U(pr, 'uSkyL', Lt.skyL); U(pr, 'uCityL', Lt.cityL); U(pr, 'uAmbL', Lt.ambL); U(pr, 'uAmbS', Lt.ambS);
+}
+function outsideUniforms(pr, t) {
+  U(pr, 'uTime', t);
+  const lamps = new Float32Array(16);
+  OUT.lamps.forEach((x, i) => { lamps.set([x, S.GROUND_Y + 6.4, S.CURB_Z - 0.6, 1.0], i * 4); });
+  gl.uniform4fv(pr.u.uStreetLamps, lamps);
+  const cars = new Float32Array(16);
+  OUT.cars.slice(0, 4).forEach((c, i) => cars.set([c.x, c.z, c.dir, c.I * smooth(0, 3, c.age)], i * 4));
+  gl.uniform4fv(pr.u.uCars, cars);
+}
+
+function drawSprites(target, mode, eye) {
+  const P = R.progs.sprite;
+  gl.useProgram(P.p);
+  U(P, 'uMode', I(mode)); U(P, 'uRes', [target.w, target.h]); U(P, 'uEye', eye); camUniforms(P);
+  U(P, 'uCoC', R.coc);
+  gl.bindVertexArray(spriteVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, spriteBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, OUT.sprites, 0, OUT.count * 12);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, OUT.count);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(null);
+}
+
+function render(t, dt) {
+  const P = R.progs, T = R.tg;
+  const Lt = lightUniforms(t, dt);
+  // 光圈：虚拟镜头光圈半径 34mm（≈85mm f/1.2 级别的大光圈，为得到明显的焦外光斑），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
+  R.aperture = 0.034;
+  R.coc = R.aperture / CAM.focus;
+  const glassEye = [S.WIN_CX, S.WIN_CY, S.GLASS_Z];
+
+  // 1) outside, sharp & wide (for the drops)
+  bindTarget(T.sharp);
+  gl.useProgram(P.outside.p);
+  U(P.outside, 'uMode', I(0)); U(P.outside, 'uRes', [T.sharp.w, T.sharp.h]); U(P.outside, 'uEye', glassEye);
+  U(P.outside, 'uBlur', 2.4 * S.AZM / T.sharp.w); outsideUniforms(P.outside, t);
+  drawFull();
+  buildSprites(t, glassEye);
+  drawSprites(T.sharp, 0, glassEye);
+  gl.bindTexture(gl.TEXTURE_2D, T.sharp.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
+
+  // 2) outside, defocused camera view
+  bindTarget(T.defocus);
+  gl.useProgram(P.outside.p);
+  camUniforms(P.outside);
+  U(P.outside, 'uMode', I(1)); U(P.outside, 'uRes', [T.defocus.w, T.defocus.h]); U(P.outside, 'uEye', CAM.pos);
+  U(P.outside, 'uBlur', R.coc); outsideUniforms(P.outside, t);
+  drawFull();
+  buildSprites(t, CAM.pos);
+  drawSprites(T.defocus, 1, CAM.pos);
+  gl.bindTexture(gl.TEXTURE_2D, T.defocus.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
+
+  // 3) room
+  bindTarget(T.room);
+  gl.useProgram(P.room.p);
+  camUniforms(P.room); lightU(P.room, Lt);
+  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t); U(P.room, 'uCarIn', [0, 0, 0, 0]);
+  drawFull();
+
+  // 4) composite
+  bindTarget(T.hdr);
+  gl.useProgram(P.composite.p);
+  camUniforms(P.composite); lightU(P.composite, Lt);
+  U(P.composite, 'uRes', [T.hdr.w, T.hdr.h]);
+  bindTex(P.composite, 'uRoom', T.room.tex, 0);
+  bindTex(P.composite, 'uDefocus', T.defocus.tex, 1);
+  drawFull();
+
+  // 5) final
+  bindTarget(null);
+  if (DBG.view) {
+    const src = { room: T.room.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex }[DBG.view] || T.hdr.tex;
+    gl.useProgram(P.blit.p);
+    U(P.blit, 'uRes', [canvas.width, canvas.height]); U(P.blit, 'uScale', DBG.view === 'depth' ? 0.5 : 1.5);
+    U(P.blit, 'uChan', I(DBG.view === 'cov' ? 1 : DBG.view === 'depth' ? 2 : 0));
+    bindTex(P.blit, 'uTex', src, 0);
+    drawFull();
+    return;
+  }
+  gl.useProgram(P.final.p);
+  U(P.final, 'uRes', [canvas.width, canvas.height]); U(P.final, 'uTime', t);
+  U(P.final, 'uExposure', LIGHT.expoAdapt * R.fade);
+  bindTex(P.final, 'uHdr', T.hdr.tex, 0);
+  drawFull();
+}
+
+/* ============================================================================
+   Main loop
+   ========================================================================== */
+let running = false, lastT = 0, simT = DBG.t0, frame = 0;
+R.fade = DBG.shot ? 1 : 0;
+function loop(now) {
+  if (!running) return;
+  requestAnimationFrame(loop);
+  const t = now / 1000;
+  const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t)));
+  lastT = t;
+  simT += dt;
+  resize();
+  updateCamera(simT, dt, canvas.clientWidth / Math.max(1, canvas.clientHeight));
+  updateOutside(dt, simT);
+  if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.0);
+  render(simT, dt);
+  frame++;
+  window.__frames = frame;
+  if (frame === 2) { const v = document.getElementById('veil'); v.classList.add('gone'); if (DBG.shot) v.style.display = 'none'; }
+}
+function start() {
+  if (running) return;
+  running = true; lastT = 0;
+  requestAnimationFrame(loop);
+}
+function stop() { running = false; }
+document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+
+function boot() {
+  if (!initGL()) { fail('no webgl2'); return; }
+  buildOutside();
+  for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
+  buildPrograms();
+  const wait = () => {
+    if (!programsReady()) { setTimeout(wait, 30); return; }
+    try { finishPrograms(); } catch (e) { console.error(e.message); fail(e.message); return; }
+    resize();
+    start();
+  };
+  wait();
+}
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); stop(); });
+canvas.addEventListener('webglcontextrestored', () => { R.tg = {}; buildPrograms(); finishPrograms(); resize(); start(); });
+setTimeout(boot, 30);
+})();
+</script>
+</body>
+</html>
