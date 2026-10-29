@@ -49,6 +49,8 @@ const DBG = {
   still: QS.has('still'),               // freeze handheld drift
   view: QS.get('view') || '',           // debug buffer view
   t0: +(QS.get('t') || 0),              // start time offset (s)
+  frames: +(QS.get('frames') || 0),     // stop after N frames (screenshots of slow software GL)
+  zoom: +(QS.get('zoom') || 1), zx: +(QS.get('zx') || 0), zy: +(QS.get('zy') || 1.5),   // inspect the glass
 };
 
 // ------------------------------------------------------------------ math ---
@@ -701,13 +703,13 @@ float farTop(float x){ float i = floor(x / 26.0); return 16.0 + 50.0 * pow(hash1
 `;
 const GLSL_OUTSIDE = GLSL_CITY + `
 uniform float uTime;
-uniform vec4 uStreetLamps[4];   // xyz, w = intensity
+uniform vec4 uStreetLamps[6];   // xyz, w = intensity
 uniform vec4 uCars[4];          // x, z(lane), heading(+-1), intensity
 vec3 skyCol(vec3 rd){
   float e = rd.y;
-  vec3 zen = vec3(0.030, 0.056, 0.105);
-  vec3 mid = vec3(0.064, 0.094, 0.135);
-  vec3 hor = vec3(0.125, 0.112, 0.112);
+  vec3 zen = vec3(0.045, 0.080, 0.150);
+  vec3 mid = vec3(0.085, 0.118, 0.165);
+  vec3 hor = vec3(0.150, 0.135, 0.130);
   vec3 c = mix(hor, mid, smoothstep(-0.02, 0.2, e));
   c = mix(c, zen, smoothstep(0.18, 0.75, e));
   vec2 cp = rd.xz / max(e + 0.12, 0.06) * 0.8 + vec2(uTime * 0.006, 0.0);
@@ -828,7 +830,7 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     float side = smoothstep(CURB_Z + 0.1, CURB_Z - 0.1, pg.z);
     vec3 base = mix(vec3(0.006, 0.006, 0.007), vec3(0.016, 0.015, 0.014), side);
     vec3 E = vec3(0.0);
-    for (int i = 0; i < 4; i++){
+    for (int i = 0; i < 6; i++){
       vec2 dd = pg.xz - uStreetLamps[i].xz;
       E += vec3(1.0, 0.55, 0.18) * uStreetLamps[i].w * 9.0 / (dot(dd, dd) + 40.0);
     }
@@ -972,11 +974,12 @@ vec3 interiorRad(vec3 ro, vec3 rd){
   float shadeM = smoothstep(rsh + 0.012, rsh - 0.012, rad) * smoothstep(-0.01, 0.01, ys - SHADE_Y0) * smoothstep(0.01, -0.01, ys - SHADE_Y1);
   float tS = shadeM > 0.0 ? tc : 1e9;
   // room box + desk top
-  float tx = rd.x < 0.0 ? (ROOM_X0 - ro.x) / rd.x : (ROOM_X1 - ro.x) / rd.x;
-  float ty = rd.y < 0.0 ? (0.0 - ro.y) / rd.y : (ROOM_H - ro.y) / rd.y;
+  // (signed-zero safe: a direction component of -0.0 must not produce -Inf distances)
+  float tx = rd.x < 0.0 ? (ROOM_X0 - ro.x) / min(rd.x, -1e-5) : (ROOM_X1 - ro.x) / max(rd.x, 1e-5);
+  float ty = rd.y < 0.0 ? (0.0 - ro.y) / min(rd.y, -1e-5) : (ROOM_H - ro.y) / max(rd.y, 1e-5);
   float tz = (ROOM_Z1 - ro.z) / max(rd.z, 1e-4);
   float tB = min(tx, min(ty, tz));
-  float tD = rd.y < 0.0 ? (DESK_TOP - ro.y) / rd.y : 1e9;
+  float tD = rd.y < -1e-5 ? (DESK_TOP - ro.y) / rd.y : 1e9;
   vec3 pd = ro + rd * tD;
   if (pd.x < DESK_X0 || pd.x > DESK_X1 || pd.z > DESK_Z1) tD = 1e9;
   vec3 shadeC = shadeM > 0.0 ? shadeRadiance(vec3(LAMP_X + rsh, DESK_TOP + ys, LAMP_Z)) * shadeM : vec3(0.0);
@@ -997,30 +1000,184 @@ vec3 interiorRad(vec3 ro, vec3 rd){
 `;
 
 // --------------------------------------------------------------------------
+// DROPS → height field. Each drop is a spherical cap (contact radius r, contact angle θ):
+//   R = r / sinθ,  h(ρ) = sqrt(R² − ρ²) − R cosθ   (exact cap; edge slope = tanθ)
+// Pinned drops get an irregular contact line (pinning on defects) and a downward bulge
+// (on a vertical pane the advancing angle sits at the bottom). Sliding drops become
+// tear-shaped: the receding (upper) contact line lags into a thinner tail.
+// Heights are in physical mm and combined with MAX blending.
+// --------------------------------------------------------------------------
+const VS_DROP = () => GLSL_HEAD() + `
+layout(location = 0) in vec4 aD;   // x, y (mm), r (mm), theta (rad)
+layout(location = 1) in vec4 aM;   // motion dir.xy, elongation, seed
+uniform vec2 uSimMM;
+out vec2 vQ; flat out vec4 vA; flat out vec2 vDir;
+void main(){
+  int vid = gl_VertexID;
+  vec2 corner = vec2(float(vid & 1), float((vid >> 1) & 1)) * 2.0 - 1.0;
+  float r = aD.z, el = aM.z;
+  vec2 dir = aM.xy, tail = -dir, side = vec2(-dir.y, dir.x);
+  float m = 1.14;
+  float u = corner.x > 0.0 ? r * (1.0 + el) * m : -r * (1.0 + 0.15 * el) * m;
+  vec2 q = tail * u + side * (corner.y * r * m);
+  vQ = q; vA = vec4(r, aD.w, el, aM.w); vDir = dir;
+  gl_Position = vec4((aD.xy + q) / uSimMM * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const FS_DROP = () => GLSL_HEAD() + `
+in vec2 vQ; flat in vec4 vA; flat in vec2 vDir;
+uniform float uHScale;
+out vec4 o;
+void main(){
+  float r = vA.x, th = vA.y, el = vA.z, seed = vA.w;
+  float u = dot(vQ, -vDir), v = dot(vQ, vec2(-vDir.y, vDir.x));
+  float slide = min(el * 2.0, 1.0);
+  float ang = atan(v, u);
+  float irr = 1.0 + (0.06 * sin(ang * 3.0 + seed * 6.2832) + 0.035 * sin(ang * 5.0 + seed * 19.1) + 0.012 * sin(ang * 9.0 + seed * 41.0)) * (1.0 - slide) * smoothstep(0.6, 2.6, r);
+  float tailT = smoothstep(0.0, r * (1.0 + el), u);
+  float uu = u > 0.0 ? u / (1.0 + el) : u / (1.0 + 0.15 * el);
+  float vv = v / max(1.0 - 0.42 * el / (1.0 + el) * tailT, 0.3);
+  float rho = length(vec2(uu, vv)) / (r * irr);
+  if (rho >= 1.0) discard;
+  float R = r / sin(th);
+  float h = sqrt(max(R * R - rho * rho * r * r, 0.0)) - R * cos(th);
+  // 重力压扁：接触半径超过毛细长度 l_c = sqrt(γ/ρg) ≈ 2.7 mm（Bond 数 > 1）时，水滴顶部变平、
+  // 高度趋于饱和（≈ 2 l_c sin(θ/2)），只有边缘保持接触角处的曲率。用平顶轮廓 1−ρ⁴ 与球冠插值近似。
+  float H = r * tan(th * 0.5);
+  float Hsat = 2.0 * 2.7 * sin(th * 0.5) * 0.62;
+  float squash = smoothstep(1.4, 3.6, r);
+  float hFlat = min(H, Hsat) * (1.0 - pow(rho, 4.0)) * (1.0 + 0.6 * smoothstep(0.75, 1.0, rho) * (1.0 - rho) * 4.0);
+  h = mix(h, min(h, hFlat), squash);
+  h *= 1.0 + 0.24 * (-vQ.y / r) * (1.0 - slide);      // gravity bulge of pinned drops
+  h *= mix(1.0, 0.42, tailT * slide);                   // thin receding tail
+  o = vec4(max(h, 0.0) * uHScale, 0.0, 0.0, 1.0);
+}`;
+
+// --------------------------------------------------------------------------
 // COMPOSITE: glass over room (full resolution)
 // --------------------------------------------------------------------------
 const FS_COMPOSITE = () => GLSL_HEAD() + GLSL_LIGHT + GLSL_INTERIOR + `
 uniform vec2 uRes;
 uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
-uniform sampler2D uRoom, uDefocus;
+uniform sampler2D uRoom, uDefocus, uSharp, uHeight, uState;
+uniform vec2 uSimMM;        // simulated glass size (mm)
+uniform vec2 uHTex;         // height texture size (texels)
+uniform float uHScale;
+uniform float uTime;
+uniform int uDbg;
 out vec4 o;
+
+const float NW = 1.333;     // water
+const float NG = 1.52;      // soda-lime glass
+// exact unpolarised Fresnel reflectance, n1 → n2, ci = cos(incidence) in medium n1
+float fresnel(float ci, float n1, float n2){
+  float s = n1 / n2 * sqrt(max(0.0, 1.0 - ci * ci));
+  if (s >= 1.0) return 1.0;                               // total internal reflection
+  float ct = sqrt(1.0 - s * s);
+  float rs = (n1 * ci - n2 * ct) / (n1 * ci + n2 * ct);
+  float rp = (n1 * ct - n2 * ci) / (n1 * ct + n2 * ci);
+  return 0.5 * (rs * rs + rp * rp);
+}
+vec2 dirToEq(vec3 d){ return vec2(atan(d.x, -d.z) / AZM * 0.5 + 0.5, (asin(clamp(d.y, -1.0, 1.0)) - ELMIN) / (ELMAX - ELMIN)); }
+
+// micro-droplets of the outside mist (too many to simulate one by one): a jittered grid of
+// tiny caps whose presence and size follow the local mist density M (sim-mm units)
+vec3 microDrops(vec2 pm, float M){
+  const float CS = 0.6;
+  vec2 g = pm / CS, gi = floor(g);
+  vec3 best = vec3(0.0);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+    vec2 c = gi + vec2(float(i), float(j));
+    vec3 h3 = hash32(c);
+    if (h3.z > 0.2 + 0.75 * M) continue;
+    vec2 ctr = (c + 0.15 + 0.7 * h3.xy) * CS;
+    float r = CS * (0.16 + 0.3 * fract(h3.z * 13.1)) * (0.5 + 0.5 * M);
+    vec2 d = pm - ctr; float rr = dot(d, d);
+    if (rr < r * r){
+      float R = r / 0.94, sq = sqrt(R * R - rr), h = sq - R * 0.342;   // θ ≈ 70°
+      if (h > best.x) best = vec3(h, -d / sq);
+    }
+  }
+  return best;
+}
+
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
   vec4 room = texture(uRoom, uv);
   vec3 col = room.rgb;
   float cov = room.a;
-  if (cov > 0.002){
-    vec2 ndc = uv * 2.0 - 1.0;
-    vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
-    vec3 P = uCamPos + rd * ((GLASS_Z - uCamPos.z) / rd.z);
-    vec3 through = textureLod(uDefocus, uv, 0.0).rgb;
-    float cosi = abs(rd.z);
-    float F = 0.04 + 0.96 * pow(1.0 - cosi, 5.0);
-    float T = (1.0 - F) * (1.0 - F);                       // two air/glass interfaces
-    vec3 refl = interiorRad(P, reflect(rd, vec3(0.0, 0.0, 1.0))) * F * 1.9;
-    col += cov * (through * T + refl);
-  }
+  vec2 ndc = uv * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  vec3 P = uCamPos + rd * ((GLASS_Z - uCamPos.z) / rd.z);
+  vec2 guv = (P.xy - vec2(WIN_X0, WIN_Y0)) / vec2(WIN_X1 - WIN_X0, WIN_Y1 - WIN_Y0);
+  vec2 pm = guv * uSimMM;
+  // ---- glass state: outside mist M, trail film W, inside condensation F, wipe rim
+  vec4 st = texture(uState, guv);
+  float M = smoothstep(0.02, 0.9, st.r), W = st.g, Fin = st.b, rim = st.a;
+  // ---- macro drops: height + gradient (condensation on the inside softens what is seen through it)
+  float lod = Fin * 2.3;
+  vec2 e = exp2(lod) / uHTex;
+  vec2 emm = e * uSimMM;
+  float h = textureLod(uHeight, guv, lod).r / uHScale;
+  float hx = (textureLod(uHeight, guv + vec2(e.x, 0.0), lod).r - textureLod(uHeight, guv - vec2(e.x, 0.0), lod).r) / uHScale / (2.0 * emm.x);
+  float hy = (textureLod(uHeight, guv + vec2(0.0, e.y), lod).r - textureLod(uHeight, guv - vec2(0.0, e.y), lod).r) / uHScale / (2.0 * emm.y);
+  vec2 grad = vec2(hx, hy);
+  // ---- micro droplets (faded when sub-pixel, and under condensation)
+  float pxPerMM = 1.0 / max(length(fwidth(pm)), 1e-4);
+  float aaM = smoothstep(2.5, 6.0, pxPerMM * 0.6) * (1.0 - Fin);
+  float macro = smoothstep(0.0, 0.03, h);
+  vec3 md = microDrops(pm, M) * aaM * (1.0 - macro);
+  grad += md.yz;
+  // ---- trail film: thin, slightly uneven water layer
+  float fn = vnoise(pm * vec2(0.9, 0.25) + 3.0) - vnoise(pm * vec2(0.9, 0.25) + vec2(3.6, 3.0));
+  grad += vec2(fn, 0.0) * W * 0.05;
+  float wet = max(macro, smoothstep(0.0, 0.02, md.x));
+  // ---- optics. glass-local frame: x, y as world, z pointing OUT of the room.
+  vec3 v = vec3(rd.xy, -rd.z);
+  vec3 N = normalize(vec3(-grad, 1.0));
+  vec3 dw = vec3(v.xy / NW, 0.0); dw.z = sqrt(1.0 - dot(dw.xy, dw.xy));   // in water (n·sinθ conserved by the flat glass)
+  float Fw = fresnel(dot(dw, N), NW, 1.0);
+  vec3 dout = refract(dw, -N, NW);
+  if (dot(dout, dout) < 0.5) dout = vec3(0.0, 0.0, 1.0);
+  vec3 dr = reflect(dw, N);
+  vec2 tr = dr.xy * NW; float trr = dot(tr, tr);
+  float trapped = step(1.0, trr);                                           // TIR again at the inner glass face
+  vec3 droom = trapped > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(tr, sqrt(max(1.0 - trr, 0.0)));   // world: +z into the room
+  // drop: sharp, inverted outside image + internal reflection of the room (lamp glints, dark rims)
+  vec2 euv = dirToEq(vec3(dout.xy, -dout.z));
+  vec3 sharpC = textureGrad(uSharp, euv, dFdx(euv) * 0.55, dFdy(euv) * 0.55).rgb;
+  vec3 inner = mix(interiorRad(P, droom), (uAmbL * 0.4 + uAmbS) * 0.12 + uSkyL * 0.25, trapped);
+  float Fg = fresnel(abs(rd.z), 1.0, NG);
+  vec3 wetC = sharpC * (1.0 - Fw) * (1.0 - Fg) + inner * Fw * (1.0 - Fg) * 0.92;
+  // dry glass: the defocused street, blurred further by the mist of micro droplets
+  vec2 off = grad * 0.004 * vec2(1.0, uRes.x / uRes.y) / max(1.0, length(grad) * 2.0);
+  float blurL = M * 2.8 + Fin * 2.6;
+  vec3 dryC = textureLod(uDefocus, uv + off, blurL).rgb * (1.0 - Fg) * (1.0 - Fg);
+  vec3 avgC = textureLod(uDefocus, uv, 6.5).rgb;
+  dryC = mix(dryC, avgC * 1.2, M * 0.42);                                  // forward scattering veil of the mist
+  vec3 through = mix(dryC, wetC, wet);
+  // glass reflection of the room (inner face + outer face; ghost of the lamp)
+  // inner face always reflects; the outer face only where it is dry and clear; inside fog scatters both
+  vec3 refl = interiorRad(P, reflect(rd, vec3(0.0, 0.0, 1.0))) * Fg * (1.0 + 0.85 * (1.0 - M) * (1.0 - wet)) * (1.0 - 0.6 * Fin);
+  // inside condensation: scatters lamp & sky light (warm veil near the lamp), dims what is behind
+  vec3 Lb = BULB - P; float ld2 = dot(Lb, Lb);
+  vec3 Eg = uLampI * lampEmitFactor(-Lb * inversesqrt(ld2)) * max(Lb.z * inversesqrt(ld2), 0.0) / ld2 + uSkyL * 1.2 + uAmbL;
+  float fogA = Fin * 0.62 + rim * 0.3;
+  vec3 fogC = Eg * 0.10 * (0.88 + 0.24 * vnoise(pm * 2.5)) + avgC * 0.5;
+  vec3 glass = (through * (1.0 - fogA) + fogC * fogA) + refl;
+  glass += Eg * 0.0025 * M * (1.0 - Fin);                                   // mist droplets lit from inside
+  col += cov * glass;
+  if (uDbg == 1) col = vec3(h * 0.5, length(grad) * 0.2, wet);
+  if (uDbg == 2) col = N * 0.5 + 0.5;
+  if (uDbg == 3) col = sharpC * 4.0;
+  if (uDbg == 4) col = vec3(Fw, trapped, 0.0);
+  if (uDbg == 5) col = vec3(dirToEq(vec3(dout.xy, -dout.z)), 0.0);
+  if (uDbg == 6) col = wetC * 4.0;
+  if (uDbg == 7) col = inner * 4.0;
+  if (uDbg == 8) col = through * 4.0;
+  if (uDbg == 9) col = glass * 4.0;
+  if (uDbg == 10) col = vec3(any(isnan(wetC)) || any(isinf(wetC)) ? 1.0 : 0.0, any(isnan(inner)) || any(isinf(inner)) ? 1.0 : 0.0, any(isnan(sharpC)) ? 1.0 : 0.0) + vec3(0.1) * wet;
+  if (uDbg == 11) col = vec3(isnan(Fw) ? 1.0 : 0.0, isinf(Fw) ? 1.0 : 0.0, wet * 0.2);
   o = vec4(col, 1.0);
 }
 `;
@@ -1235,6 +1392,309 @@ function buildSprites(t, eye) {
 }
 
 /* ============================================================================
+   RAIN ON GLASS — CPU simulation in physical millimetres
+   ----------------------------------------------------------------------------
+   真实物理（量纲为 mm、s、N）：
+   · 水滴是球冠：V = π R³ (1−cosθ)² (2+cosθ) / 3，R = r / sinθ（r 接触半径，θ 接触角）。
+   · 竖直玻璃上，重力 F_g = ρ g V 对抗接触角滞后造成的钉扎力（Furmidge 方程）
+       F_pin = γ · 2r · Δcosθ ,  γ = 0.072 N/m
+     ⇒ 临界半径 r_c = sqrt(2γΔcos / (ρ g k_V)) ≈ 1.7–2.2 mm（与实测相符）。
+   · 滑动是过阻尼的：v = (F_g − F_kin) / (β r)，耗散正比于接触线长度；
+     动滞后略小于静滞后 ⇒ 遇到「脏点」会停下再走（stick-slip）。
+   · 静态的「玻璃不均匀场」调制 Δcos；已湿润的水痕 Δcos 更低。
+     水滴沿横向梯度偏向阻力小的一侧 ⇒ 自然蜿蜒，并倾向沿旧水痕走。
+   · 合并：体积守恒，位置取质心，速度按动量守恒。
+   · 滑动时：扫过雾珠层并吸收其水量；留下约 6μm 的水膜（随后蒸发/收缩）；
+     按概率在尾部脱落小珠（pearling），体积从母滴中扣除。
+   · 撞击：Poisson 到达；直径服从 Marshall–Palmer N(D) ∝ e^(−ΛD)，Λ = 4.1·R^−0.21；
+     D > 2.2 mm 的大滴溅出 2–5 颗卫星滴（体积守恒）。
+   近似：
+   · 显示时按 MAG 倍放大（物理仍按真实毫米计算）。真实尺度下 1 米外的雨滴只有
+     2–3 个像素，看不到透镜成像。这是「记忆里的放大」，也是本作品最主要的艺术取舍。
+   · 雾珠（< 0.5 mm）不逐颗模拟，用 0.5 mm 网格上的连续密度场表示，
+     渲染时再程序化地还原成小水珠。
+   ========================================================================== */
+const MAG = 8.0;
+const SIM = {};
+const RHO_G = 9.81e-6;        // ρ g : newtons per mm³ of water
+const GAM2 = 1.44e-4;         // 2γ : N per mm of contact width
+const BETA = 1.15e-6;         // contact-line dissipation (N·s / mm²) → 1–5 cm/s for mm-sized drops
+const kV = th => Math.PI * (1 - Math.cos(th)) ** 2 * (2 + Math.cos(th)) / (3 * Math.sin(th) ** 3);
+function hashI(i, j) { let h = Math.imul(i, 374761393) + Math.imul(j, 668265263) | 0; h = Math.imul(h ^ h >>> 13, 1274126177); return ((h ^ h >>> 16) >>> 0) / 4294967296; }
+function vnoiseJS(x, y) {
+  const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  return lerp(lerp(hashI(i, j), hashI(i + 1, j), u), lerp(hashI(i, j + 1), hashI(i + 1, j + 1), u), v);
+}
+(function initSim() {
+  const W = (S.WIN_X1 - S.WIN_X0) * 1000 / MAG, H = (S.WIN_Y1 - S.WIN_Y0) * 1000 / MAG;
+  Object.assign(SIM, { W, H, n: 0, MAX: 2600, rain: 0.55, events: [] });
+  SIM.panes = S.PANES.map(p => [(p[0] - S.WIN_X0) * 1000 / MAG, (p[1] - S.WIN_Y0) * 1000 / MAG, (p[2] - S.WIN_X0) * 1000 / MAG, (p[3] - S.WIN_Y0) * 1000 / MAG]);
+  SIM.paneArea = SIM.panes.map(p => (p[2] - p[0]) * (p[3] - p[1]));
+  const M = SIM.MAX, F = () => new Float32Array(M);
+  Object.assign(SIM, { x: F(), y: F(), r: F(), V: F(), vx: F(), vy: F(), th: F(), hy: F(), seed: F(), age: F(), wob: F(), lat: F(), acc: F(), born: F(),
+                       slide: new Uint8Array(M), act: new Uint8Array(M), pane: new Uint8Array(M) });
+  SIM.CELL = 0.5;
+  SIM.GW = Math.ceil(W / SIM.CELL); SIM.GH = Math.ceil(H / SIM.CELL);
+  const N = SIM.GW * SIM.GH;
+  SIM.Mi = new Float32Array(N);      // outside mist density 0..1
+  SIM.Wt = new Float32Array(N);      // residual trail film 0..1
+  SIM.Fin = new Float32Array(N);     // inside condensation 0..1
+  SIM.F0 = new Float32Array(N);      // its equilibrium pattern
+  SIM.nuc = new Float32Array(N);     // nucleation speed (static, speckled regrowth)
+  SIM.rim = new Float32Array(N);     // water pushed to the edge of a wipe
+  SIM.het = new Float32Array(N);     // glass heterogeneity (multiplies Δcosθ)
+  SIM.tex = new Uint8Array(N * 4);
+  for (let j = 0; j < SIM.GH; j++) for (let i = 0; i < SIM.GW; i++) {
+    const k = j * SIM.GW + i, x = i * SIM.CELL, y = j * SIM.CELL;
+    SIM.het[k] = 0.5 + 1.0 * (0.62 * vnoiseJS(x / 4.2, y / 4.2) + 0.38 * vnoiseJS(x / 1.3 + 50, y / 1.3));
+    // condensation forms first at the cold bottom of each pane and along its edges
+    let f0 = 0.05;
+    for (const p of SIM.panes) if (x >= p[0] - 1 && x <= p[2] + 1 && y >= p[1] - 1 && y <= p[3] + 1) {
+      const yf = (y - p[1]) / (p[3] - p[1]);
+      const edge = Math.min(x - p[0], p[2] - x, y - p[1], p[3] - y);
+      f0 = 0.06 + 0.62 * Math.pow(1 - smooth(0, 0.42, yf), 1.6) + 0.22 * Math.exp(-Math.max(edge, 0) / 5);
+    }
+    f0 += 0.16 * (vnoiseJS(x / 9, y / 6 + 20) - 0.5) + 0.06 * (vnoiseJS(x / 2, y / 2 + 70) - 0.5);
+    SIM.F0[k] = clamp(f0, 0, 0.95);
+    SIM.Fin[k] = SIM.F0[k];
+    SIM.nuc[k] = 0.3 + 1.4 * hashI(i + 999, j);
+    SIM.Mi[k] = 0.75 + 0.2 * vnoiseJS(x / 7, y / 7 + 40);
+  }
+  SIM.GCELL = 5;   // merge hash cell (mm)
+  SIM.HW = Math.ceil(W / SIM.GCELL); SIM.HH = Math.ceil(H / SIM.GCELL);
+  SIM.head = new Int32Array(SIM.HW * SIM.HH); SIM.next = new Int32Array(M);
+  SIM.inst = new Float32Array(M * 8);
+})();
+const gidx = (x, y) => clamp(Math.floor(y / SIM.CELL), 0, SIM.GH - 1) * SIM.GW + clamp(Math.floor(x / SIM.CELL), 0, SIM.GW - 1);
+function paneOf(x, y) { for (let k = 0; k < 4; k++) { const p = SIM.panes[k]; if (x >= p[0] && x <= p[2] && y >= p[1] && y <= p[3]) return k; } return -1; }
+function addDrop(x, y, V, pane, slide = 0) {
+  if (SIM.n >= SIM.MAX || V <= 0) return -1;
+  const i = SIM.n++;
+  const th = (32 + 20 * rnd()) * Math.PI / 180;
+  SIM.x[i] = x; SIM.y[i] = y; SIM.V[i] = V; SIM.th[i] = th; SIM.r[i] = Math.cbrt(V / kV(th));
+  SIM.hy[i] = 0.14 + 0.46 * rnd() ** 2;             // Δcosθ of this drop: weathered glass, impurities (0.14–0.6)
+  SIM.vx[i] = 0; SIM.vy[i] = 0; SIM.seed[i] = rnd(); SIM.age[i] = 0; SIM.wob[i] = 0; SIM.lat[i] = 0; SIM.acc[i] = 0;
+  SIM.slide[i] = slide; SIM.act[i] = 1; SIM.pane[i] = pane;
+  // the new drop absorbs the mist under its footprint (volume conserved)
+  SIM.V[i] += collect(x, y, x, y, SIM.r[i] * 0.9, 0);
+  SIM.r[i] = Math.cbrt(SIM.V[i] / kV(th));
+  return i;
+}
+// sweep a capsule over the grids: collect mist volume, lay down trail film
+const MIST_FILM = 0.010;      // mm of water equivalent held by a fully misted glass
+function collect(x0, y0, x1, y1, w, film) {
+  const C = SIM.CELL, GW = SIM.GW;
+  const ia = clamp(Math.floor((Math.min(x0, x1) - w) / C), 0, GW - 1), ib = clamp(Math.floor((Math.max(x0, x1) + w) / C), 0, GW - 1);
+  const ja = clamp(Math.floor((Math.min(y0, y1) - w) / C), 0, SIM.GH - 1), jb = clamp(Math.floor((Math.max(y0, y1) + w) / C), 0, SIM.GH - 1);
+  const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy + 1e-9;
+  let vol = 0;
+  for (let j = ja; j <= jb; j++) for (let i = ia; i <= ib; i++) {
+    const px = (i + 0.5) * C - x0, py = (j + 0.5) * C - y0;
+    const t = clamp((px * dx + py * dy) / L2, 0, 1);
+    const ex = px - dx * t, ey = py - dy * t;
+    const d2 = ex * ex + ey * ey;
+    if (d2 > w * w) continue;
+    const k = j * GW + i;
+    vol += SIM.Mi[k] * MIST_FILM * C * C;
+    SIM.Mi[k] = 0;
+    if (film > 0) SIM.Wt[k] = Math.max(SIM.Wt[k], film * (1 - d2 / (w * w) * 0.5));
+  }
+  return vol;
+}
+function removeDrop(i) { SIM.r[i] = 0; }
+function compact() {
+  let j = 0;
+  const keys = ['x', 'y', 'r', 'V', 'vx', 'vy', 'th', 'hy', 'seed', 'age', 'wob', 'lat', 'acc', 'slide', 'act', 'pane'];
+  for (let i = 0; i < SIM.n; i++) {
+    if (SIM.r[i] <= 0) continue;
+    if (i !== j) for (const k of keys) SIM[k][j] = SIM[k][i];
+    j++;
+  }
+  SIM.n = j;
+}
+function rainImpact() {
+  // Marshall–Palmer drop-size distribution, truncated to the visible range
+  const R = 1.5 + 34 * SIM.rain * SIM.rain;                 // rain rate, mm/h
+  const Lam = 4.1 * Math.pow(R, -0.21);
+  const Dmin = 0.6, Dmax = 5.0;
+  const D = Dmin - Math.log(1 - rnd() * (1 - Math.exp(-Lam * (Dmax - Dmin)))) / Lam;
+  let V = Math.PI * D * D * D / 6;
+  // position: uniform over the glass area
+  let a = rnd() * SIM.paneArea.reduce((s, v) => s + v, 0), k = 0;
+  while (a > SIM.paneArea[k] && k < 3) a -= SIM.paneArea[k++];
+  const p = SIM.panes[k];
+  const x = p[0] + rnd() * (p[2] - p[0]), y = p[1] + rnd() * (p[3] - p[1]);
+  if (D > 2.2) {                                             // splash: satellites share ~28% of the volume
+    const ns = 2 + Math.floor(rnd() * 4), vs = V * 0.28;
+    for (let s = 0; s < ns; s++) {
+      const ang = rnd() * Math.PI * 2, dist = (1.5 + 2.5 * rnd()) * D;
+      const sx = x + Math.cos(ang) * dist, sy = y + Math.sin(ang) * dist * 0.7;
+      const pk = paneOf(sx, sy);
+      if (pk >= 0) addDrop(sx, sy, vs / ns, pk);
+    }
+    V *= 0.72;
+  }
+  const i = addDrop(x, y, V, k);
+  if (i >= 0 && SIM.events.length < 64) SIM.events.push({ type: 'hit', x, y, D });
+}
+// heterogeneity-weighted Δcosθ at a point (wet trails lower it)
+function dcos(i, x, y) { const k = gidx(x, y); return SIM.hy[i] * SIM.het[k] * (1 - 0.55 * SIM.Wt[k]); }
+
+function simStep(dt) {
+  const n0 = SIM.n;
+  // 1) rain arrivals (Poisson)
+  const lam = (12 + 150 * SIM.rain) * dt;
+  let k = 0; const L = Math.exp(-lam); let p = rnd();
+  while (p > L && k < 20) { k++; p *= rnd(); }
+  for (let q = 0; q < k; q++) rainImpact();
+  // 2) forces & motion
+  for (let i = 0; i < SIM.n; i++) {
+    const r = SIM.r[i]; if (r <= 0) continue;
+    SIM.age[i] += dt; SIM.wob[i] *= Math.exp(-dt / 0.18);
+    const V = SIM.V[i], x = SIM.x[i], y = SIM.y[i];
+    const Fg = RHO_G * V;
+    const dc = dcos(i, x, y - 0.6 * r);
+    const Fs = GAM2 * r * dc;
+    if (!SIM.slide[i]) {
+      if (Fg <= Fs) continue;
+      SIM.slide[i] = 1;
+    }
+    const Fk = Fs * 0.8;
+    if (Fg <= Fk) { SIM.slide[i] = 0; SIM.vx[i] = SIM.vy[i] = 0; SIM.act[i] = 1; continue; }
+    const vt = (Fg - Fk) / (BETA * r);
+    // lateral bias from the heterogeneity gradient across the drop front, plus a slow random walk
+    const g = (dcos(i, x + r, y - r) - dcos(i, x - r, y - r)) / (2 * r);
+    SIM.lat[i] += (-SIM.lat[i] * 1.5 + (rnd() - 0.5) * 6.0) * dt;
+    const lat = clamp(-2.2 * g * r / Math.max(dc, 0.02) + SIM.lat[i], -0.8, 0.8);
+    const il = 1 / Math.hypot(lat, 1);
+    const tvx = lat * il * vt, tvy = -il * vt;
+    const kk = 1 - Math.exp(-dt / 0.07);
+    SIM.vx[i] += (tvx - SIM.vx[i]) * kk; SIM.vy[i] += (tvy - SIM.vy[i]) * kk;
+    let nx = x + SIM.vx[i] * dt, ny = y + SIM.vy[i] * dt;
+    const pn = SIM.panes[SIM.pane[i]];
+    nx = clamp(nx, pn[0] + r * 0.6, pn[2] - r * 0.6);
+    const ds = Math.hypot(nx - x, ny - y);
+    // sweep: collect mist, leave a film; lose film volume
+    SIM.V[i] += collect(x, y, nx, ny, r * 0.95, 1.0);
+    SIM.V[i] -= 0.9 * r * 0.006 * ds;
+    SIM.x[i] = nx; SIM.y[i] = ny; SIM.act[i] = 1;
+    // pearling: occasionally a bead is left behind at the tail
+    SIM.acc[i] += ds;
+    if (SIM.acc[i] > r * 1.6) {
+      SIM.acc[i] = 0;
+      const sp = Math.hypot(SIM.vx[i], SIM.vy[i]);
+      if (rnd() < 0.16 + 0.25 * clamp(sp / 80, 0, 1)) {
+        const rb = r * (0.12 + 0.18 * rnd()), Vb = kV(SIM.th[i]) * rb * rb * rb;
+        if (SIM.V[i] - Vb > 0.2) {
+          const ux = -SIM.vx[i] / (sp + 1e-6), uy = -SIM.vy[i] / (sp + 1e-6);
+          const j = addDrop(nx + ux * r * 1.05 + (rnd() - 0.5) * r * 0.5, ny + uy * r * 1.05, Vb, SIM.pane[i]);
+          if (j >= 0) SIM.V[i] -= Vb;
+        }
+      }
+    }
+    if (SIM.V[i] < 0.05) { removeDrop(i); continue; }
+    SIM.r[i] = Math.cbrt(SIM.V[i] / kV(SIM.th[i]));
+    // reached the bottom rail of the pane: water drains along the frame
+    if (ny - SIM.r[i] * 0.3 < pn[1]) { if (SIM.events.length < 64) SIM.events.push({ type: 'drain', x: nx, V: SIM.V[i] }); removeDrop(i); }
+  }
+  // 3) coalescence (spatial hash; only pairs involving an active drop)
+  const G = SIM.GCELL, HW = SIM.HW, HH = SIM.HH;
+  SIM.head.fill(-1);
+  for (let i = 0; i < SIM.n; i++) {
+    if (SIM.r[i] <= 0) continue;
+    const c = clamp(Math.floor(SIM.y[i] / G), 0, HH - 1) * HW + clamp(Math.floor(SIM.x[i] / G), 0, HW - 1);
+    SIM.next[i] = SIM.head[c]; SIM.head[c] = i;
+  }
+  for (let i = 0; i < SIM.n; i++) {
+    if (!SIM.act[i] || SIM.r[i] <= 0) continue;
+    const cx = Math.floor(SIM.x[i] / G), cy = Math.floor(SIM.y[i] / G);
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const gx = cx + ox, gy = cy + oy;
+      if (gx < 0 || gy < 0 || gx >= HW || gy >= HH) continue;
+      for (let j = SIM.head[gy * HW + gx]; j >= 0; j = SIM.next[j]) {
+        if (j === i || SIM.r[j] <= 0 || SIM.r[i] <= 0 || SIM.pane[j] !== SIM.pane[i]) continue;
+        const dx = SIM.x[j] - SIM.x[i], dy = SIM.y[j] - SIM.y[i], rr = SIM.r[i] + SIM.r[j];
+        if (dx * dx + dy * dy >= rr * rr * 0.9) continue;
+        // merge the smaller into the larger: volume, centre of mass and momentum conserved
+        const a = SIM.V[i] >= SIM.V[j] ? i : j, b = a === i ? j : i;
+        const Va = SIM.V[a], Vb = SIM.V[b], V = Va + Vb;
+        SIM.x[a] = (SIM.x[a] * Va + SIM.x[b] * Vb) / V; SIM.y[a] = (SIM.y[a] * Va + SIM.y[b] * Vb) / V;
+        SIM.vx[a] = (SIM.vx[a] * Va + SIM.vx[b] * Vb) / V; SIM.vy[a] = (SIM.vy[a] * Va + SIM.vy[b] * Vb) / V;
+        SIM.th[a] = (SIM.th[a] * Va + SIM.th[b] * Vb) / V; SIM.hy[a] = (SIM.hy[a] * Va + SIM.hy[b] * Vb) / V;
+        SIM.V[a] = V; SIM.r[a] = Math.cbrt(V / kV(SIM.th[a]));
+        SIM.slide[a] = SIM.slide[a] | SIM.slide[b];
+        SIM.wob[a] = Math.min(1, SIM.wob[a] + 2 * Vb / V);
+        SIM.act[a] = 2;                 // grown: re-check its new neighbourhood next step (cascades)
+        removeDrop(b);
+      }
+    }
+  }
+  for (let i = 0; i < SIM.n; i++) SIM.act[i] = SIM.slide[i] || SIM.act[i] === 2 ? 1 : 0;
+  compact();
+}
+// slow fields: mist regrows with the rain, trail film evaporates, condensation creeps back
+let fieldRow = 0;
+function fieldStep(dt) {
+  const GW = SIM.GW, GH = SIM.GH, rows = Math.ceil(GH / 4);
+  const dtt = dt * 4;
+  const aM = (0.012 + 0.05 * SIM.rain) * dtt, dW = Math.exp(-dtt / 22), dR = Math.exp(-dtt / 45);
+  for (let r = 0; r < rows; r++) {
+    const j = (fieldRow + r * 4) % GH;
+    for (let i = 0, k = j * GW; i < GW; i++, k++) {
+      SIM.Mi[k] += (1 - SIM.Mi[k]) * aM * (0.6 + 0.8 * SIM.nuc[k]) * (1 - 0.7 * SIM.Wt[k]);
+      SIM.Wt[k] *= dW;
+      const fin = SIM.Fin[k], f0 = SIM.F0[k];
+      // dropwise condensation: each spot re-nucleates at its own pace ⇒ speckled regrowth
+      SIM.Fin[k] = fin + (f0 - fin) * (1 - Math.exp(-dtt / 30 * SIM.nuc[k] * (fin < 0.02 ? 0.5 : 1)));
+      SIM.rim[k] *= dR;
+    }
+  }
+  fieldRow = (fieldRow + 1) % 4;
+}
+function packFields() {
+  const t = SIM.tex, N = SIM.GW * SIM.GH;
+  for (let k = 0, o = 0; k < N; k++, o += 4) {
+    t[o] = SIM.Mi[k] * 255 + 0.5; t[o + 1] = SIM.Wt[k] * 255 + 0.5; t[o + 2] = SIM.Fin[k] * 255 + 0.5; t[o + 3] = SIM.rim[k] * 255 + 0.5;
+  }
+}
+function packDrops() {
+  const a = SIM.inst;
+  for (let i = 0, o = 0; i < SIM.n; i++, o += 8) {
+    const sp = Math.hypot(SIM.vx[i], SIM.vy[i]);
+    const slide = SIM.slide[i] && sp > 0.5;
+    const dx = slide ? SIM.vx[i] / sp : 0, dy = slide ? SIM.vy[i] / sp : -1;
+    // tear shape grows with speed; a fresh coalescence makes the drop wobble for a moment
+    const el = (slide ? clamp(sp / 90, 0, 0.9) : 0) + SIM.wob[i] * 0.22 * Math.sin(SIM.age[i] * 55);
+    const grow = 1 - Math.exp(-SIM.age[i] / 0.025);      // impact spreading (~25 ms)
+    a[o] = SIM.x[i]; a[o + 1] = SIM.y[i]; a[o + 2] = SIM.r[i] * (0.55 + 0.45 * grow); a[o + 3] = SIM.th[i];
+    a[o + 4] = dx; a[o + 5] = dy; a[o + 6] = Math.max(el, 0); a[o + 7] = SIM.seed[i];
+  }
+}
+function simStats() {
+  const rs = Array.from(SIM.r.subarray(0, SIM.n)).sort((a, b) => a - b);
+  const area = SIM.paneArea.reduce((a, b) => a + b, 0);
+  let cov = 0, sl = 0; for (let i = 0; i < SIM.n; i++) { cov += Math.PI * SIM.r[i] ** 2; sl += SIM.slide[i]; }
+  let m = 0; for (let k = 0; k < SIM.Mi.length; k++) m += SIM.Mi[k];
+  const q = f => (rs[Math.floor(f * (rs.length - 1))] || 0).toFixed(2);
+  let sx = -1, sy = -1, best = 0; for (let i = 0; i < SIM.n; i++) if (SIM.slide[i] && SIM.r[i] > best) { best = SIM.r[i]; sx = SIM.x[i] * MAG / 1000 + S.WIN_X0; sy = SIM.y[i] * MAG / 1000 + S.WIN_Y0; }
+  return { slideAt: [+sx.toFixed(3), +sy.toFixed(3), +best.toFixed(2)], n: SIM.n, cover: (cov / area).toFixed(3), sliding: sl, r50: q(0.5), r90: q(0.9), r99: q(0.99), rmax: q(1), mist: (m / SIM.Mi.length).toFixed(2) };
+}
+let fieldAcc = 0;
+function simAdvance(dt, fieldEvery = 1 / 30) {
+  let left = dt;
+  while (left > 1e-6) {
+    const h = Math.min(left, 1 / 60); simStep(h); left -= h;
+    fieldAcc += h; if (fieldAcc >= fieldEvery) { fieldStep(fieldAcc); fieldAcc = 0; }
+  }
+}
+function prewarm(seconds) {
+  const h = 1 / 30;
+  for (let t = 0; t < seconds; t += h) { simStep(h); fieldAcc += h; if (fieldAcc >= 0.25) { for (let q = 0; q < 4; q++) fieldStep(fieldAcc / 4); fieldAcc = 0; } }
+  SIM.events.length = 0;
+}
+
+/* ============================================================================
    Camera: framing by aspect, handheld drift, parallax
    ========================================================================== */
 const CAM = { pos: [0, 1.2, 1.4], fwd: [0, 0, -1], right: [1, 0, 0], up: [0, 1, 0], tan: [1, 1], par: [0, 0], parT: [0, 0], focus: 1.4 };
@@ -1256,14 +1716,15 @@ function updateCamera(t, dt, aspect) {
   const pos = [f.pos[0] + st * 0.004 * drift(t * 0.21, 1) + CAM.par[0] * 0.06,
                f.pos[1] + st * (0.003 * drift(t * 0.19, 2) + breath) + CAM.par[1] * 0.035,
                f.pos[2] + st * 0.004 * drift(t * 0.17, 3)];
-  const tgt = [f.tgt[0] + st * 0.004 * drift(t * 0.13, 4) + CAM.par[0] * 0.02, f.tgt[1] + st * 0.003 * drift(t * 0.11, 5) + CAM.par[1] * 0.012, f.tgt[2]];
+  let tgt = [f.tgt[0] + st * 0.004 * drift(t * 0.13, 4) + CAM.par[0] * 0.02, f.tgt[1] + st * 0.003 * drift(t * 0.11, 5) + CAM.par[1] * 0.012, f.tgt[2]];
+  if (DBG.zoom > 1) tgt = [DBG.zx, DBG.zy, S.GLASS_Z];
   const fwd = V.norm(V.sub(tgt, pos));
   const roll = st * 0.0012 * drift(t * 0.09, 6);
   let right = V.norm(V.cross(fwd, [0, 1, 0]));
   let up = V.cross(right, fwd);
   right = V.add(V.mul(right, Math.cos(roll)), V.mul(up, Math.sin(roll)));
   up = V.cross(right, fwd);
-  const ty = Math.tan(f.vfov * Math.PI / 360);
+  const ty = Math.tan(f.vfov * Math.PI / 360) / DBG.zoom;
   CAM.pos = pos; CAM.fwd = fwd; CAM.right = right; CAM.up = up; CAM.tan = [ty * aspect, ty];
   CAM.focus = (S.GLASS_Z - pos[2]) / fwd[2];   // focus distance: the glass, along the view axis
 }
@@ -1286,7 +1747,7 @@ function lightUniforms(t, dt) {
   const T = 1800 + 900 * Math.sqrt(lv);
   const lampI = mulc(bb(T), 2.3 * lv * lv * fl);
   const tau3 = [0.20, 0.14, 0.075];       // cream fabric: transmits red/yellow better than blue
-  const skyL = mulc(bb(9500, 0.62), 0.085);
+  const skyL = mulc(bb(9500, 0.62), 0.11);
   const cityL = mulc(bb(3400, 0.5), 0.042);
   const ambL = mulc(lampI, 0.075).map((v, i) => v * [1.0, 0.92, 0.75][i]);
   const ambS = mulc(skyL, 0.55);
@@ -1301,7 +1762,7 @@ function lightUniforms(t, dt) {
    Renderer
    ========================================================================== */
 const R = { progs: {}, tg: {}, sizes: {}, roomScale: 0.75, mainScale: 1, dprCap: 2 };
-let spriteVAO, spriteBuf;
+let spriteVAO, spriteBuf, dropVAO, dropBuf, stateTex;
 
 function initGL() {
   gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: DBG.shot, powerPreference: 'high-performance' });
@@ -1317,7 +1778,20 @@ function initGL() {
   gl.bindBuffer(gl.ARRAY_BUFFER, spriteBuf);
   gl.bufferData(gl.ARRAY_BUFFER, OUT.sprites.byteLength, gl.DYNAMIC_DRAW);
   for (let i = 0; i < 3; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 48, i * 16); gl.vertexAttribDivisor(i, 1); }
+  dropVAO = gl.createVertexArray();
+  gl.bindVertexArray(dropVAO);
+  dropBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, dropBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, SIM.inst.byteLength, gl.DYNAMIC_DRAW);
+  for (let i = 0; i < 2; i++) { gl.enableVertexAttribArray(i); gl.vertexAttribPointer(i, 4, gl.FLOAT, false, 32, i * 16); gl.vertexAttribDivisor(i, 1); }
   gl.bindVertexArray(null);
+  stateTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, stateTex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, SIM.GW, SIM.GH);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   return true;
 }
 function buildPrograms() {
@@ -1326,6 +1800,7 @@ function buildPrograms() {
   P.outside = makeProgram('outside', VS_FULL, FS_OUTSIDE());
   P.sprite = makeProgram('sprite', VS_SPRITE(), FS_SPRITE());
   P.composite = makeProgram('composite', VS_FULL, FS_COMPOSITE());
+  P.drop = makeProgram('drop', VS_DROP(), FS_DROP());
   P.final = makeProgram('final', VS_FULL, FS_FINAL());
   P.blit = makeProgram('blit', VS_FULL, FS_BLIT());
 }
@@ -1342,8 +1817,12 @@ function allocTargets() {
   T.hdr = makeTarget(W, H, [hdr]);
   T.room = makeTarget(W * R.roomScale, H * R.roomScale, [hdr, caps.hdr ? 'r16f' : 'rgba8']);
   T.defocus = makeTarget(Math.ceil(W / 2), Math.ceil(H / 2), [hdr], { mips: true });
-  const sw = W > 1400 ? 768 : 512;
+  const sw = W > 1400 ? 1024 : 768;
   T.sharp = makeTarget(sw, sw * 0.75, [hdr], { mips: true });
+  // height field: about one texel per screen pixel of glass, 512..1408 wide
+  const glassPx = W * (S.WIN_X1 - S.WIN_X0) / (2 * CAM.tan[0] * Math.abs(CAM.focus || 1.9));
+  const hw = clamp(Math.round(glassPx * 1.1 / 64) * 64, 512, 1408);
+  T.height = makeTarget(hw, Math.round(hw * SIM.H / SIM.W), [caps.hdr ? 'r16f' : 'rgba8'], { mips: true });
 }
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, R.dprCap);
@@ -1362,8 +1841,9 @@ function lightU(pr, Lt) {
 }
 function outsideUniforms(pr, t) {
   U(pr, 'uTime', t);
-  const lamps = new Float32Array(16);
+  const lamps = new Float32Array(24);
   OUT.lamps.forEach((x, i) => { lamps.set([x, S.GROUND_Y + 6.4, S.CURB_Z - 0.6, 1.0], i * 4); });
+  lamps.set([-15, S.GROUND_Y + 6.4, -4.2, 1.2], 16); lamps.set([13, S.GROUND_Y + 6.4, -4.2, 1.2], 20);
   gl.uniform4fv(pr.u.uStreetLamps, lamps);
   const cars = new Float32Array(16);
   OUT.cars.slice(0, 4).forEach((c, i) => cars.set([c.x, c.z, c.dir, c.I * smooth(0, 3, c.age)], i * 4));
@@ -1386,6 +1866,7 @@ function drawSprites(target, mode, eye) {
 
 function render(t, dt) {
   const P = R.progs, T = R.tg;
+  const hScale = caps.hdr ? 1 : 0.25;
   const Lt = lightUniforms(t, dt);
   // 光圈：虚拟镜头光圈半径 34mm（≈85mm f/1.2 级别的大光圈，为得到明显的焦外光斑），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
   R.aperture = 0.034;
@@ -1413,6 +1894,27 @@ function render(t, dt) {
   drawSprites(T.defocus, 1, CAM.pos);
   gl.bindTexture(gl.TEXTURE_2D, T.defocus.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
 
+  // 2b) drops → height field (MAX blend), with mips for the condensation blur
+  bindTarget(T.height);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if (SIM.n > 0) {
+    packDrops();
+    gl.useProgram(P.drop.p);
+    U(P.drop, 'uSimMM', [SIM.W, SIM.H]); U(P.drop, 'uHScale', hScale);
+    gl.bindVertexArray(dropVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, dropBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, SIM.inst, 0, SIM.n * 8);
+    gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, SIM.n);
+    gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
+  }
+  gl.bindTexture(gl.TEXTURE_2D, T.height.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
+  // glass state grids (CPU) → texture
+  packFields();
+  gl.bindTexture(gl.TEXTURE_2D, stateTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SIM.GW, SIM.GH, gl.RGBA, gl.UNSIGNED_BYTE, SIM.tex);
+
   // 3) room
   bindTarget(T.room);
   gl.useProgram(P.room.p);
@@ -1424,18 +1926,22 @@ function render(t, dt) {
   bindTarget(T.hdr);
   gl.useProgram(P.composite.p);
   camUniforms(P.composite); lightU(P.composite, Lt);
-  U(P.composite, 'uRes', [T.hdr.w, T.hdr.h]);
+  U(P.composite, 'uRes', [T.hdr.w, T.hdr.h]); U(P.composite, 'uTime', t); U(P.composite, 'uDbg', I(+(QS.get('dbg') || 0)));
+  U(P.composite, 'uSimMM', [SIM.W, SIM.H]); U(P.composite, 'uHTex', [T.height.w, T.height.h]); U(P.composite, 'uHScale', hScale);
   bindTex(P.composite, 'uRoom', T.room.tex, 0);
   bindTex(P.composite, 'uDefocus', T.defocus.tex, 1);
+  bindTex(P.composite, 'uSharp', T.sharp.tex, 2);
+  bindTex(P.composite, 'uHeight', T.height.tex, 3);
+  bindTex(P.composite, 'uState', stateTex, 4);
   drawFull();
 
   // 5) final
   bindTarget(null);
   if (DBG.view) {
-    const src = { room: T.room.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex }[DBG.view] || T.hdr.tex;
+    const src = { room: T.room.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex, height: T.height.tex, state: { t: stateTex } }[DBG.view] || T.hdr.tex;
     gl.useProgram(P.blit.p);
-    U(P.blit, 'uRes', [canvas.width, canvas.height]); U(P.blit, 'uScale', DBG.view === 'depth' ? 0.5 : 1.5);
-    U(P.blit, 'uChan', I(DBG.view === 'cov' ? 1 : DBG.view === 'depth' ? 2 : 0));
+    U(P.blit, 'uRes', [canvas.width, canvas.height]); U(P.blit, 'uScale', DBG.view === 'depth' ? 0.5 : DBG.view === 'height' ? 1.2 : 1.5);
+    U(P.blit, 'uChan', I(DBG.view === 'cov' ? 1 : (DBG.view === 'depth' || DBG.view === 'height') ? 2 : 0));
     bindTex(P.blit, 'uTex', src, 0);
     drawFull();
     return;
@@ -1454,6 +1960,7 @@ let running = false, lastT = 0, simT = DBG.t0, frame = 0;
 R.fade = DBG.shot ? 1 : 0;
 function loop(now) {
   if (!running) return;
+  if (DBG.frames && frame >= DBG.frames) { window.__done = true; return; }
   requestAnimationFrame(loop);
   const t = now / 1000;
   const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t)));
@@ -1462,6 +1969,7 @@ function loop(now) {
   resize();
   updateCamera(simT, dt, canvas.clientWidth / Math.max(1, canvas.clientHeight));
   updateOutside(dt, simT);
+  simAdvance(dt);
   if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.0);
   render(simT, dt);
   frame++;
@@ -1480,6 +1988,9 @@ function boot() {
   if (!initGL()) { fail('no webgl2'); return; }
   buildOutside();
   for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
+  const t0 = performance.now();
+  prewarm(+(QS.get('warm') || 90));
+  console.log('prewarm', (performance.now() - t0).toFixed(0) + 'ms', JSON.stringify(simStats()));
   buildPrograms();
   const wait = () => {
     if (!programsReady()) { setTimeout(wait, 30); return; }
