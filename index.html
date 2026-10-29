@@ -2265,6 +2265,211 @@ const UI = (() => {
 })();
 
 /* ============================================================================
+   AUDIO — everything synthesised with Web Audio, driven by the simulation
+   ----------------------------------------------------------------------------
+   · 雨幕：粉红噪声 → 高通 180Hz → 低通约 2.4kHz（隔着玻璃，高频被削弱），慢速随机阵风调制。
+   · 近处雨点：离线合成 9 秒稀疏的衰减共振脉冲（Poisson 到达，1–6 kHz），两路不同速率循环避免重复感。
+   · 玻璃上的「嗒」：由模拟中真实落在玻璃上的雨滴触发；响度 ∝ D^1.5，声像随落点左右移动；
+     音色 = 瞬态 + 窗玻璃几个低阶模态（约 0.5/1.1/1.8/3 kHz）的衰减。
+   · 滴水：水从窗框流下时触发；气泡共振（Minnaert）在气泡上浮时频率上扬，是「叮」声的来源。
+   · 车声：每辆车一路滤波噪声，响度随距离、声像随位置、频率随径向速度（多普勒）变化，与画面同步。
+   · 室内底噪、台灯开关的咔哒、手指擦玻璃的摩擦声；房间混响用程序生成的指数衰减脉冲响应。
+   ========================================================================== */
+Object.assign(AUDIO, (() => {
+  let ctx = null, master, comp, wet, enabled = true, ready = false;
+  let bedGain, bedLP, patGain, roomGain, tickBuf = [], dripBuf = [], clickBuf, cars = [];
+  let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
+  const rand = Math.random;
+  function noiseBuffer(sec, kind) {
+    const sr = ctx.sampleRate, n = Math.floor(sr * sec), buf = ctx.createBuffer(2, n, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, last = 0;
+      for (let i = 0; i < n; i++) {
+        const w = rand() * 2 - 1;
+        if (kind === 'brown') { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; continue; }
+        b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
+      }
+      // cross-fade the loop seam
+      const f = Math.floor(sr * 0.05);
+      for (let i = 0; i < f; i++) { const a = i / f; d[i] = d[i] * a + d[n - f + i] * (1 - a); }
+    }
+    return buf;
+  }
+  function patterBuffer(sec, density) {
+    const sr = ctx.sampleRate, n = Math.floor(sr * sec), buf = ctx.createBuffer(2, n, sr);
+    const L = buf.getChannelData(0), Rr = buf.getChannelData(1);
+    for (let t = 0; ; ) {
+      t += -Math.log(1 - rand()) / density; if (t >= sec) break;
+      const i0 = Math.floor(t * sr), f = 900 + rand() * 5200, dec = 0.002 + rand() * 0.01, amp = 0.04 + 0.3 * rand() ** 3, pan = rand();
+      const len = Math.floor(dec * 7 * sr); let ph = rand() * 6.283;
+      for (let k = 0; k < len; k++) {
+        const tt = k / sr, env = Math.exp(-tt / dec) * (1 - Math.exp(-tt / 0.0003));
+        const v = amp * env * (Math.sin(ph) * 0.55 + (rand() * 2 - 1) * 0.45 * Math.exp(-tt / 0.0012));
+        ph += 6.2832 * f / sr; const j = (i0 + k) % n; L[j] += v * (1 - pan); Rr[j] += v * pan;
+      }
+    }
+    return buf;
+  }
+  function tickBuffer() {
+    const sr = ctx.sampleRate, n = Math.floor(sr * 0.09), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    const modes = [[480 + rand() * 120, 0.035, 0.5], [1050 + rand() * 200, 0.022, 0.45], [1750 + rand() * 300, 0.014, 0.35], [2900 + rand() * 500, 0.008, 0.3]];
+    for (let i = 0; i < n; i++) {
+      const t = i / sr; let v = (rand() * 2 - 1) * Math.exp(-t / 0.0007) * 0.9;
+      for (const [f, dcy, a] of modes) v += a * Math.sin(6.2832 * f * t) * Math.exp(-t / dcy);
+      d[i] = v * (1 - Math.exp(-t / 0.0002)) * 0.5;
+    }
+    return buf;
+  }
+  function dripBuffer() {
+    // bubble ("plink"): Minnaert resonance rising as the bubble surfaces, plus the impact click
+    const sr = ctx.sampleRate, n = Math.floor(sr * 0.22), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    const f0 = 1100 + rand() * 900, rise = 0.35 + rand() * 0.5, dec = 0.03 + rand() * 0.035; let ph = 0;
+    for (let i = 0; i < n; i++) {
+      const t = i / sr, f = f0 * (1 + rise * (1 - Math.exp(-t / 0.025)));
+      ph += 6.2832 * f / sr;
+      d[i] = (Math.sin(ph) * Math.exp(-t / dec) * 0.5 + (rand() * 2 - 1) * Math.exp(-t / 0.0015) * 0.35) * (1 - Math.exp(-t / 0.0004));
+    }
+    return buf;
+  }
+  function clickBuffer() {
+    const sr = ctx.sampleRate, n = Math.floor(sr * 0.12), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      const c1 = (rand() * 2 - 1) * Math.exp(-t / 0.0012) + 0.6 * Math.sin(6.2832 * 2400 * t) * Math.exp(-t / 0.004);
+      const t2 = t - 0.018, c2 = t2 > 0 ? (rand() * 2 - 1) * Math.exp(-t2 / 0.0009) * 0.6 + 0.4 * Math.sin(6.2832 * 3100 * t2) * Math.exp(-t2 / 0.003) : 0;
+      d[i] = (c1 + c2 + 0.25 * Math.sin(6.2832 * 190 * t) * Math.exp(-t / 0.03)) * 0.4;
+    }
+    return buf;
+  }
+  function reverbIR() {
+    const sr = ctx.sampleRate, n = Math.floor(sr * 1.4), buf = ctx.createBuffer(2, n, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch); let lp = 0;
+      for (let i = 0; i < n; i++) { const t = i / sr; lp += ((rand() * 2 - 1) - lp) * 0.35; d[i] = lp * Math.exp(-t / 0.32) * (t < 0.012 ? t / 0.012 : 1); }
+    }
+    return buf;
+  }
+  function loop(buf, rate, dest) { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.playbackRate.value = rate; s.loopStart = 0; s.connect(dest); s.start(0, rand() * buf.duration); return s; }
+  function build() {
+    master = ctx.createGain(); master.gain.value = 0;
+    comp = ctx.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 2.5; comp.attack.value = 0.02; comp.release.value = 0.4;
+    master.connect(comp); comp.connect(ctx.destination);
+    const conv = ctx.createConvolver(); conv.buffer = reverbIR(); wet = ctx.createGain(); wet.gain.value = 0.35; wet.connect(conv); conv.connect(master);
+    const pink = noiseBuffer(9.3, 'pink'), brown = noiseBuffer(7.1, 'brown');
+    // rain wash outside the glass
+    bedGain = ctx.createGain(); bedGain.gain.value = 0;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
+    bedLP = ctx.createBiquadFilter(); bedLP.type = 'lowpass'; bedLP.frequency.value = 2400; bedLP.Q.value = 0.4;
+    loop(pink, 1.0, hp); loop(pink, 0.947, hp);
+    hp.connect(bedLP); bedLP.connect(bedGain); bedGain.connect(master);
+    // patter on the sill / awning outside
+    const pat = patterBuffer(9.0, 60);
+    patGain = ctx.createGain(); patGain.gain.value = 0;
+    const pLP = ctx.createBiquadFilter(); pLP.type = 'lowpass'; pLP.frequency.value = 4200;
+    loop(pat, 1.0, pLP); loop(pat, 0.913, pLP);
+    pLP.connect(patGain); patGain.connect(master);
+    // room tone
+    roomGain = ctx.createGain(); roomGain.gain.value = 0.05;
+    const rLP = ctx.createBiquadFilter(); rLP.type = 'lowpass'; rLP.frequency.value = 160;
+    loop(brown, 1.0, rLP); rLP.connect(roomGain); roomGain.connect(master);
+    for (let i = 0; i < 6; i++) tickBuf.push(tickBuffer());
+    for (let i = 0; i < 5; i++) dripBuf.push(dripBuffer());
+    clickBuf = clickBuffer();
+    // three car channels: engine/road rumble + tyre hiss on the wet street, panned and filtered per frame
+    for (let i = 0; i < 3; i++) {
+      const g = ctx.createGain(); g.gain.value = 0;
+      const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 500; bp.Q.value = 0.6;
+      const hiss = ctx.createBiquadFilter(); hiss.type = 'bandpass'; hiss.frequency.value = 2600; hiss.Q.value = 0.8;
+      const hg = ctx.createGain(); hg.gain.value = 0.6;
+      const s1 = loop(brown, 1.0, bp), s2 = loop(pink, 1.0, hiss);
+      bp.connect(g); hiss.connect(hg); hg.connect(g);
+      if (pan) { g.connect(pan); pan.connect(master); } else g.connect(master);
+      cars.push({ g, pan, bp, s1, s2 });
+    }
+    ready = true;
+  }
+  function oneShot(buf, gain, pan, rate = 1, toWet = 0.3, lp = 0) {
+    if (!ready) return;
+    const s = ctx.createBufferSource(); s.buffer = buf; s.playbackRate.value = rate;
+    const g = ctx.createGain(); g.gain.value = gain;
+    let node = s;
+    if (lp) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp; node.connect(f); node = f; }
+    node.connect(g);
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (p) { p.pan.value = clamp(pan, -1, 1); g.connect(p); p.connect(master); p.connect(wet); } else { g.connect(master); }
+    if (!p) g.connect(wet);
+    s.start();
+  }
+  return {
+    unlock() {
+      if (!enabled) return;
+      try {
+        if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; ctx = new AC(); build(); }
+        if (ctx.state === 'suspended') ctx.resume();
+        master.gain.cancelScheduledValues(ctx.currentTime);
+        master.gain.setTargetAtTime(1.0, ctx.currentTime, 1.2);       // gentle fade-in
+      } catch (e) { console.warn('audio', e); }
+    },
+    setEnabled(on) {
+      enabled = on;
+      if (!ctx) { if (on) this.unlock(); return; }
+      master.gain.setTargetAtTime(on ? 1.0 : 0, ctx.currentTime, on ? 0.6 : 0.25);
+      if (on && ctx.state === 'suspended') ctx.resume();
+    },
+    suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
+    resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
+    click(on) { if (ready) oneShot(clickBuf, 0.5, -0.45, on ? 1.0 : 0.88, 0.4); },
+    rub(dist) {
+      if (!ready || dist < 0.002) return;
+      const sr = ctx.sampleRate, n = Math.floor(sr * 0.06), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) { const t = i / n; d[i] = (rand() * 2 - 1) * Math.sin(Math.PI * t) * 0.3; }
+      oneShot(b, clamp(dist * 9, 0.02, 0.25), 0, 1, 0.2, 1800);
+    },
+    update(dt, wdt) {
+      if (!ready || ctx.state !== 'running') { SIM.events.length = 0; return; }
+      const now = ctx.currentTime, I = SIM.rain;
+      // slow gusts: random walk retargeted every couple of seconds
+      gustT -= dt; if (gustT <= 0) { gustT = 1.5 + rand() * 2.5; gust = clamp(gust * 0.6 + (rand() - 0.45) * 0.8, -0.4, 0.6); }
+      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * Math.min(1, TIME.scale * 1.3 + 0.2);
+      bedGain.gain.setTargetAtTime(bed, now, 0.8);
+      bedLP.frequency.setTargetAtTime(2500 + 1300 * I + 600 * gust, now, 0.8);
+      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust), now, 0.6);
+      // window ticks from real impacts (rate-limited)
+      secT += dt; if (secT > 1) { secT = 0; ticksThisSec = 0; }
+      for (const ev of SIM.events) {
+        if (ev.type === 'hit' && ev.D > 0.9 && ticksThisSec < 14 && now - lastTick > 0.03) {
+          const pan = (ev.x / SIM.W) * 2 - 1;
+          oneShot(tickBuf[(rand() * tickBuf.length) | 0], clamp(0.05 * Math.pow(ev.D, 1.5), 0.02, 0.32), pan * 0.7, 0.85 + rand() * 0.35 + (2 - ev.D) * 0.05, 0.25, 5200);
+          lastTick = now; ticksThisSec++;
+        } else if (ev.type === 'drain' && rand() < 0.35) {
+          oneShot(dripBuf[(rand() * dripBuf.length) | 0], 0.06 + 0.06 * rand(), (ev.x / SIM.W) * 1.4 - 0.7, 0.9 + rand() * 0.25, 0.5, 6000);
+        }
+      }
+      SIM.events.length = 0;
+      // an eave dripping onto the metal sill outside, irregular
+      dripT -= wdt; if (dripT <= 0) { dripT = 1.6 + rand() * 4.5 / (0.4 + I); oneShot(dripBuf[(rand() * dripBuf.length) | 0], 0.05 + 0.05 * I, 0.55, 0.85 + rand() * 0.3, 0.55, 5000); }
+      // cars: loudness ~ 1/(1+(d/d0)²), pan by bearing, Doppler on the rumble
+      for (let k = 0; k < cars.length; k++) {
+        const ch = cars[k], c = OUT.cars[k];
+        if (!c) { ch.g.gain.setTargetAtTime(0, now, 0.5); continue; }
+        const dx = c.x, dz = c.z, d = Math.hypot(dx, dz, S.GROUND_Y - 1.2);
+        const vr = c.dir * c.v * dx / d;                       // radial velocity (+ = receding)
+        const dop = 343 / (343 + vr);
+        const L = 0.5 * c.I / (1 + (d / 11) ** 2) * smooth(0, 4, c.age) * Math.min(1, TIME.scale + 0.2);
+        ch.g.gain.setTargetAtTime(L, now, 0.15);
+        if (ch.pan) ch.pan.pan.setTargetAtTime(clamp(dx / (Math.abs(dx) + 12), -0.95, 0.95), now, 0.15);
+        ch.s1.playbackRate.setTargetAtTime(dop * TIME.scale ** 0.2, now, 0.2);
+        ch.bp.frequency.setTargetAtTime(380 + 260 * dop, now, 0.2);
+      }
+    },
+  };
+})());
+
+/* ============================================================================
    Main loop
    ========================================================================== */
 let running = false, lastT = 0, simT = DBG.t0, realT = 0, frame = 0;
@@ -2302,7 +2507,7 @@ function start() {
   requestAnimationFrame(loop);
 }
 function stop() { running = false; }
-document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); AUDIO.suspend(); } else { start(); AUDIO.resume(); } });
 
 function boot() {
   if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, pickGlass, camRay };
