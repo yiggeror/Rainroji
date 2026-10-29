@@ -219,10 +219,12 @@ vec3 shadeRadiance(vec3 p){
   vec3 L = BULB - p; float d2 = dot(L, L);
   float y01 = (q.y - SHADE_Y0) / (SHADE_Y1 - SHADE_Y0);
   float ang = atan(q.z, q.x);
-  float pleat = 0.9 + 0.1 * cos(ang * 46.0);
-  float trim = 1.0 - 0.45 * (smoothstep(0.06, 0.0, y01) + smoothstep(0.94, 1.0, y01)); // bias binding at the rims
-  float seam = 1.0 - 0.3 * smoothstep(0.02, 0.0, abs(ang - 2.2));
-  return uLampI * uShadeTau * (0.62 / d2) / PI * pleat * trim * seam;
+  float pleat = 0.84 + 0.16 * pow(0.5 + 0.5 * cos(ang * 46.0), 0.7);                // folds: thicker cloth at the creases
+  float weave = 0.94 + 0.06 * vnoise(vec2(ang * 120.0, y01 * 60.0));
+  float trim = 1.0 - 0.55 * (smoothstep(0.07, 0.0, y01) + smoothstep(0.93, 1.0, y01)); // bias binding at the rims
+  float seam = 1.0 - 0.35 * smoothstep(0.025, 0.0, abs(ang - 2.2));
+  float aged = 1.0 - 0.12 * smoothstep(0.5, 0.8, vnoise(vec2(ang * 3.0, y01 * 4.0)));   // faint brown age spots
+  return uLampI * uShadeTau * (0.48 / d2) / PI * pleat * weave * trim * seam * aged;
 }
 // rectangular Lambertian emitter → irradiance / radiance (Lambert polygon formula, exact w/o horizon clipping)
 float edgeT(vec3 a, vec3 b, vec3 n){ float c = clamp(dot(a, b), -0.9999, 0.9999); vec3 cr = cross(a, b); return acos(c) * dot(n, cr) * inversesqrt(max(dot(cr, cr), 1e-10)); }
@@ -471,9 +473,11 @@ vec3 wallpaper(vec2 uv, inout vec3 n, vec3 nAxis){
   float dotc = smoothstep(0.0024, 0.0016, r);
   vec3 c = base;
   c = mix(c, base * vec3(0.9, 0.93, 0.87), line);
-  c = mix(c, vec3(0.30, 0.37, 0.29), petal * 0.5);
-  c = mix(c, vec3(0.33, 0.38, 0.30), leaf * 0.3);
-  c = mix(c, vec3(0.52, 0.38, 0.25), dotc * 0.45);
+  // the print has faded unevenly over the years (sun, damp)
+  float fade = 0.35 + 0.65 * smoothstep(0.25, 0.75, fbm(uv * 2.2 + 11.0));
+  c = mix(c, vec3(0.27, 0.35, 0.27), petal * 0.55 * fade);
+  c = mix(c, vec3(0.30, 0.36, 0.28), leaf * 0.35 * fade);
+  c = mix(c, vec3(0.55, 0.36, 0.22), dotc * 0.45 * fade);
   // roll seams every 53 cm, slightly lifted
   float sx = abs(fract(uv.x / 0.53 + 0.37) - 0.5) * 0.53;
   float seam = smoothstep(0.0025, 0.0, sx);
@@ -520,14 +524,17 @@ Mat getMat(float id, vec3 p, inout vec3 n){
     m.alb *= 1.0 - 0.25 * smoothstep(0.012, 0.0, abs(p.z - GLASS_Z - 0.004)); // grime along the putty line
     m.rough = mix(0.42, 0.78, chipped);
   } else if (id == M_SILL){
-    m.alb = vec3(0.50, 0.47, 0.40) * (0.88 + 0.12 * fbm(p.xz * 20.0));
-    m.alb *= 1.0 - 0.25 * smoothstep(0.6, 0.85, fbm(p.xz * 6.0 + 2.0));
+    m.alb = vec3(0.47, 0.45, 0.38) * (0.86 + 0.14 * fbm(p.xz * 20.0));
+    m.alb *= 1.0 - 0.3 * smoothstep(0.6, 0.85, fbm(p.xz * 6.0 + 2.0));              // water stains
+    float ring = abs(length(p.xz - vec2(0.18, -0.04)) - 0.036);                     // a ring left by a flower pot
+    m.alb *= 1.0 - 0.25 * smoothstep(0.004, 0.0, ring);
+    m.alb = mix(m.alb, vec3(0.2, 0.15, 0.1), 0.35 * smoothstep(0.72, 0.8, fbm(p.xz * 30.0 + p.y * 9.0)));  // chipped paint
     m.rough = 0.55;
   } else if (id == M_DESK){
     float g = fbm(vec2(p.x * 1.3, p.z * 24.0));
     float grain = 0.5 + 0.5 * sin(p.z * 160.0 + 9.0 * fbm(vec2(p.x * 0.9, p.z * 5.0)) + p.x * 2.0);
     grain = pow(grain, 2.5);
-    vec3 dark = vec3(0.038, 0.017, 0.008), light = vec3(0.10, 0.05, 0.024);
+    vec3 dark = vec3(0.034, 0.018, 0.009), light = vec3(0.092, 0.054, 0.03);
     vec3 c = mix(light, dark, sat(grain * 0.55 + 0.45 * g));
     float wear = smoothstep(0.48, 0.66, p.z) * (0.5 + 0.5 * fbm(p.xz * 18.0));
     c = mix(c, c * 1.45 + vec3(0.015, 0.009, 0.004), wear * 0.55);
@@ -607,7 +614,7 @@ float D_GGX(float nh, float a){ float a2 = a * a; float d = nh * nh * (a2 - 1.0)
 vec3 F_Schlick(vec3 f0, float c){ return f0 + (1.0 - f0) * pow(1.0 - c, 5.0); }
 float V_Smith(float nv, float nl, float a){ float k = a * 0.5; return 0.25 / ((nv * (1.0 - k) + k) * (nl * (1.0 - k) + k)); }
 
-vec3 windowRadiance(vec3 d){ return mix(uCityL, uSkyL, smoothstep(0.03, 0.32, d.y)); }
+vec3 windowRadiance(vec3 d){ return mix(uCityL * 2.6, uSkyL * 1.4, smoothstep(0.03, 0.32, d.y)); }
 
 vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
   vec3 nGeo = n;
@@ -1573,11 +1580,20 @@ function vnoiseJS(x, y) {
     // condensation forms first at the cold bottom of each pane and along its edges
     let f0 = 0.05;
     for (const p of SIM.panes) if (x >= p[0] - 1 && x <= p[2] + 1 && y >= p[1] - 1 && y <= p[3] + 1) {
-      const yf = (y - p[1]) / (p[3] - p[1]);
+      // the fog line is ragged: its height wanders along the pane
+      const yf = (y - p[1]) / (p[3] - p[1]) + 0.16 * (vnoiseJS(x / 14, 3.7) - 0.5) + 0.06 * (vnoiseJS(x / 4, 9.1) - 0.5);
       const edge = Math.min(x - p[0], p[2] - x, y - p[1], p[3] - y);
-      f0 = 0.10 + 0.78 * Math.pow(1 - smooth(0.02, 0.48, yf), 1.4) + 0.2 * Math.exp(-Math.max(edge, 0) / 5);
+      f0 = 0.08 + 0.8 * Math.pow(1 - smooth(0.0, 0.46, yf), 1.5) + 0.2 * Math.exp(-Math.max(edge, 0) / 5);
+      // condensed droplets that grew heavy and ran down, leaving clear wavy lines in the fog
+      const col = Math.floor(x / 13), cx = (col + 0.2 + 0.6 * hashI(col, 31)) * 13;
+      if (hashI(col, 77) < 0.4) {
+        const top = p[1] + (p[3] - p[1]) * (0.1 + 0.32 * hashI(col, 5));
+        const wx = cx + 0.25 * Math.sin(y * 0.22 + col) + 0.12 * Math.sin(y * 0.9);
+        if (y < top) f0 *= 0.25 + 0.75 * smooth(0.3, 0.8, Math.abs(x - wx));
+      }
     }
-    f0 += 0.16 * (vnoiseJS(x / 9, y / 6 + 20) - 0.5) + 0.06 * (vnoiseJS(x / 2, y / 2 + 70) - 0.5);
+    f0 *= 0.75 + 0.5 * vnoiseJS(x / 11, y / 8 + 20);
+    f0 += 0.06 * (vnoiseJS(x / 2, y / 2 + 70) - 0.5);
     SIM.F0[k] = clamp(f0, 0, 0.95);
     SIM.Fin[k] = SIM.F0[k];
     SIM.nuc[k] = 0.3 + 1.4 * hashI(i + 999, j);
@@ -1666,7 +1682,7 @@ function dcos(i, x, y) { const k = gidx(x, y); return SIM.hy[i] * SIM.het[k] * (
 function simStep(dt) {
   const n0 = SIM.n;
   // 1) rain arrivals (Poisson)
-  const lam = (12 + 150 * SIM.rain) * dt;
+  const lam = (0.5 + 160 * Math.pow(SIM.rain, 1.25)) * dt;        // impacts per second over the whole window
   let k = 0; const L = Math.exp(-lam); let p = rnd();
   while (p > L && k < 20) { k++; p *= rnd(); }
   for (let q = 0; q < k; q++) rainImpact();
@@ -1761,7 +1777,7 @@ let fieldRow = 0;
 function fieldStep(dt) {
   const GW = SIM.GW, GH = SIM.GH, rows = Math.ceil(GH / 4);
   const dtt = dt * 4;
-  const aM = (0.012 + 0.05 * SIM.rain) * dtt, dW = Math.exp(-dtt / 22), dR = Math.exp(-dtt / 45);
+  const aM = (0.004 + 0.06 * SIM.rain) * dtt, dW = Math.exp(-dtt / 22), dR = Math.exp(-dtt / 45);
   for (let r = 0; r < rows; r++) {
     const j = (fieldRow + r * 4) % GH;
     for (let i = 0, k = j * GW; i < GW; i++, k++) {
@@ -1823,8 +1839,9 @@ function prewarm(seconds) {
 const CAM = { pos: [0, 1.2, 1.4], fwd: [0, 0, -1], right: [1, 0, 0], up: [0, 1, 0], tan: [1, 1], par: [0, 0], parT: [0, 0], focus: 1.4 };
 function framing(aspect) {
   // landscape: window + lamp + corner + curtain; portrait: step back, taller lens, keep the lamp in frame
-  const L = { pos: [-0.10, 1.26, 1.85], tgt: [-0.12, 1.30, 0.0], vfov: 38 };
-  const P = { pos: [-0.27, 1.22, 2.1], tgt: [-0.25, 1.45, 0.0], vfov: 60 };
+  // a gentle three-quarter view (camera right of centre, looking slightly left): depth instead of a stage set
+  const L = { pos: [0.30, 1.27, 1.80], tgt: [-0.16, 1.33, 0.0], vfov: 42 };
+  const P = { pos: [0.06, 1.24, 2.05], tgt: [-0.24, 1.47, 0.0], vfov: 60 };
   const t = smooth(Math.log(0.56), Math.log(1.5), Math.log(aspect));
   const mix3 = (a, b) => a.map((v, i) => lerp(b[i], v, t));
   return { pos: mix3(L.pos, P.pos), tgt: mix3(L.tgt, P.tgt), vfov: lerp(P.vfov, L.vfov, t) };
@@ -1875,7 +1892,7 @@ function lightUniforms(t, dt) {
   const ambL = mulc(lampI, 0.075).map((v, i) => v * [1.0, 0.92, 0.75][i]);
   const ambS = mulc(skyL, 0.8);
   // eye adaptation: exposure follows the scene key slowly (dark-adapt 2.6 s, light-adapt 0.7 s)
-  const target = lerp(3.8, 1.0, smooth(0, 1, lv));
+  const target = lerp(4.6, 1.0, smooth(0, 1, lv));
   const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
   LIGHT.expoAdapt += (target - LIGHT.expoAdapt) * (1 - Math.exp(-dt / at));
   return { lampI, tau3, skyL, cityL, ambL, ambS };
