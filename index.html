@@ -19,11 +19,45 @@
     color:rgba(232,214,188,.72);font:300 15px/2 "Songti SC","Noto Serif SC",serif;letter-spacing:.2em;text-align:center;padding:24px;
     background:radial-gradient(ellipse at 50% 60%,#2a2219 0%,#0c0a09 70%)}
   #fallback small{opacity:.5;letter-spacing:.08em;font-size:12px}
+  /* minimal corner controls */
+  #ui{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));z-index:4;
+    font:300 12px/1.6 "PingFang SC","Noto Sans SC","Hiragino Sans GB",sans-serif;color:rgba(238,226,206,.82);letter-spacing:.12em;
+    transition:opacity 1.6s ease;opacity:0}
+  #ui.show{opacity:1} #ui.idle{opacity:.0} #ui.idle:hover{opacity:1} #ui.hidden{display:none}
+  #uiBtn{width:34px;height:34px;border-radius:50%;border:1px solid rgba(238,226,206,.22);background:rgba(20,16,13,.32);
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:inherit;cursor:pointer;padding:0;display:grid;place-items:center;margin-left:auto}
+  #uiBtn svg{width:15px;height:15px;opacity:.8}
+  #panel{position:absolute;right:0;bottom:44px;width:196px;padding:14px 16px 12px;border-radius:12px;background:rgba(20,16,13,.42);
+    border:1px solid rgba(238,226,206,.12);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    opacity:0;transform:translateY(6px);pointer-events:none;transition:opacity .5s ease,transform .5s ease}
+  #panel.open{opacity:1;transform:none;pointer-events:auto}
+  #panel label{display:block;margin:2px 0 10px}
+  #panel .row{display:flex;justify-content:space-between;align-items:center}
+  #panel input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;margin:2px 0 0}
+  #panel input[type=range]::-webkit-slider-runnable-track{height:1px;background:rgba(238,226,206,.35)}
+  #panel input[type=range]::-moz-range-track{height:1px;background:rgba(238,226,206,.35)}
+  #panel input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:#efe2cc;margin-top:-5px;border:0}
+  #panel input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:#efe2cc;border:0}
+  #panel button.tog{font:inherit;color:inherit;letter-spacing:.12em;background:none;border:1px solid rgba(238,226,206,.28);border-radius:10px;padding:1px 10px;cursor:pointer}
+  #panel .hint{margin-top:4px;font-size:11px;opacity:.5;letter-spacing:.06em;line-height:1.7}
+  #hint{position:fixed;left:0;right:0;bottom:max(22px,env(safe-area-inset-bottom));text-align:center;z-index:3;pointer-events:none;
+    font:300 12px/1.6 "Songti SC","Noto Serif SC",serif;letter-spacing:.42em;color:rgba(238,226,206,.55);opacity:0;transition:opacity 2.4s ease}
+  #hint.show{opacity:1}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="veil"><span>雨还在下</span></div>
+<div id="hint">轻触台灯 · 指尖划过玻璃</div>
+<div id="ui">
+  <div id="panel" role="dialog" aria-label="设置">
+    <label>雨势<input id="rain" type="range" min="0" max="1" step="0.01" value="0.55"></label>
+    <label>时间流速<input id="speed" type="range" min="0.2" max="2.5" step="0.01" value="1"></label>
+    <div class="row"><span>声音</span><button class="tog" id="snd" aria-pressed="true">开</button></div>
+    <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>H 隐藏 · L 台灯 · M 静音</div>
+  </div>
+  <button id="uiBtn" aria-label="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 1.8C8 1.8 3.6 7 3.6 10a4.4 4.4 0 0 0 8.8 0C12.4 7 8 1.8 8 1.8Z"/></svg></button>
+</div>
 <div id="fallback"><div>这台设备暂时打不开这扇窗。</div><small>需要 WebGL2 支持 —— 换一个较新的浏览器，雨还会在那里。</small></div>
 <script>
 (() => {
@@ -1115,7 +1149,7 @@ void main(){
   vec4 st = texture(uState, guv);
   float M = smoothstep(0.02, 0.9, st.r), W = st.g, Fin = st.b, rim = st.a;
   // ---- macro drops: height + gradient (condensation on the inside softens what is seen through it)
-  float lod = Fin * 2.3;
+  float lod = Fin * 3.0;
   vec2 e = exp2(lod) / uHTex;
   vec2 emm = e * uSimMM;
   float h = textureLod(uHeight, guv, lod).r / uHScale;
@@ -1151,7 +1185,7 @@ void main(){
   vec3 wetC = sharpC * (1.0 - Fw) * (1.0 - Fg) + inner * Fw * (1.0 - Fg) * 0.92;
   // dry glass: the defocused street, blurred further by the mist of micro droplets
   vec2 off = grad * 0.004 * vec2(1.0, uRes.x / uRes.y) / max(1.0, length(grad) * 2.0);
-  float blurL = M * 2.8 + Fin * 2.6;
+  float blurL = M * 2.8 + Fin * 3.4;
   vec3 dryC = textureLod(uDefocus, uv + off, blurL).rgb * (1.0 - Fg) * (1.0 - Fg);
   vec3 avgC = textureLod(uDefocus, uv, 6.5).rgb;
   dryC = mix(dryC, avgC * 1.2, M * 0.42);                                  // forward scattering veil of the mist
@@ -1162,8 +1196,8 @@ void main(){
   // inside condensation: scatters lamp & sky light (warm veil near the lamp), dims what is behind
   vec3 Lb = BULB - P; float ld2 = dot(Lb, Lb);
   vec3 Eg = uLampI * lampEmitFactor(-Lb * inversesqrt(ld2)) * max(Lb.z * inversesqrt(ld2), 0.0) / ld2 + uSkyL * 1.2 + uAmbL;
-  float fogA = Fin * 0.62 + rim * 0.3;
-  vec3 fogC = Eg * 0.10 * (0.88 + 0.24 * vnoise(pm * 2.5)) + avgC * 0.5;
+  float fogA = sat(Fin * 0.85 + rim * 0.35);
+  vec3 fogC = (Eg * 0.075 + uSkyL * 0.35 + avgC * 0.55) * (0.9 + 0.2 * vnoise(pm * 2.5)) * (1.0 + 0.6 * rim);
   vec3 glass = (through * (1.0 - fogA) + fogC * fogA) + refl;
   glass += Eg * 0.0025 * M * (1.0 - Fin);                                   // mist droplets lit from inside
   col += cov * glass;
@@ -1183,12 +1217,79 @@ void main(){
 `;
 
 // --------------------------------------------------------------------------
-// FINAL: exposure, ACES, sRGB, dither
+// ROOM DEPTH OF FIELD: thin-lens circle of confusion, focus on the glass.
+//   CoC(z) = A · |1/z − 1/z_f|  (angular radius, A = aperture radius)
+// Golden-angle gather; a sample farther than the centre only counts if its own
+// blur reaches us (keeps sharp foreground edges from being smeared by background).
+// --------------------------------------------------------------------------
+const FS_DOF = () => GLSL_HEAD() + `
+uniform sampler2D uRoom, uDepth;
+uniform vec2 uRes;
+uniform float uFocus, uAperture, uPxPerRad;
+out vec4 o;
+float cocPx(float z){ return min(uAperture * abs(1.0 / max(z, 0.05) - 1.0 / uFocus) * uPxPerRad, 22.0); }
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec4 c0 = texture(uRoom, uv);
+  float z0 = texture(uDepth, uv).r;
+  float coc = cocPx(z0);
+  if (coc < 0.75){ o = c0; return; }
+  vec4 acc = c0; float ws = 1.0;
+  float rot = hash12(gl_FragCoord.xy) * 6.2832;
+  for (int i = 0; i < 24; i++){
+    float fi = float(i) + 0.5;
+    float r = sqrt(fi / 24.0) * coc;
+    float a = fi * 2.39996 + rot;
+    vec2 q = uv + vec2(cos(a), sin(a)) * r / uRes;
+    vec4 cs = texture(uRoom, q);
+    float zs = texture(uDepth, q).r;
+    float w = zs < z0 + 0.01 ? 1.0 : sat(cocPx(zs) - r + 1.0);
+    acc += cs * w; ws += w;
+  }
+  o = acc / ws;
+}`;
+
+// --------------------------------------------------------------------------
+// BLOOM: no threshold — a small, energy-conserving fraction of the light is
+// scattered by the lens (13-tap downsample chain + tent upsample, Jimenez 2014).
+// --------------------------------------------------------------------------
+const FS_DOWN = () => GLSL_HEAD() + `
+uniform sampler2D uSrc; uniform vec2 uTexel; uniform vec2 uRes; uniform int uFirst;
+out vec4 o;
+vec3 T(vec2 uv, float x, float y){ return texture(uSrc, uv + vec2(x, y) * uTexel).rgb; }
+vec3 karis(vec3 a, vec3 b, vec3 c, vec3 d){
+  // Karis average on the first level suppresses single-pixel fireflies (glints in drops)
+  float wa = 1.0 / (1.0 + dot(a, vec3(0.2126, 0.7152, 0.0722))), wb = 1.0 / (1.0 + dot(b, vec3(0.2126, 0.7152, 0.0722)));
+  float wc = 1.0 / (1.0 + dot(c, vec3(0.2126, 0.7152, 0.0722))), wd = 1.0 / (1.0 + dot(d, vec3(0.2126, 0.7152, 0.0722)));
+  return (a * wa + b * wb + c * wc + d * wd) / (wa + wb + wc + wd);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 a = T(uv,-2.,-2.), b = T(uv,0.,-2.), c = T(uv,2.,-2.), d = T(uv,-1.,-1.), e = T(uv,1.,-1.), f = T(uv,-2.,0.), g = T(uv,0.,0.);
+  vec3 h = T(uv,2.,0.), i = T(uv,-1.,1.), j = T(uv,1.,1.), k = T(uv,-2.,2.), l = T(uv,0.,2.), m = T(uv,2.,2.);
+  vec3 col;
+  if (uFirst == 1) col = karis(d, e, i, j) * 0.5 + karis(a, b, f, g) * 0.125 + karis(b, c, g, h) * 0.125 + karis(f, g, k, l) * 0.125 + karis(g, h, l, m) * 0.125;
+  else col = (d + e + i + j) * 0.125 + (a + b + f + g + b + c + g + h + f + g + k + l + g + h + l + m) * 0.03125;
+  o = vec4(col, 1.0);
+}`;
+const FS_UP = () => GLSL_HEAD() + `
+uniform sampler2D uSrc; uniform vec2 uTexel; uniform vec2 uRes; uniform float uRadius;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes; vec2 d = uTexel * uRadius;
+  vec3 c = texture(uSrc, uv).rgb * 4.0;
+  c += (texture(uSrc, uv + vec2(-d.x, 0.0)).rgb + texture(uSrc, uv + vec2(d.x, 0.0)).rgb + texture(uSrc, uv + vec2(0.0, -d.y)).rgb + texture(uSrc, uv + vec2(0.0, d.y)).rgb) * 2.0;
+  c += texture(uSrc, uv - d).rgb + texture(uSrc, uv + d).rgb + texture(uSrc, uv + vec2(d.x, -d.y)).rgb + texture(uSrc, uv + vec2(-d.x, d.y)).rgb;
+  o = vec4(c / 16.0, 1.0);
+}`;
+
+// --------------------------------------------------------------------------
+// FINAL: lens (CA, bloom, vignette) → exposure → ACES → grade → sRGB → grain, dither
 // --------------------------------------------------------------------------
 const FS_FINAL = () => GLSL_HEAD() + `
-uniform sampler2D uHdr;
-uniform vec2 uRes;
-uniform float uExposure, uTime;
+uniform sampler2D uHdr, uBloom;
+uniform vec2 uRes, uTan;
+uniform float uExposure, uTime, uBloomStr, uGrain, uFrame;
 out vec4 o;
 const mat3 ACESIn = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
 const mat3 ACESOut = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
@@ -1196,10 +1297,31 @@ vec3 aces(vec3 v){ v = ACESIn * v; vec3 a = v * (v + 0.0245786) - 0.000090537; v
 vec3 toSRGB(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
-  vec3 c = texture(uHdr, uv).rgb * uExposure;
+  vec2 d = uv - 0.5;
+  // lateral chromatic aberration: ~1 px at the corners, none in the centre
+  vec2 ca = d * dot(d, d) * (2.4 / uRes.x) * 2.0;
+  vec3 c = vec3(texture(uHdr, uv - ca).r, texture(uHdr, uv).g, texture(uHdr, uv + ca).b);
+  // lens scatter: a few percent of the energy, slightly warm (film halation)
+  vec3 bl = texture(uBloom, uv).rgb / 6.0 * vec3(1.06, 0.98, 0.9);   // the chain sums 6 levels
+  c = mix(c, bl, uBloomStr);
+  // natural vignetting ~cos⁴ of the field angle, softened
+  vec2 ta = (uv * 2.0 - 1.0) * uTan;
+  float c4 = 1.0 / pow(1.0 + dot(ta, ta), 2.0);
+  c *= mix(1.0, c4, 0.6) * uExposure;
   c = aces(c);
+  // grade in display-linear: faint teal in the shadows, amber in the highlights, slight desaturation
+  float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c *= mix(vec3(0.94, 1.01, 1.04), vec3(1.03, 1.0, 0.95), smoothstep(0.05, 0.6, L));
+  c = mix(vec3(L), c, 0.95);
   c = toSRGB(c);
-  float n = hash12(gl_FragCoord.xy + fract(uTime) * 91.0) + hash12(gl_FragCoord.xy * 1.37 + 17.0 + fract(uTime) * 37.0) - 1.0;
+  // faded print: blacks lifted a little and never neutral-black
+  c = c * (1.0 - 0.024) + vec3(0.022, 0.024, 0.026);
+  // film grain: triangular noise, strongest in the mid-tones, re-seeded every frame
+  float fr = mod(uFrame, 64.0);
+  float g = hash12(gl_FragCoord.xy * 0.937 + vec2(fr * 17.13, fr * 7.71)) + hash12(gl_FragCoord.xy * 1.213 + vec2(fr * 3.37 + 11.0, fr * 13.1)) - 1.0;
+  float Ls = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c += g * uGrain * (0.35 + 2.2 * Ls * (1.0 - Ls));
+  float n = hash12(gl_FragCoord.xy + fr * 91.0) + hash12(gl_FragCoord.xy * 1.37 + 17.0 + fr * 37.0) - 1.0;
   o = vec4(c + n / 255.0, 1.0);
 }
 `;
@@ -1453,7 +1575,7 @@ function vnoiseJS(x, y) {
     for (const p of SIM.panes) if (x >= p[0] - 1 && x <= p[2] + 1 && y >= p[1] - 1 && y <= p[3] + 1) {
       const yf = (y - p[1]) / (p[3] - p[1]);
       const edge = Math.min(x - p[0], p[2] - x, y - p[1], p[3] - y);
-      f0 = 0.06 + 0.62 * Math.pow(1 - smooth(0, 0.42, yf), 1.6) + 0.22 * Math.exp(-Math.max(edge, 0) / 5);
+      f0 = 0.10 + 0.78 * Math.pow(1 - smooth(0.02, 0.48, yf), 1.4) + 0.2 * Math.exp(-Math.max(edge, 0) / 5);
     }
     f0 += 0.16 * (vnoiseJS(x / 9, y / 6 + 20) - 0.5) + 0.06 * (vnoiseJS(x / 2, y / 2 + 70) - 0.5);
     SIM.F0[k] = clamp(f0, 0, 0.95);
@@ -1565,8 +1687,9 @@ function simStep(dt) {
     const vt = (Fg - Fk) / (BETA * r);
     // lateral bias from the heterogeneity gradient across the drop front, plus a slow random walk
     const g = (dcos(i, x + r, y - r) - dcos(i, x - r, y - r)) / (2 * r);
-    SIM.lat[i] += (-SIM.lat[i] * 1.5 + (rnd() - 0.5) * 6.0) * dt;
-    const lat = clamp(-2.2 * g * r / Math.max(dc, 0.02) + SIM.lat[i], -0.8, 0.8);
+    // Ornstein–Uhlenbeck wander (τ ≈ 0.7 s): real paths are mostly vertical with gentle zig-zags
+    SIM.lat[i] += (-SIM.lat[i] * 1.4 + (rnd() - 0.5) * 2.6) * dt;
+    const lat = clamp(-1.1 * g * r / Math.max(dc, 0.02) + SIM.lat[i], -0.45, 0.45);
     const il = 1 / Math.hypot(lat, 1);
     const tvx = lat * il * vt, tvy = -il * vt;
     const kk = 1 - Math.exp(-dt / 0.07);
@@ -1750,9 +1873,9 @@ function lightUniforms(t, dt) {
   const skyL = mulc(bb(9500, 0.62), 0.11);
   const cityL = mulc(bb(3400, 0.5), 0.042);
   const ambL = mulc(lampI, 0.075).map((v, i) => v * [1.0, 0.92, 0.75][i]);
-  const ambS = mulc(skyL, 0.55);
+  const ambS = mulc(skyL, 0.8);
   // eye adaptation: exposure follows the scene key slowly (dark-adapt 2.6 s, light-adapt 0.7 s)
-  const target = lerp(2.4, 1.0, smooth(0, 1, lv));
+  const target = lerp(3.8, 1.0, smooth(0, 1, lv));
   const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
   LIGHT.expoAdapt += (target - LIGHT.expoAdapt) * (1 - Math.exp(-dt / at));
   return { lampI, tau3, skyL, cityL, ambL, ambS };
@@ -1761,7 +1884,10 @@ function lightUniforms(t, dt) {
 /* ============================================================================
    Renderer
    ========================================================================== */
-const R = { progs: {}, tg: {}, sizes: {}, roomScale: 0.75, mainScale: 1, dprCap: 2 };
+const IS_MOBILE = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+const R = { progs: {}, tg: {}, roomScale: IS_MOBILE ? 0.5 : 0.85, roomMax: IS_MOBILE ? 0.62 : 0.9, mainScale: IS_MOBILE ? 0.85 : 1, mainMax: 1, dprCap: IS_MOBILE ? 2 : 2,
+            perf: { ema: 16, bad: 0, good: 0, cool: 3 } };
+if (QS.get('q')) R.roomScale = R.roomMax = +QS.get('q');
 let spriteVAO, spriteBuf, dropVAO, dropBuf, stateTex;
 
 function initGL() {
@@ -1801,6 +1927,9 @@ function buildPrograms() {
   P.sprite = makeProgram('sprite', VS_SPRITE(), FS_SPRITE());
   P.composite = makeProgram('composite', VS_FULL, FS_COMPOSITE());
   P.drop = makeProgram('drop', VS_DROP(), FS_DROP());
+  P.dof = makeProgram('dof', VS_FULL, FS_DOF());
+  P.down = makeProgram('down', VS_FULL, FS_DOWN());
+  P.up = makeProgram('up', VS_FULL, FS_UP());
   P.final = makeProgram('final', VS_FULL, FS_FINAL());
   P.blit = makeProgram('blit', VS_FULL, FS_BLIT());
 }
@@ -1816,6 +1945,9 @@ function allocTargets() {
   const W = canvas.width, H = canvas.height;
   T.hdr = makeTarget(W, H, [hdr]);
   T.room = makeTarget(W * R.roomScale, H * R.roomScale, [hdr, caps.hdr ? 'r16f' : 'rgba8']);
+  T.roomDof = makeTarget(W * R.roomScale, H * R.roomScale, [hdr]);
+  T.bloom = [];
+  for (let i = 1, w = W, h = H; i <= 6; i++) { w = Math.max(1, Math.ceil(w / 2)); h = Math.max(1, Math.ceil(h / 2)); T['b' + i] = makeTarget(w, h, [hdr]); T.bloom.push(T['b' + i]); }
   T.defocus = makeTarget(Math.ceil(W / 2), Math.ceil(H / 2), [hdr], { mips: true });
   const sw = W > 1400 ? 1024 : 768;
   T.sharp = makeTarget(sw, sw * 0.75, [hdr], { mips: true });
@@ -1828,9 +1960,27 @@ function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, R.dprCap);
   const cw = Math.max(1, canvas.clientWidth), ch = Math.max(1, canvas.clientHeight);
   const w = Math.round(cw * dpr * R.mainScale), h = Math.round(ch * dpr * R.mainScale);
-  if (w === canvas.width && h === canvas.height && R.tg.hdr && R.tg.room && Math.abs(R.tg.room.w - w * R.roomScale) < 2) return;
+  if (w === canvas.width && h === canvas.height && R.tg.hdr && R.tg.room && Math.abs(R.tg.room.w - Math.round(w * R.roomScale)) < 2) return;
   canvas.width = w; canvas.height = h;
   allocTargets();
+}
+// 动态分辨率：帧时间持续偏高时先降室内 raymarch 的分辨率，再降全屏分辨率；持续宽裕时逐步恢复。
+function adaptQuality(dt) {
+  if (DBG.shot) return;
+  const Q = R.perf;
+  Q.ema += (dt * 1000 - Q.ema) * 0.05;
+  Q.cool -= dt;
+  if (Q.cool > 0) return;
+  if (Q.ema > 26) { Q.bad += dt; Q.good = 0; } else if (Q.ema < 14.5) { Q.good += dt; Q.bad = 0; } else { Q.bad = Q.good = 0; }
+  if (Q.bad > 1.2) {
+    if (R.roomScale > 0.42) R.roomScale = Math.max(0.4, R.roomScale - 0.1);
+    else if (R.mainScale > 0.62) R.mainScale = Math.max(0.6, R.mainScale - 0.1);
+    Q.bad = 0; Q.cool = 2.5; Q.ema = 16;
+  } else if (Q.good > 5) {
+    if (R.mainScale < R.mainMax) R.mainScale = Math.min(R.mainMax, R.mainScale + 0.1);
+    else if (R.roomScale < R.roomMax) R.roomScale = Math.min(R.roomMax, R.roomScale + 0.05);
+    Q.good = 0; Q.cool = 2.5;
+  }
 }
 
 function camUniforms(pr) {
@@ -1864,12 +2014,12 @@ function drawSprites(target, mode, eye) {
   gl.bindVertexArray(null);
 }
 
-function render(t, dt) {
+function render(t, dt, rt) {
   const P = R.progs, T = R.tg;
   const hScale = caps.hdr ? 1 : 0.25;
-  const Lt = lightUniforms(t, dt);
-  // 光圈：虚拟镜头光圈半径 34mm（≈85mm f/1.2 级别的大光圈，为得到明显的焦外光斑），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
-  R.aperture = 0.034;
+  const Lt = lightUniforms(rt, dt);
+  // 光圈：虚拟镜头光圈半径 30mm（大光圈，为得到明显的焦外光斑；同一光圈也决定室内景深），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
+  R.aperture = 0.030;
   R.coc = R.aperture / CAM.focus;
   const glassEye = [S.WIN_CX, S.WIN_CY, S.GLASS_Z];
 
@@ -1922,59 +2072,229 @@ function render(t, dt) {
   U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t); U(P.room, 'uCarIn', [0, 0, 0, 0]);
   drawFull();
 
+  // 3b) depth of field on the room (focus on the glass)
+  bindTarget(T.roomDof);
+  gl.useProgram(P.dof.p);
+  U(P.dof, 'uRes', [T.roomDof.w, T.roomDof.h]); U(P.dof, 'uFocus', CAM.focus); U(P.dof, 'uAperture', R.aperture);
+  U(P.dof, 'uPxPerRad', T.roomDof.h * 0.5 / CAM.tan[1]);
+  bindTex(P.dof, 'uRoom', T.room.tex, 0); bindTex(P.dof, 'uDepth', T.room.texs[1], 1);
+  drawFull();
+
   // 4) composite
   bindTarget(T.hdr);
   gl.useProgram(P.composite.p);
   camUniforms(P.composite); lightU(P.composite, Lt);
   U(P.composite, 'uRes', [T.hdr.w, T.hdr.h]); U(P.composite, 'uTime', t); U(P.composite, 'uDbg', I(+(QS.get('dbg') || 0)));
   U(P.composite, 'uSimMM', [SIM.W, SIM.H]); U(P.composite, 'uHTex', [T.height.w, T.height.h]); U(P.composite, 'uHScale', hScale);
-  bindTex(P.composite, 'uRoom', T.room.tex, 0);
+  bindTex(P.composite, 'uRoom', T.roomDof.tex, 0);
   bindTex(P.composite, 'uDefocus', T.defocus.tex, 1);
   bindTex(P.composite, 'uSharp', T.sharp.tex, 2);
   bindTex(P.composite, 'uHeight', T.height.tex, 3);
   bindTex(P.composite, 'uState', stateTex, 4);
   drawFull();
 
-  // 5) final
+  // 5) bloom chain
+  gl.useProgram(P.down.p);
+  let src = T.hdr;
+  T.bloom.forEach((dst, i) => {
+    bindTarget(dst);
+    U(P.down, 'uRes', [dst.w, dst.h]); U(P.down, 'uTexel', [1 / src.w, 1 / src.h]); U(P.down, 'uFirst', I(i === 0 ? 1 : 0));
+    bindTex(P.down, 'uSrc', src.tex, 0); drawFull(); src = dst;
+  });
+  gl.useProgram(P.up.p);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  for (let i = T.bloom.length - 1; i > 0; i--) {
+    const s0 = T.bloom[i], dst = T.bloom[i - 1];
+    bindTarget(dst);
+    U(P.up, 'uRes', [dst.w, dst.h]); U(P.up, 'uTexel', [1 / s0.w, 1 / s0.h]); U(P.up, 'uRadius', 1.0);
+    bindTex(P.up, 'uSrc', s0.tex, 0); drawFull();
+  }
+  gl.disable(gl.BLEND);
+
+  // 6) final
   bindTarget(null);
   if (DBG.view) {
-    const src = { room: T.room.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex, height: T.height.tex, state: { t: stateTex } }[DBG.view] || T.hdr.tex;
+    const srcV = { room: T.room.tex, dof: T.roomDof.tex, bloom: T.b1.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex, height: T.height.tex, state: { t: stateTex } }[DBG.view] || T.hdr.tex;
     gl.useProgram(P.blit.p);
     U(P.blit, 'uRes', [canvas.width, canvas.height]); U(P.blit, 'uScale', DBG.view === 'depth' ? 0.5 : DBG.view === 'height' ? 1.2 : 1.5);
     U(P.blit, 'uChan', I(DBG.view === 'cov' ? 1 : (DBG.view === 'depth' || DBG.view === 'height') ? 2 : 0));
-    bindTex(P.blit, 'uTex', src, 0);
+    bindTex(P.blit, 'uTex', srcV, 0);
     drawFull();
     return;
   }
   gl.useProgram(P.final.p);
-  U(P.final, 'uRes', [canvas.width, canvas.height]); U(P.final, 'uTime', t);
+  U(P.final, 'uRes', [canvas.width, canvas.height]); U(P.final, 'uTime', t); U(P.final, 'uFrame', frame); U(P.final, 'uTan', CAM.tan);
   U(P.final, 'uExposure', LIGHT.expoAdapt * R.fade);
+  U(P.final, 'uBloomStr', 0.04); U(P.final, 'uGrain', 0.022);
   bindTex(P.final, 'uHdr', T.hdr.tex, 0);
+  bindTex(P.final, 'uBloom', T.b1.tex, 1);
   drawFull();
 }
 
 /* ============================================================================
+   Interaction: wipe the condensation, toggle the lamp, parallax
+   ========================================================================== */
+const TIME = { scale: 1 };
+function toNdc(e) { const r = canvas.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2]; }
+// lamp silhouette: closest approach of the ray to the lamp axis vs. the radius of shade / stem / base at that height
+function pickLamp(ro, rd) {
+  const ox = ro[0] - S.LAMP_X, oz = ro[2] - S.LAMP_Z;
+  const a = rd[0] * rd[0] + rd[2] * rd[2]; if (a < 1e-9) return Infinity;
+  const t = -(ox * rd[0] + oz * rd[2]) / a; if (t <= 0) return Infinity;
+  const dist = Math.hypot(ox + rd[0] * t, oz + rd[2] * t), y = ro[1] + rd[1] * t - S.DESK_TOP;
+  let rad = -1;
+  if (y > S.SHADE_Y0 - 0.01 && y < S.SHADE_Y1 + 0.03) rad = lerp(S.SHADE_R0, S.SHADE_R1, clamp((y - S.SHADE_Y0) / (S.SHADE_Y1 - S.SHADE_Y0), 0, 1)) + 0.015;
+  else if (y >= 0.04 && y <= S.SHADE_Y0) rad = 0.03;
+  else if (y > -0.01 && y < 0.04) rad = 0.085;
+  return dist < rad ? t : Infinity;
+}
+function pickGlass(ro, rd) {
+  if (rd[2] >= 0) return null;
+  const t = (S.GLASS_Z - ro[2]) / rd[2], x = ro[0] + rd[0] * t, y = ro[1] + rd[1] * t;
+  for (const p of S.PANES) if (x > p[0] && x < p[2] && y > p[1] && y < p[3]) return { t, x, y };
+  return null;
+}
+const toSim = g => [(g.x - S.WIN_X0) * 1000 / MAG, (g.y - S.WIN_Y0) * 1000 / MAG];
+// 擦拭：指腹（约 2.4 cm 宽）抹去内侧冷凝雾；被推开的水在笔画边缘堆成一圈更浓的「水边」，随后慢慢重新起雾。
+function wipe(a, b) {
+  const [x0, y0] = toSim(a), [x1, y1] = toSim(b);
+  const w = 12 / MAG + 1.6, C = SIM.CELL, GW = SIM.GW;
+  const ia = clamp(Math.floor((Math.min(x0, x1) - w * 1.4) / C), 0, GW - 1), ib = clamp(Math.floor((Math.max(x0, x1) + w * 1.4) / C), 0, GW - 1);
+  const ja = clamp(Math.floor((Math.min(y0, y1) - w * 1.4) / C), 0, SIM.GH - 1), jb = clamp(Math.floor((Math.max(y0, y1) + w * 1.4) / C), 0, SIM.GH - 1);
+  const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy + 1e-9;
+  for (let j = ja; j <= jb; j++) for (let i = ia; i <= ib; i++) {
+    const px = (i + 0.5) * C - x0, py = (j + 0.5) * C - y0, t = clamp((px * dx + py * dy) / L2, 0, 1);
+    const d = Math.hypot(px - dx * t, py - dy * t) / w, k = j * GW + i;
+    if (d < 1) { const f = smooth(1, 0.55, d); SIM.Fin[k] *= 1 - f; SIM.rim[k] *= 1 - f; }
+    else if (d < 1.4) SIM.rim[k] = Math.min(1, SIM.rim[k] + 0.18 * (1 - Math.abs(d - 1.15) / 0.25) * Math.max(SIM.F0[k], 0.25));
+  }
+  AUDIO.rub && AUDIO.rub(Math.hypot(b.x - a.x, b.y - a.y));
+}
+function toggleLamp() { LIGHT.on = LIGHT.on ? 0 : 1; AUDIO.click && AUDIO.click(LIGHT.on); }
+const PTR = { down: false, mode: '', last: null, moved: 0, sx: 0, sy: 0, hover: false };
+const GYRO = { base: null, on: false, asked: false };
+function onDown(e) {
+  AUDIO.unlock && AUDIO.unlock();
+  requestGyro();
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
+  const tl = pickLamp(CAM.pos, rd), g = pickGlass(CAM.pos, rd);
+  PTR.down = true; PTR.moved = 0; PTR.sx = e.clientX; PTR.sy = e.clientY;
+  if (tl < (g ? g.t : Infinity)) PTR.mode = 'lamp';
+  else if (g) { PTR.mode = 'wipe'; PTR.last = g; wipe(g, g); }
+  else PTR.mode = 'pan';
+  UI.poke();
+}
+function onMove(e) {
+  UI.poke();
+  const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
+  if (!PTR.down) {
+    if (e.pointerType === 'mouse') {
+      CAM.parT = [clamp(nx, -1, 1) * 0.55, clamp(ny, -1, 1) * 0.45];
+      const lamp = pickLamp(CAM.pos, rd) < Infinity;
+      if (lamp !== PTR.hover) { PTR.hover = lamp; canvas.style.cursor = lamp ? 'pointer' : 'default'; }
+    }
+    return;
+  }
+  PTR.moved += Math.hypot(e.clientX - PTR.sx, e.clientY - PTR.sy); PTR.sx = e.clientX; PTR.sy = e.clientY;
+  if (PTR.mode === 'wipe') {
+    const g = pickGlass(CAM.pos, rd);
+    if (g && PTR.last) wipe(PTR.last, g);
+    PTR.last = g;
+  } else if (PTR.mode === 'pan') {
+    CAM.parT = [clamp(nx, -1, 1), clamp(ny, -1, 1)];     // drag outside the glass: lean around
+  }
+}
+function onUp() {
+  if (PTR.down && PTR.mode === 'lamp' && PTR.moved < 12) toggleLamp();
+  if (PTR.mode === 'pan' && !GYRO.on) CAM.parT = [0, 0];
+  PTR.down = false; PTR.mode = ''; PTR.last = null;
+}
+canvas.addEventListener('pointerdown', onDown);
+canvas.addEventListener('pointermove', onMove);
+canvas.addEventListener('pointerup', onUp);
+canvas.addEventListener('pointercancel', onUp);
+canvas.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !PTR.down) CAM.parT = [0, 0]; });
+// gyroscope parallax (phones): relative to a slowly re-centring reference attitude
+function requestGyro() {
+  if (GYRO.asked || !IS_MOBILE) return; GYRO.asked = true;
+  const D = window.DeviceOrientationEvent;
+  if (D && typeof D.requestPermission === 'function') D.requestPermission().then(r => { if (r === 'granted') GYRO.on = true; }).catch(() => {});
+  else GYRO.on = true;
+}
+window.addEventListener('deviceorientation', e => {
+  if (!GYRO.on || e.beta == null || PTR.down) return;
+  const ang = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+  let x = e.gamma, y = e.beta;
+  if (ang === 90) { x = e.beta; y = -e.gamma; } else if (ang === -90 || ang === 270) { x = -e.beta; y = e.gamma; }
+  if (!GYRO.base) GYRO.base = [x, y];
+  GYRO.base[0] += (x - GYRO.base[0]) * 0.004; GYRO.base[1] += (y - GYRO.base[1]) * 0.004;
+  CAM.parT = [clamp((x - GYRO.base[0]) / 14, -1, 1), clamp(-(y - GYRO.base[1]) / 14, -1, 1)];
+});
+
+/* ============================================================================
+   UI: a single, quiet corner control
+   ========================================================================== */
+const AUDIO = {};
+const UI = (() => {
+  const ui = document.getElementById('ui'), btn = document.getElementById('uiBtn'), panel = document.getElementById('panel');
+  const rain = document.getElementById('rain'), speed = document.getElementById('speed'), snd = document.getElementById('snd');
+  let idleT = 0, hidden = false;
+  const api = {
+    poke() { idleT = 0; if (!hidden) ui.classList.remove('idle'); },
+    tick(dt) { idleT += dt; if (idleT > 4.5 && !panel.classList.contains('open')) ui.classList.add('idle'); },
+    show() { ui.classList.add('show'); },
+    toggleHidden() { hidden = !hidden; ui.classList.toggle('hidden', hidden); },
+  };
+  btn.addEventListener('click', e => { e.stopPropagation(); panel.classList.toggle('open'); api.poke(); AUDIO.unlock && AUDIO.unlock(); });
+  ui.addEventListener('pointerdown', e => e.stopPropagation());
+  ui.addEventListener('pointermove', () => api.poke());
+  canvas.addEventListener('pointerdown', () => panel.classList.remove('open'));
+  if (IS_MOBILE) panel.querySelector('.hint').innerHTML = '轻触台灯开关；在玻璃上划过可擦去雾气；倾斜手机看看。';
+  rain.addEventListener('input', () => { SIM.rain = +rain.value; });
+  speed.addEventListener('input', () => { TIME.scale = +speed.value; });
+  const setSnd = on => { snd.textContent = on ? '开' : '关'; snd.setAttribute('aria-pressed', on); AUDIO.setEnabled && AUDIO.setEnabled(on); };
+  snd.addEventListener('click', () => setSnd(snd.getAttribute('aria-pressed') !== 'true'));
+  window.addEventListener('keydown', e => {
+    AUDIO.unlock && AUDIO.unlock();
+    if (e.key === 'h' || e.key === 'H') api.toggleHidden();
+    if (e.key === 'l' || e.key === 'L') toggleLamp();
+    if (e.key === 'm' || e.key === 'M') setSnd(snd.getAttribute('aria-pressed') !== 'true');
+  });
+  return api;
+})();
+
+/* ============================================================================
    Main loop
    ========================================================================== */
-let running = false, lastT = 0, simT = DBG.t0, frame = 0;
+let running = false, lastT = 0, simT = DBG.t0, realT = 0, frame = 0;
 R.fade = DBG.shot ? 1 : 0;
 function loop(now) {
   if (!running) return;
   if (DBG.frames && frame >= DBG.frames) { window.__done = true; return; }
   requestAnimationFrame(loop);
+  if (window.__hold) { lastT = 0; window.__holdAck = (window.__holdAck || 0) + 1; return; }   // debug: freeze for screenshots
   const t = now / 1000;
   const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t)));
   lastT = t;
-  simT += dt;
+  realT += dt;
+  const wdt = dt * TIME.scale;                 // world time (rain, street) follows the time-flow slider
+  simT += wdt;
+  updateCamera(realT, dt, canvas.clientWidth / Math.max(1, canvas.clientHeight));
+  adaptQuality(dt);
   resize();
-  updateCamera(simT, dt, canvas.clientWidth / Math.max(1, canvas.clientHeight));
-  updateOutside(dt, simT);
-  simAdvance(dt);
-  if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.0);
-  render(simT, dt);
+  updateOutside(wdt, simT);
+  simAdvance(wdt);
+  if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.5);
+  render(simT, dt, realT);
+  UI.tick(dt);
+  AUDIO.update && AUDIO.update(dt, wdt);
   frame++;
   window.__frames = frame;
-  if (frame === 2) { const v = document.getElementById('veil'); v.classList.add('gone'); if (DBG.shot) v.style.display = 'none'; }
+  if (frame === 2) {
+    const v = document.getElementById('veil'); v.classList.add('gone'); if (DBG.shot) v.style.display = 'none';
+    if (!DBG.shot) setTimeout(() => { UI.show(); const h = document.getElementById('hint'); h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 7000); }, 3800);
+  }
 }
 function start() {
   if (running) return;
@@ -1985,6 +2305,7 @@ function stop() { running = false; }
 document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
 
 function boot() {
+  if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, pickGlass, camRay };
   if (!initGL()) { fail('no webgl2'); return; }
   buildOutside();
   for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
