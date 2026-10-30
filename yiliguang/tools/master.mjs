@@ -47,7 +47,7 @@ writeFileSync(card, `<!doctype html><html><head><meta charset="utf-8"><link rel=
 }
 
 // ---- picture: the film, then seven seconds of black with the title and the credit
-const film = src + '-v.mp4', amb = src + '.wav', T = probe(film), TAIL = 7.5, END = T + TAIL, MUSIC_AT = +(process.env.MUSIC_AT ?? 3.4);
+const film = src + '-v.mp4', amb = src + '.wav', T = probe(film), TAIL = +(process.env.TAIL ?? 7.5), END = T + TAIL, MUSIC_AT = +(process.env.MUSIC_AT ?? 3.4);
 const vf = [
   `[0:v]scale=${W}:${H}:flags=lanczos,setsar=1,fps=24,format=yuv420p[f]`,
   `color=c=black:s=${W}x${H}:r=24:d=${TAIL},format=yuv420p[k]`,
