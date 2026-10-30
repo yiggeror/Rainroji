@@ -59,7 +59,7 @@
     <div class="row"><span>季节</span><span class="seg" id="season"><button data-s="0">春</button><button data-s="1">夏</button><button data-s="2">秋</button><button data-s="3">冬</button></span></div>
     <label style="margin-top:8px"><span class="row"><span>时刻</span><span class="sub" id="todLabel"></span></span><input id="tod" type="range" min="0" max="24" step="0.05"></label>
     <div class="row" style="margin-bottom:10px"><span>时间流逝</span><button class="tog" id="flow" aria-pressed="false">停</button></div>
-    <label>雨势<input id="rain" type="range" min="0" max="1" step="0.01" value="0.55"></label>
+    <label><span id="rainLbl">雨势</span><input id="rain" type="range" min="0" max="1" step="0.01" value="0.55"></label>
     <label>流速<input id="speed" type="range" min="0.2" max="2.5" step="0.01" value="1"></label>
     <div class="row"><span>声音</span><button class="tog" id="snd" aria-pressed="true">开</button></div>
     <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>S 季节 · T 时间流逝 · L 台灯 · M 静音 · H 隐藏</div>
@@ -102,6 +102,7 @@ const DBG = {
   seed: +(QS.get('seed') || 0) || ((Math.random() * 1e9) | 0),
   lamp: QS.get('lamp') !== '0',
   still: QS.has('still'),               // freeze handheld drift
+  flash: +(QS.get('flash') || 0),       // hold a lightning flash at this strength (screenshots)
   view: QS.get('view') || '',           // debug buffer view
   t0: +(QS.get('t') || 0),              // start time offset (s)
   frames: +(QS.get('frames') || 0),     // stop after N frames (screenshots of slow software GL)
@@ -271,6 +272,7 @@ uniform vec2 uJitter;                 // sub-pixel offset (Halton), accumulated 
 uniform vec4 uClock;                  // stopped wall clock: hand angles (rad, clockwise from 12)
 uniform vec4 uVar;                    // per-visit variation: thermos paint, calendar print, …
 uniform float uSteam;                 // tea warmth
+uniform float uSeason;                // 0 spring, 1 summer, 2 autumn, 3 winter: what stands on the sill and the desk
 layout(location = 0) out vec4 oCol;   // rgb: room radiance (premultiplied by 1-coverage), a: glass coverage
 layout(location = 1) out vec4 oAux;   // r: view depth
 
@@ -307,6 +309,21 @@ layout(location = 1) out vec4 oAux;   // r: view depth
 #define M_PLUG 32.0
 #define M_CHROME 33.0
 #define M_RUNNER 34.0
+#define M_BLOSSOM 35.0
+#define M_TWIG 36.0
+#define M_BOTTLE 37.0
+#define M_COIL 38.0
+#define M_TIN 39.0
+#define M_FAN 40.0
+#define M_FANRIM 41.0
+#define M_KAKI 42.0
+#define M_CALYX 43.0
+#define M_HWB 44.0
+#define M_STOPPER 45.0
+const vec3 SEAS_P = vec3(-0.24, WIN_Y0, -0.035);    // the left half of the sill: this season's things
+const vec3 DESK_SP = vec3(-0.33, DESK_TOP, 0.31);   // and a spot on the desk in front of the lamp
+const float COIL_B = 0.0013, COIL_T1 = 38.5;         // mosquito coil: Archimedean spiral r = bθ, 8 mm pitch, burnt back to θ = T1
+const vec3 EMBER = SEAS_P + vec3(0.05005 * 0.6967, 0.0145, 0.05005 * 0.7174);
 const vec3 SOCKET_P = vec3(-0.862, 0.905, 0.0);       // old surface-mounted socket left of the window
 const vec3 PLANT_P = vec3(0.30, WIN_Y0, -0.028);     // spider plant on the sill
 const vec3 CLOCK_P = vec3(-0.735, 1.70, 0.0);        // wall clock above the lamp
@@ -623,6 +640,122 @@ vec2 sdCurtain(vec3 p){
   return vec2(d, M_CURTAIN);
 }
 
+// ---- 时令物件：春天窗台上汽水瓶里插一枝桃花；夏天一盘蚊香在窗台上细细地冒烟，桌上一把蒲扇；
+// 秋天窗台上两只柿子；冬天桌上一只红色热水袋。
+// peach twig in the sill frame (relative to SEAS_P): a main shoot and two side shoots
+const vec3 TW_A[6] = vec3[6](vec3(0.0, 0.02, 0.0), vec3(-0.012, 0.20, -0.012), vec3(-0.035, 0.31, -0.02), vec3(-0.012, 0.20, -0.012), vec3(0.045, 0.28, -0.004), vec3(-0.035, 0.31, -0.02));
+const vec3 TW_B[6] = vec3[6](vec3(-0.012, 0.20, -0.012), vec3(-0.035, 0.31, -0.02), vec3(-0.028, 0.405, -0.03), vec3(0.045, 0.28, -0.004), vec3(0.078, 0.335, 0.0), vec3(-0.098, 0.362, -0.014));
+const float TW_R[6] = float[6](0.0034, 0.0026, 0.0017, 0.0021, 0.0014, 0.0015);
+vec2 sdSpring(vec3 q){
+  float bound = sdBox(q - vec3(-0.01, 0.21, -0.012), vec3(0.11, 0.215, 0.05));
+  if (bound > 0.02) return vec2(bound, -1.0);
+  // an old soda bottle, green glass: body, shoulder, neck, a rolled lip
+  float body = sdCylY(q - vec3(0.0, 0.048, 0.0), 0.026, 0.046) - 0.002;
+  float sh = sdCappedCone(q - vec3(0.0, 0.112, 0.0), 0.018, 0.027, 0.011) - 0.001;
+  float neck = sdCylY(q - vec3(0.0, 0.14, 0.0), 0.0105, 0.012) - 0.0008;
+  float lip = length(vec2(length(q.xz) - 0.0105, q.y - 0.152)) - 0.0028;
+  vec2 res = vec2(min(min(body, sh), min(neck, lip)), M_BOTTLE);
+  float tw = 1e9;
+  for (int i = 0; i < 6; i++) tw = min(tw, sdCapsule(q, TW_A[i], TW_B[i], TW_R[i]));
+  res = opU(res, vec2(tw, M_TWIG));
+  // blossoms and buds along the outer shoots: five cupped petals, opening toward the light
+  float bl = 1e9;
+  for (int i = 0; i < 22; i++){
+    float fi = float(i);
+    int sgi = 1 + i % 5;
+    vec3 h = vec3(hash11(fi * 3.7 + 1.0), hash11(fi * 5.3 + 2.0), hash11(fi * 9.1 + 3.0));
+    vec3 a = TW_A[sgi], b = TW_B[sgi];
+    vec3 c = mix(a, b, 0.15 + 0.85 * h.x);
+    vec3 side = normalize(vec3(h.y - 0.5, 0.25, h.z - 0.3));
+    float bud = step(0.72, h.z) + step(0.95, h.x);
+    float R = bud > 0.5 ? 0.0045 : 0.0095 + 0.003 * h.y;
+    c += side * (TW_R[sgi] + R * 0.55);
+    vec3 d = q - c;
+    if (dot(d, d) > 0.0005) continue;
+    if (bud > 0.5){ bl = min(bl, length(d * vec3(1.0, 0.8, 1.0)) - R); continue; }
+    vec3 nb = normalize(vec3(h.y - 0.5, 0.35 * h.x - 0.1, 1.0));
+    vec3 u = normalize(cross(nb, vec3(0.0, 1.0, 0.0))), v = cross(nb, u);
+    float al = dot(d, nb); vec2 pl = vec2(dot(d, u), dot(d, v));
+    float rr = length(pl), an = atan(pl.y, pl.x) + h.x * 6.0;
+    float Rp = R * (0.78 + 0.22 * pow(abs(cos(an * 2.5)), 0.6));
+    float cup = 0.35 * rr * rr / R;
+    bl = min(bl, (length(vec2(max(rr - Rp, 0.0), al - cup)) - 0.0011) * 0.8);
+  }
+  return opU(res, vec2(bl, M_BLOSSOM));
+}
+float coilT(vec2 xz){                       // the spiral's unwrapped angle nearest to xz
+  float th = atan(xz.y, xz.x); th += th < 0.0 ? 2.0 * PI : 0.0;
+  float k = floor((length(xz) / COIL_B - th) / (2.0 * PI) + 0.5);
+  return th + 2.0 * PI * k;
+}
+vec2 sdSummerSill(vec3 q){
+  float bound = sdBox(q - vec3(0.0, 0.012, 0.0), vec3(0.07, 0.016, 0.07));
+  if (bound > 0.02) return vec2(bound, -1.0);
+  // a tin stand: a shallow dish with a turned-up rim and a pin through the coil's centre
+  float dish = max(sdCylY(q - vec3(0.0, 0.0018, 0.0), 0.064, 0.0012), -sdCylY(q - vec3(0.0, 0.004, 0.0), 0.06, 0.0016));
+  dish = min(dish, length(vec2(length(q.xz) - 0.0625, q.y - 0.0035)) - 0.0018);
+  dish = min(dish, sdCapsule(q, vec3(0.0, 0.002, 0.0), vec3(0.0, 0.02, 0.0), 0.0011));
+  vec2 res = vec2(dish, M_TIN);
+  vec3 c = q - vec3(0.0, 0.0125, 0.0);
+  float T = clamp(coilT(c.xz), 9.0, COIL_T1);
+  float th = T - 2.0 * PI * floor(T / (2.0 * PI));
+  vec2 sp = COIL_B * T * vec2(cos(th), sin(th));
+  float dr = length(c.xz - sp);
+  return opU(res, vec2(sdBox2(vec2(dr, c.y), vec2(0.0019, 0.0023)) - 0.0004, M_COIL));
+}
+vec2 sdAutumn(vec3 q){
+  float bound = sdBox(q - vec3(0.01, 0.03, 0.005), vec3(0.08, 0.04, 0.05));
+  if (bound > 0.02) return vec2(bound, -1.0);
+  vec2 res = vec2(1e9, -1.0); float cx = 1e9;
+  for (int k = 0; k < 2; k++){
+    float R = k == 0 ? 0.034 : 0.030;
+    vec3 c = q - (k == 0 ? vec3(-0.022, 0.0, -0.004) : vec3(0.046, 0.0, 0.018));
+    c.xz = rot2(c.xz, float(k) * 0.9 + 0.3);
+    c.y -= R * 0.74;
+    float a = atan(c.z, c.x);
+    float lobes = 1.0 - 0.035 * cos(4.0 * a) * smoothstep(-0.5, 0.6, c.y / R);   // four soft lobes, flat-topped
+    res = opU(res, vec2((length(c * vec3(1.0, 1.0 / 0.74, 1.0)) - R * lobes) * 0.72, M_KAKI));
+    // the calyx: four stiff sepals pressed flat on top, a stub of stalk
+    vec3 t = c - vec3(0.0, R * 0.72, 0.0);
+    float sep = 0.016 * (0.45 + 0.55 * pow(abs(cos(2.0 * a + 0.4)), 1.5));
+    cx = min(cx, sdBox2(vec2(length(t.xz) - sep * 0.5, t.y + 0.012 * length(t.xz) - 0.001), vec2(sep * 0.5, 0.0012)) - 0.0006);
+    cx = min(cx, sdCylY(t - vec3(0.0, 0.004, 0.0), 0.0022, 0.004));
+  }
+  return opU(res, vec2(cx, M_CALYX));
+}
+vec2 sdDeskSeason(vec3 p){
+  vec3 q = p - DESK_SP;
+  float bound = sdBox(q - vec3(0.0, 0.025, 0.0), vec3(0.17, 0.03, 0.17));
+  if (bound > 0.02) return vec2(bound, -1.0);
+  if (uSeason < 1.5){
+    // 蒲扇: a palm-leaf fan lying on the glass, bound round its rim, handle toward the front edge
+    q.xz = rot2(q.xz, 0.55);
+    vec2 u = q.xz - vec2(0.0, -0.02);
+    float disc = length(u * vec2(1.0, 0.94)) - 0.122;
+    float dome = 0.0024 + 0.004 * sat(1.0 - length(u) / 0.12);
+    vec2 res = vec2(max(disc, abs(q.y - dome) - 0.0011) * 0.9, M_FAN);
+    float rim = length(vec2(abs(disc) - 0.0, q.y - 0.0032)) - 0.003;
+    rim = max(rim, -disc - 0.003);
+    res = opU(res, vec2(rim, M_FANRIM));
+    return opU(res, vec2(sdCapsule(q, vec3(0.0, 0.006, 0.09), vec3(0.0, 0.0065, 0.21), 0.0062), M_FANRIM));
+  }
+  // 热水袋: a red rubber hot-water bag, plump and rounded, its neck and white screw stopper turned to the back
+  q.xz = rot2(q.xz, -0.35);
+  float bag = sdRBox(q - vec3(0.0, 0.021, 0.0), vec3(0.098, 0.021, 0.066), 0.019);
+  float neck = sdCylY((q - vec3(0.112, 0.016, 0.0)).yxz, 0.0175, 0.018) - 0.002;
+  vec2 res = vec2(min(bag, neck), M_HWB);
+  return opU(res, vec2(sdCylY((q - vec3(0.137, 0.016, 0.0)).yxz, 0.021, 0.008) - 0.0015, M_STOPPER));
+}
+vec2 sdSeasonal(vec3 p){
+  vec3 q = p - SEAS_P;
+  vec2 res = vec2(1e9, -1.0);
+  if (uSeason < 0.5) res = sdSpring(q);
+  else if (uSeason < 1.5) res = sdSummerSill(q);
+  else if (uSeason < 2.5) res = sdAutumn(q);
+  if (abs(uSeason - 1.0) < 0.5 || uSeason > 2.5) res = opU(res, sdDeskSeason(p));
+  return res;
+}
+
 vec2 mapObj(vec3 p, bool solidShade){
   vec2 res = vec2(1e9, 0.0);
   float bw = sdBox(p - vec3(WIN_CX, WIN_CY - 0.02, -0.07), vec3(WIN_HW + 0.07, WIN_HH + 0.05, 0.12));
@@ -643,6 +776,7 @@ vec2 mapObj(vec3 p, bool solidShade){
   res = opU(res, sdNotebook(p));
   res = opU(res, sdRadio(p));
   res = opU(res, sdWiring(p));
+  res = opU(res, sdSeasonal(p));
   return res;
 }
 // 房间内部是凸的（盒子），墙面不可能遮挡室内光源 → 阴影射线只测试物体，既消除掠射自遮挡条纹又省一半开销
@@ -831,14 +965,68 @@ vec4 underItems(vec2 xz){
 }
 
 // faded offset print on the calendar: a lake under hills, a sunset coast, or peonies (per visit)
-vec3 calPicture(vec2 u, float var){
+// the month's picture follows the season: spring peonies, a summer lotus pond (or a sunset sea), an autumn lake, a snowy village
+vec3 calPicture(vec2 u, float season, float var){
   vec3 c;
+  if (season > 2.5){
+    // 雪景: a white hillside under a grey sky, dark pines dusted with snow, a farmhouse with a lit window
+    c = mix(vec3(0.60, 0.61, 0.62), vec3(0.50, 0.53, 0.58), u.y);
+    float far = 0.62 + 0.08 * fbm(vec2(u.x * 3.0, 4.0)) - 0.05 * u.x;
+    c = mix(c, vec3(0.50, 0.52, 0.55), smoothstep(0.004, -0.004, u.y - far));
+    float hill = 0.40 + 0.10 * sin(u.x * 3.0 + 0.5) + 0.03 * fbm(vec2(u.x * 6.0, 1.0));
+    float snow = smoothstep(0.004, -0.004, u.y - hill);
+    c = mix(c, vec3(0.70, 0.70, 0.69) * (0.94 + 0.06 * fbm(u * 12.0)), snow);
+    for (int k = 0; k < 6; k++){
+      float fk = float(k);
+      vec2 b = vec2(0.08 + 0.15 * fk + 0.04 * sin(fk * 7.0), 0.0);
+      b.y = 0.40 + 0.10 * sin(b.x * 3.0 + 0.5) - 0.02;
+      vec2 d = u - b;
+      float H = 0.16 + 0.05 * fract(fk * 0.618);
+      float tri = step(0.0, d.y) * step(d.y, H) * step(abs(d.x), (H - d.y) * 0.32 * (0.85 + 0.15 * sin(d.y * 90.0)));
+      vec3 pine = mix(vec3(0.10, 0.14, 0.12), vec3(0.62, 0.63, 0.63), step(0.55, fract(d.y * 22.0)) * 0.7);
+      c = mix(c, pine, tri);
+    }
+    vec2 hp = u - vec2(0.66, 0.36);
+    float house = step(abs(hp.x), 0.075) * step(abs(hp.y), 0.04);
+    float roof = step(0.04, hp.y) * step(hp.y, 0.04 + (0.095 - abs(hp.x)) * 0.5) * step(abs(hp.x), 0.095);
+    c = mix(c, vec3(0.36, 0.25, 0.18), house);
+    c = mix(c, vec3(0.72, 0.72, 0.71), roof);
+    c = mix(c, vec3(0.80, 0.55, 0.20), step(abs(hp.x - 0.03), 0.014) * step(abs(hp.y + 0.005), 0.013));
+    return c;
+  }
+  if (season > 1.5) var = 0.0;          // autumn: the lake
+  else if (season > 0.5) var = var < 0.5 ? 2.0 : 0.6;
+  else var = 0.9;                       // spring: peonies
+  if (var > 1.5){
+    // 荷塘: lotus leaves floating on a pale green pond, two pink flowers on tall stems
+    c = mix(vec3(0.44, 0.52, 0.46), vec3(0.54, 0.58, 0.50), u.y);
+    for (int k = 0; k < 7; k++){
+      float fk = float(k);
+      vec2 ce = vec2(fract(fk * 0.618 + 0.1), 0.12 + 0.55 * fract(fk * 0.382 + 0.2));
+      vec2 d = (u - ce) * vec2(1.0, 1.6); float r = length(d), a = atan(d.y, d.x);
+      float R = 0.09 + 0.05 * fract(fk * 0.77);
+      float leaf = smoothstep(0.006, 0.0, r - R) * step(0.1, abs(a - 1.2 - fk));                  // a notch to the stem
+      vec3 lc = mix(vec3(0.12, 0.27, 0.15), vec3(0.24, 0.40, 0.22), 0.5 + 0.5 * cos(a * 14.0)) * (0.8 + 0.3 * r / R);
+      c = mix(c, lc, leaf);
+    }
+    for (int k = 0; k < 2; k++){
+      vec2 ce = vec2(0.34 + 0.34 * float(k), 0.62 + 0.12 * float(k));
+      c = mix(c, vec3(0.20, 0.32, 0.18), step(abs(u.x - ce.x - 0.01 * sin(u.y * 9.0)), 0.004) * step(u.y, ce.y));
+      vec2 d = u - ce; float a = atan(d.x, d.y), r = length(d * vec2(1.0, 0.8));
+      float petals = 0.07 * (0.65 + 0.35 * pow(abs(cos(a * 2.5)), 0.5)) * step(-0.25, d.y / max(r, 1e-3));
+      vec3 pc = mix(vec3(0.80, 0.50, 0.58), vec3(0.70, 0.22, 0.38), smoothstep(0.0, 0.07, d.y + 0.03));
+      c = mix(c, pc, smoothstep(0.004, 0.0, r - petals));
+    }
+    return c;
+  }
   if (var < 0.5){
     c = mix(vec3(0.62, 0.60, 0.50), vec3(0.40, 0.50, 0.55), u.y);
     float far = 0.64 + 0.09 * fbm(vec2(u.x * 4.0, 1.0)) - 0.07 * u.x;
     float near = 0.50 + 0.12 * fbm(vec2(u.x * 3.0 + 9.0, 2.0)) + 0.04 * sin(u.x * 5.0);
     c = mix(c, vec3(0.36, 0.45, 0.43), smoothstep(0.004, -0.004, u.y - far));
-    c = mix(c, vec3(0.18, 0.29, 0.24), smoothstep(0.004, -0.004, u.y - near));
+    // autumn on the near hills: rust and ochre among the green
+    vec3 hillC = mix(vec3(0.18, 0.29, 0.24), mix(vec3(0.42, 0.24, 0.12), vec3(0.45, 0.36, 0.14), fbm(u * 20.0)), 0.55 * smoothstep(0.4, 0.6, fbm(u * 9.0 + 2.0)));
+    c = mix(c, hillC, smoothstep(0.004, -0.004, u.y - near));
     float lake = smoothstep(0.37, 0.365, u.y);
     vec3 water = mix(vec3(0.44, 0.52, 0.52), vec3(0.24, 0.33, 0.31), smoothstep(0.37, 0.2, u.y) * 0.6) * (0.92 + 0.08 * sin(u.y * 160.0 + 5.0 * fbm(u * 9.0)));
     c = mix(c, water, lake);
@@ -1077,7 +1265,7 @@ Mat getMat(float id, vec3 p, inout vec3 n){
     vec3 c = paper;
     if (uv.y > 0.40){
       vec2 pv = vec2((uv.x - 0.06) / 0.88, (uv.y - 0.43) / 0.53);
-      if (pv.x > 0.0 && pv.x < 1.0 && pv.y > 0.0 && pv.y < 1.0) c = calPicture(pv, uVar.y);
+      if (pv.x > 0.0 && pv.x < 1.0 && pv.y > 0.0 && pv.y < 1.0) c = calPicture(pv, uSeason, uVar.y);
     } else if (uv.y > 0.335){
       c = vec3(0.50, 0.08, 0.05);
       c = mix(c, vec3(0.62, 0.52, 0.36), step(0.6, vnoise(vec2(uv.x * 60.0, 3.0))) * step(abs(uv.y - 0.367), 0.012) * step(abs(uv.x - 0.5), 0.2));
@@ -1153,6 +1341,56 @@ Mat getMat(float id, vec3 p, inout vec3 n){
         m.alb = vec3(0.04); m.emis = mix(glow, vec3(0.5, 0.03, 0.02), needle); m.rough = 0.08;
       } else { m.alb = vec3(0.34, 0.31, 0.24) * (0.9 + 0.1 * fbm(q.xy * 80.0)); m.rough = 0.35; }
     } else { m.alb = vec3(0.10, 0.055, 0.03) * (0.8 + 0.4 * fbm(vec2(q.x * 30.0, q.y * 300.0))); m.rough = 0.3; }
+  } else if (id == M_BLOSSOM){
+    // peach blossom: pale pink petals deepening to carmine at the heart; buds are darker; thin petals glow against the window
+    vec3 q = p - SEAS_P;
+    float v = vnoise(q.xy * 900.0);
+    m.alb = mix(vec3(0.78, 0.42, 0.50), vec3(0.62, 0.20, 0.30), 0.35 * v + 0.4 * smoothstep(0.75, 0.95, vnoise(q.xy * 300.0 + 7.0)));
+    m.rough = 0.55; m.trans = vec3(0.20, 0.09, 0.10);
+  } else if (id == M_TWIG){
+    m.alb = vec3(0.075, 0.045, 0.035) * (0.8 + 0.4 * vnoise(p.xy * 500.0)); m.rough = 0.7;
+  } else if (id == M_BOTTLE){
+    // green soda-bottle glass: almost no diffuse, a sharp gloss, and the window seen through it
+    m.alb = vec3(0.02, 0.045, 0.03); m.rough = 0.04; m.trans = vec3(0.07, 0.15, 0.09);
+  } else if (id == M_COIL){
+    vec3 c = p - SEAS_P - vec3(0.0, 0.0125, 0.0);
+    float T = coilT(c.xz);
+    float ash = smoothstep(COIL_T1 - 0.9, COIL_T1 - 0.15, T);
+    m.alb = mix(vec3(0.05, 0.085, 0.035) * (0.85 + 0.3 * vnoise(c.xz * 900.0)), vec3(0.36, 0.35, 0.33), ash);
+    m.rough = 0.9;
+    float e = length(p - EMBER);
+    m.emis = vec3(6.0, 1.3, 0.22) * smoothstep(0.004, 0.0015, e) * (0.75 + 0.25 * sin(uTime * 2.3) * sin(uTime * 3.7 + 1.0));
+  } else if (id == M_TIN){
+    vec3 q = p - SEAS_P;
+    m.alb = vec3(0.38, 0.36, 0.33) * (0.8 + 0.3 * vnoise(q.xz * 300.0)); m.metal = 1.0; m.rough = 0.35;
+    // grey ash fallen from the burnt end
+    float ash = smoothstep(0.012, 0.0, length(q.xz - (EMBER.xz - SEAS_P.xz) * 1.05)) * step(q.y, 0.004);
+    m.alb = mix(m.alb, vec3(0.42, 0.41, 0.39), ash); m.metal *= 1.0 - ash; m.rough = mix(m.rough, 0.95, ash);
+  } else if (id == M_FAN){
+    // split palm leaf: pale straw ribs fanning out from the handle, browned and spotted with years of summers
+    vec3 q = p - DESK_SP; q.xz = rot2(q.xz, 0.55);
+    vec2 u = q.xz - vec2(0.0, 0.10);
+    float a = atan(u.x, -u.y), r = length(u);
+    float rib = 0.5 + 0.5 * cos(a * 70.0);
+    vec3 c = mix(vec3(0.27, 0.20, 0.10), vec3(0.38, 0.30, 0.16), rib * 0.7);
+    c *= 0.85 + 0.25 * vnoise(vec2(a * 40.0, r * 30.0));
+    c = mix(c, vec3(0.25, 0.17, 0.08), 0.5 * smoothstep(0.6, 0.85, fbm(q.xz * 30.0)));
+    m.alb = c; m.rough = 0.7;
+  } else if (id == M_FANRIM){
+    m.alb = vec3(0.14, 0.10, 0.06); m.rough = 0.6;
+  } else if (id == M_KAKI){
+    vec3 q = p - SEAS_P;
+    m.alb = mix(vec3(0.70, 0.20, 0.025), vec3(0.62, 0.28, 0.03), vnoise(q.xz * 120.0)) * (0.9 + 0.1 * vnoise(q.xy * 400.0));
+    m.rough = 0.28; m.trans = vec3(0.10, 0.03, 0.0);
+  } else if (id == M_CALYX){
+    m.alb = vec3(0.10, 0.08, 0.035); m.rough = 0.8;
+  } else if (id == M_HWB){
+    // ribbed red rubber (the ribs are on the faces; the edges are smooth)
+    vec3 q = p - DESK_SP; q.xz = rot2(q.xz, -0.35);
+    float rib = smoothstep(0.3, 0.7, abs(fract((q.x + q.z * 0.6) * 90.0) - 0.5) * 2.0) * smoothstep(0.06, 0.03, abs(q.z));
+    m.alb = vec3(0.46, 0.035, 0.03) * (0.85 + 0.15 * rib); m.rough = 0.42 - 0.12 * rib;
+  } else if (id == M_STOPPER){
+    m.alb = vec3(0.6, 0.58, 0.52); m.rough = 0.35;
   } else if (id == M_CURTAIN){
     vec2 cu = vec2(p.x * 1.0, p.y);
     vec3 c = vec3(0.56, 0.45, 0.25);
@@ -1277,7 +1515,7 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
   col += F_Schlick(f0, nv) * (uAmbL * 0.5 + uAmbS) / PI * ao * (1.0 - m.rough) * 0.6;
 
   // 5a) thin leaves: the window shines through them (and, from the side, the lamp)
-  if (id == M_LEAF){
+  if (id == M_LEAF || id == M_BLOSSOM || id == M_BOTTLE || id == M_KAKI){
     col += m.trans * windowRadiance(vec3(0.0, 0.15, -1.0)) * 0.9;
     col += m.trans * uLampI * lampEmitFactor(normalize(p - BULB)) / max(d2, 0.05) * 0.06;
   }
@@ -1330,6 +1568,58 @@ vec4 steamVol(vec3 ro, vec3 rd, float tEnd){
   return vec4(S, T);
 }
 
+// ---- 蚊香的烟：从火头笔直升起一缕细线（层流），约 8 cm 后开始摆动、卷曲、散开（转捩）。
+// Analytic: the plume is a chain of short Gaussian tubes; each adds optical depth σ·s·√π·exp(−d²/s²)/sinθ for a ray
+// passing at distance d; the thread thins out as it widens. Smooth in space and time: no noise, no aliasing.
+vec4 smokeVol(vec3 ro, vec3 rd, float tEnd){
+  if (abs(uSeason - 1.0) > 0.5) return vec4(0.0, 0.0, 0.0, 1.0);
+  const float HM = 0.42;
+  vec3 c = EMBER + vec3(0.0, HM * 0.5, 0.0);
+  vec3 oc = ro - c;                                   // cheap reject: a bounding cylinder r = 9 cm
+  float a = dot(rd.xz, rd.xz), b = dot(oc.xz, rd.xz), cc = dot(oc.xz, oc.xz) - 0.0081;
+  if (b * b - a * cc <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
+  float tau = 0.0; vec3 S = vec3(0.0);
+  vec3 Ewin = uSkyL * 1.1 + uCityL * 0.6;
+  // two strands: the thread, and a second filament that peels off it where the flow turns unstable
+  for (int j = 0; j < 2; j++){
+    float fj = float(j), ph = fj * 2.6;
+    vec3 prev = EMBER;
+    for (int i = 1; i <= 14; i++){
+      float h = float(i) / 14.0;
+      float tr = smoothstep(0.1, 0.42, h);              // laminar → turbulent
+      float split = j == 0 ? 1.0 : smoothstep(0.28, 0.5, h);
+      float w = uTime * 0.85 - h * 9.0 + ph;            // waves travel up the plume
+      float am = tr * pow(h, 0.8) * (1.0 + 0.5 * fj);
+      vec3 cur = EMBER + vec3((0.03 * sin(w + h * 3.0) + 0.016 * sin(2.7 * w + 1.0 + ph)) * am + 0.03 * h * h,
+                              HM * h,
+                              (0.022 * cos(0.8 * w + 1.0) + 0.012 * sin(3.1 * w + ph)) * am);
+      float sw = 0.0009 + 0.02 * pow(h, 1.6) * tr;
+      if (j == 1 && split < 0.01){ prev = cur; continue; }
+      // closest approach of the ray to the line through prev→cur; each ray height belongs to exactly one segment
+      vec3 ba = cur - prev, w0 = ro - prev;
+      float bb = dot(ba, ba), ab = dot(rd, ba), d0 = dot(rd, w0), e0 = dot(ba, w0);
+      float den = max(bb - ab * ab, 1e-9);
+      float sc = (ab * e0 - bb * d0) / den, u = (e0 - ab * d0) / den;
+      vec3 dd = prev + ba * u - ro - rd * sc;
+      float d2 = dot(dd, dd);
+      if (u >= 0.0 && u < 1.0 && sc > 0.0 && sc < tEnd && d2 < 9.0 * sw * sw){
+        float sinT = sqrt(max(1.0 - ab * ab / bb, 0.04));
+        float flick = mix(1.0, 0.25 + 0.95 * vnoise(vec2(h * 8.0 - uTime * 1.4 + fj * 5.0, 3.0)), tr);
+        // optical depth falls more slowly than 1/s: the turbulent part folds into sheets that are seen edge-on
+        float dt = 0.0005 / sqrt(sw * 0.0009) * exp(-d2 / (sw * sw)) * 1.7725 / sinT * flick * (1.0 - h * h) * split * (j == 0 ? 1.0 : 0.6);
+        vec3 rp = ro + rd * sc;
+        vec3 Ll = rp - BULB; float ld2 = dot(Ll, Ll); vec3 ll = Ll * inversesqrt(ld2);
+        // fine smoke particles scatter blue a little more (it reads as a blue-grey thread)
+        vec3 Lin = (uLampI * lampEmitFactor(ll) / ld2 * HG(dot(ll, rd), 0.3) * 1.6 + Ewin * HG(-rd.z, 0.65) * 2.5 + (uAmbL + uAmbS) * 0.15) * vec3(0.85, 0.93, 1.1);
+        S += exp(-tau) * dt * Lin;
+        tau += dt;
+      }
+      prev = cur;
+    }
+  }
+  return vec4(S, exp(-tau));
+}
+
 void main(){
   vec2 ndc = (gl_FragCoord.xy + uJitter) / uRes * 2.0 - 1.0;
   vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
@@ -1346,6 +1636,8 @@ void main(){
     if (t > tmax) break;
   }
   vec4 st = steamVol(ro, rd, hit ? t : tG);
+  vec4 sm = smokeVol(ro, rd, hit ? t : tG);
+  st = vec4(st.rgb * sm.a + sm.rgb, st.a * sm.a);
   // premultiplied: (room radiance, glass coverage) — steam adds light and veils whatever lies behind it
   if (!hit){ oCol = vec4(st.rgb, st.a); oAux = vec4(tG * dot(rd, uCamFwd)); return; }
   vec3 p = ro + rd * t;
@@ -1369,20 +1661,36 @@ float sdBoxC(vec2 p, vec2 b){ vec2 q = abs(p) - b; return length(max(q, 0.0)) + 
 // opposite row: old 2-4 storey shophouses; far city: towers seen over their roofs
 float bldTop(float x){ float i = floor(x / 9.0) + uCity; return 6.6 + 5.0 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
 float farTop(float x){ float i = floor(x / 26.0) + uCity * 1.37; return 16.0 + 50.0 * pow(hash11(i * 1.7 + 9.0), 1.6); }
-// 窗外人行道上的一棵梧桐，树冠伸进窗口左上角；当作 TREE_Z 处的竖直「卡片」，离焦按该深度的弥散圆处理
-float treeAlpha(vec2 pt, float w){
-  vec2 q = pt + vec2(0.10 * sin(uTime * 0.6 + pt.y * 0.8) + 0.05 * sin(uTime * 1.3 + pt.x), 0.03 * sin(uTime * 0.9 + pt.x * 0.7))
-                * smoothstep(GROUND_Y + 3.5, GROUND_Y + 7.0, pt.y);                       // the crown sways, the trunk does not
-  // crown reaching into the top-left of the window; the trunk stands just outside the view
-  vec2 c1 = vec2(-2.4, GROUND_Y + 6.5), c2 = vec2(-0.6, GROUND_Y + 6.95);
-  float e = min(length((q - c1) / vec2(1.9, 1.3)), length((q - c2) / vec2(1.3, 0.75)) + 0.08);
-  float d = e + (0.5 - fbm(q * 1.4 + 3.0)) * 0.8 + (0.5 - vnoise(q * 5.5)) * 0.25;    // leaf clusters, sky in the gaps
-  float crown = smoothstep(0.80 + w, 0.80 - w, d);
-  float tr = sdSegC(q, vec2(-3.1, GROUND_Y), vec2(-2.9, GROUND_Y + 4.9)) - 0.17 + 0.03 * (q.y - GROUND_Y) / 4.9;
-  float l1 = sdSegC(q, vec2(-2.92, GROUND_Y + 4.3), vec2(-0.7, GROUND_Y + 6.5)) - 0.07;
-  float l2 = sdSegC(q, vec2(-1.6, GROUND_Y + 5.4), vec2(-1.1, GROUND_Y + 6.4)) - 0.04;
-  return max(crown, smoothstep(w * 2.0, -w * 2.0, min(tr, min(l1, l2))));
+// 窗外人行道上的一棵梧桐，树冠伸进窗口左上角；当作 TREE_Z 处的竖直「卡片」，离焦按该深度的弥散圆处理。
+// 枝干是 JS 里递归生成的一副骨架（最多 64 段），叶幕的疏密与颜色随季节：春稀而嫩，夏浓，秋黄而疏，冬只剩枝。
+uniform vec4 uBr[64];           // branch segments a.xy → b.xy (world x, y in the tree's plane)
+uniform float uBrR[64];         // their radii
+uniform vec4 uTips[24];         // leaf clusters around the outer twigs: centre xy, radius
+uniform vec4 uLeaf;             // x: foliage density, yzw: leaf albedo
+uniform float uWindNow;         // wind strength now (sways the crown, slants the rain)
+vec2 treeParts(vec2 pt, float w){
+  if (pt.x < -5.6 || pt.x > 1.8 || pt.y < GROUND_Y || pt.y > GROUND_Y + 9.2) return vec2(0.0);
+  float sway = (0.6 + uWindNow) * smoothstep(GROUND_Y + 3.5, GROUND_Y + 7.0, pt.y);
+  vec2 q = pt + vec2(0.10 * sin(uTime * 0.6 + pt.y * 0.8) + 0.05 * sin(uTime * 1.3 + pt.x), 0.03 * sin(uTime * 0.9 + pt.x * 0.7)) * sway;
+  float crown = 0.0;
+  if (uLeaf.x > 0.0){
+    // leaves grow in clusters round the outer twigs; a sparse crown (spring, autumn) has smaller clusters with sky between
+    float e = 1e9;
+    for (int i = 0; i < 24; i++){
+      if (uTips[i].z <= 0.0) break;
+      e = min(e, length(q - uTips[i].xy) / (uTips[i].z * (0.55 + 0.45 * uLeaf.x)));
+    }
+    float d = e + (0.5 - fbm(q * 1.6 + 3.0)) * 0.75 + (0.5 - vnoise(q * 6.0)) * 0.3;
+    crown = smoothstep(0.85 + w, 0.85 - w, d);
+  }
+  float br = 1e9;
+  for (int i = 0; i < 64; i++){
+    if (uBrR[i] <= 0.0) break;
+    br = min(br, sdSegC(q, uBr[i].xy, uBr[i].zw) - uBrR[i]);
+  }
+  return vec2(crown, smoothstep(w * 1.5, -w * 1.5, br));
 }
+float treeAlpha(vec2 pt, float w){ vec2 t = treeParts(pt, w); return max(t.x, t.y); }
 float busMask(vec2 l, float w){ return smoothstep(w, -w, sdBoxC(l - vec2(0.0, 1.72), vec2(5.25, 1.12)) - 0.25); }
 `;
 const GLSL_OUTSIDE = GLSL_CITY + `
@@ -1398,6 +1706,9 @@ uniform vec3 uLampTint;         // street lamp colour (pinkish while warming up,
 uniform float uShopsLit;        // spill of shop light onto the street (shops open and the light needed)
 uniform float uDark;            // 0 by day .. 1 after dark (signboards lit)
 uniform float uTod;             // hour of the day
+uniform float uSnow;            // snow cover 0..1 (winter)
+uniform float uLeafFall;        // autumn: leaves falling from the plane tree
+vec3 snowLit(vec3 E){ return vec3(0.78, 0.8, 0.84) * E / PI; }   // fresh snow, lit by whatever lights the surface
 vec3 skyCol(vec3 rd){
   float e = rd.y;
   vec3 mid = mix(uSkyH, uSkyZ, 0.55);
@@ -1453,6 +1764,7 @@ vec3 facade(vec3 p, vec2 bw){
     if (lit) wc *= 0.7 + 0.3 * smoothstep(-0.4, 0.4, sin(lc.x * 2.2 + cid * 40.0) + (fract(cid * 9.0) - 0.5) * 2.0);
     c = mix(c, wc, m);
     if (lit) c += wc * 0.06 * rectSoft(lc, hs, bw + 0.6);                      // rain-scattered glow
+    c = mix(c, snowLit(E * 1.3), uSnow * rectSoft(lc - vec2(0.0, -hs.y - 0.07), vec2(hs.x + 0.1, 0.05), bw + 0.02));   // snow on the sills
   }
   // ground floor: shopfronts with signboards
   float shop = hash11(bs * 1.93 + 4.0);
@@ -1510,7 +1822,7 @@ vec3 aboveGround(vec3 ro, vec3 rd, float blur, out float dist){
   float h = GROUND_Y + farTop(pf.x);
   float hL = GROUND_Y + farTop(pf.x - bwf), hR = GROUND_Y + farTop(pf.x + bwf);
   float mf = (smoothstep(bwf, -bwf, pf.y - h) * 2.0 + smoothstep(bwf, -bwf, pf.y - hL) + smoothstep(bwf, -bwf, pf.y - hR)) * 0.25;
-  c = mix(c, farCity(pf, bwf), mf);
+  c = mix(c, mix(farCity(pf, bwf), snowLit(uEVert * 1.2) * mf, uSnow * 0.6 * smoothstep(h - 1.5 - bwf, h - 0.6 + bwf, pf.y)), mf);
   c = mix(c, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.9, mf * 0.55);       // heavy rain haze on far blocks
   if (mf > 0.5) dist = tf;
   // opposite buildings
@@ -1521,6 +1833,7 @@ vec3 aboveGround(vec3 ro, vec3 rd, float blur, out float dist){
   float topL = GROUND_Y + bldTop(pb.x - bw), topR = GROUND_Y + bldTop(pb.x + bw);
   float mb = (smoothstep(bw, -bw, pb.y - topY) * 2.0 + smoothstep(bw, -bw, pb.y - topL) + smoothstep(bw, -bw, pb.y - topR)) * 0.25;
   vec3 fc = facade(pb, vec2(bw));
+  fc = mix(fc, snowLit(uEVert * 1.5 + uLampTint * 0.1 * uLampsOut), uSnow * smoothstep(topY - 0.45 - bw, topY - 0.3 + bw, pb.y));   // snow on the roofs
   fc = mix(fc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.8, 1.0 - exp(-tb * 0.012));
   c = mix(c, fc, mb);
   if (mb > 0.5) dist = tb;
@@ -1586,16 +1899,18 @@ vec4 busLayer(vec3 ro, vec3 rd, float blur){
   col = mix(col, vec3(0.006), wheels);
   return vec4(col * uBus.w * m, m);
 }
-vec3 treeCol(vec2 pt){
+vec3 treeCol(vec2 pt, vec2 parts){
   // dark foliage against the dusk; only the undersides nearest the sodium lamp (just left of the view) catch its light
   float under = smoothstep(GROUND_Y + 7.4, GROUND_Y + 5.2, pt.y);
   vec2 dl = pt - vec2(-4.6, GROUND_Y + 6.0);
   float cluster = smoothstep(0.35, 0.75, vnoise(pt * 2.6 + 1.7));
-  vec3 alb = vec3(0.07, 0.12, 0.06) * (0.7 + 0.6 * cluster);
-  vec3 c = alb * uEVert / PI * (1.0 - 0.4 * under);
-  c += vec3(0.75, 0.58, 0.20) * 0.022 * under * cluster / (1.0 + dot(dl, dl) * 0.15) * uLampsOut;
-  c += vec3(0.20, 0.24, 0.14) * 0.004 * under * uDark;
-  return c;
+  vec3 alb = uLeaf.yzw * (0.7 + 0.6 * cluster);
+  alb = mix(alb, vec3(0.14, 0.06, 0.02), 0.35 * smoothstep(0.6, 0.9, vnoise(pt * 4.0 + 9.0)) * step(0.2, uLeaf.y));   // autumn: some leaves already brown
+  vec3 lamp = vec3(1.0, 0.75, 0.3) * 0.25 * under / (1.0 + dot(dl, dl) * 0.15) * uLampsOut;
+  vec3 leaves = alb * (uEVert * (1.0 - 0.4 * under) + lamp) / PI;
+  vec3 bark = vec3(0.05, 0.045, 0.04) * (uEVert * 0.7 + lamp) / PI;
+  bark = mix(bark, snowLit(uEVert * 1.2 + lamp), uSnow * 0.4 * smoothstep(0.55, 0.75, vnoise(pt * vec2(3.0, 7.0))));   // snow lodged on the boughs
+  return parts.x >= parts.y ? leaves : bark;
 }
 
 vec3 outside(vec3 ro, vec3 rd, float blur){
@@ -1629,6 +1944,12 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     float fres = 0.02 + 0.98 * pow(1.0 - min(-rd.y * 1.0, 1.0), 5.0);
     float puddle = smoothstep(0.42, 0.62, fbm3(pg.xz * vec2(0.18, 0.5)));
     vec3 gc = alb / PI * (uEGround + 1.86 * E) + refl * fres * mix(0.45, 0.95, puddle);
+    if (uSnow > 0.0){
+      float tracks = 0.0;
+      for (int k = 0; k < 4; k++){ float lz = k == 0 ? -6.0 : k == 1 ? -9.5 : k == 2 ? -17.4 : -21.9; tracks = max(tracks, smoothstep(0.35, 0.15, abs(abs(pg.z - lz) - 0.75))); }
+      float cover = uSnow * (1.0 - 0.85 * tracks * (1.0 - side)) * (0.85 + 0.15 * vnoise(pg.xz * 1.3));
+      gc = mix(gc, snowLit(uEGround + 1.86 * E), cover);
+    }
     float m = smoothstep(-blur * tb, blur * tb, (ro.y + rd.y * tb) - GROUND_Y);
     gc = mix(gc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.7, 1.0 - exp(-tg * 0.012));
     c = mix(gc, c, m);
@@ -1636,7 +1957,28 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
   vec4 pe = pedestrians(ro, rd, blur, tGround); c = c * (1.0 - pe.a) + pe.rgb;
   vec4 bu = busLayer(ro, rd, blur); c = c * (1.0 - bu.a) + bu.rgb;
   float tt = (TREE_Z - ro.z) / rd.z;                          // the tree: nearest of all
-  if (tt > 0.0 && rd.z < -0.02){ vec2 pt = ro.xy + rd.xy * tt; c = mix(c, treeCol(pt), treeAlpha(pt, blur * tt * 0.5 + 0.015)); }
+  if (tt > 0.0 && rd.z < -0.02){
+    vec2 pt = ro.xy + rd.xy * tt;
+    vec2 parts = treeParts(pt, blur * tt * 0.5 + 0.015);
+    c = mix(c, treeCol(pt, parts), max(parts.x, parts.y));
+  }
+  // autumn: plane-tree leaves let go and tumble down past the window
+  if (uLeafFall > 0.0){
+    for (int i = 0; i < 9; i++){
+      float fi = float(i), h1 = hash11(fi * 7.3), h2 = hash11(fi * 3.1 + 2.0);
+      float T = 7.0 + 5.0 * h2, ph = fract(uTime / T + h1);
+      float lz = TREE_Z + 0.6 - 1.6 * h2;
+      vec3 lp = vec3(-3.2 + 3.4 * h1 + 0.6 * sin(ph * 9.0 + fi) + uWindNow * ph * 2.5, GROUND_Y + 7.2 - ph * 7.4, lz);
+      float t = (lz - ro.z) / rd.z;
+      if (t <= 0.0) continue;
+      vec2 d = (ro.xy + rd.xy * t) - lp.xy;
+      float a = uTime * (2.0 + 2.0 * h1) + fi;
+      d = vec2(cos(a) * d.x - sin(a) * d.y, sin(a) * d.x + cos(a) * d.y);
+      float wl = blur * t + 0.01;
+      float m = smoothstep(wl, -wl, length(d / vec2(0.07, 0.035 + 0.03 * abs(sin(a * 0.7)))) * 0.05 - 0.05) * uLeafFall;
+      c = mix(c, uLeaf.yzw * (uEVert + vec3(1.0, 0.7, 0.3) * 0.3 * uLampsOut) / PI * 1.3, m);
+    }
+  }
   return c;
 }
 `;
@@ -1660,9 +2002,29 @@ float rainStreaks(vec3 rd){
     float z = 3.6 * pow(1.75, float(k));                    // 3.6, 6.3, 11 m from the eye
     float coc = max(uAperture * abs(1.0 / z - 1.0 / uFocus), 0.002);
     float len = 6.2 * 0.02 / z;
-    vec2 q = vec2((tp.x + tp.y * 0.07) / (coc * 1.3), (tp.y + uTime * 6.2 / z) / (len * 1.1));
+    vec2 q = vec2((tp.x + tp.y * (0.07 + 0.3 * uWindNow)) / (coc * 1.3), (tp.y + uTime * 6.2 / z) / (len * 1.1));
     float n = vnoise(q + float(k) * 37.0);
     L += pow(n, 7.0) * (1.0 - 0.25 * float(k));
+  }
+  return L;
+}
+// 雪：慢慢飘落的雪花（约 1 m/s，随风左右摆），在近处离焦成柔和的圆斑；它们反射照在身上的光（天光、路灯）
+vec3 snowFlakes(vec3 rd){
+  vec3 L = vec3(0.0);
+  vec2 tp = rd.xy / max(-rd.z, 0.2);
+  vec3 lightF = (uEVert * 0.9 + uLampTint * 0.12 * uLampsOut + uGlow * 2.0) * 0.8 / PI;
+  for (int k = 0; k < 4; k++){
+    float z = 2.6 * pow(1.8, float(k));
+    float coc = max(uAperture * abs(1.0 / z - 1.0 / uFocus), 0.0012);
+    float cell = max(coc * 4.5, 0.01);
+    vec2 q = tp;
+    q.y += uTime * 0.9 / z;
+    q.x += (0.25 * sin(uTime * 0.6 + q.y * 2.0 + float(k)) + uWindNow * uTime * 0.7) / z;
+    vec2 g = q / cell, id = floor(g), f = fract(g) - 0.5;
+    vec3 h = hash32(id + float(k) * 19.0);
+    if (h.z > 0.5) continue;
+    float r = length(f - (h.xy - 0.5) * 0.5) * cell;
+    L += lightF * smoothstep(coc + 0.0008, coc * 0.6, r) * (0.35 + 0.4 * h.x) * (1.0 - 0.18 * float(k));
   }
   return L;
 }
@@ -1677,7 +2039,10 @@ void main(){
     rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
   }
   vec3 c = outside(uEye, rd, uBlur);
-  if (uMode == 1) c *= 1.0 + rainStreaks(rd) * 0.75 * uRain;
+  if (uMode == 1){
+    if (uSnow > 0.0) c += snowFlakes(rd) * uSnow * (0.4 + 0.8 * uRain);
+    else c *= 1.0 + rainStreaks(rd) * 0.75 * uRain;
+  }
   o = vec4(c, 1.0);
 }
 `;
@@ -1839,9 +2204,10 @@ void main(){
   float r = aD.z, el = aM.z;
   vec2 dir = aM.xy, tail = -dir, side = vec2(-dir.y, dir.x);
   float m = 1.14;
+  if (aD.w < 0.0){ el = 0.0; dir = vec2(0.0, -1.0); tail = vec2(0.0, 1.0); side = vec2(1.0, 0.0); }   // snowflake: plain square quad
   float u = corner.x > 0.0 ? r * (1.0 + el) * m : -r * (1.0 + 0.15 * el) * m;
   vec2 q = tail * u + side * (corner.y * r * m);
-  vQ = q; vA = vec4(r, aD.w, el, aM.w); vDir = dir;
+  vQ = q; vA = vec4(r, aD.w, aD.w < 0.0 ? aM.z : el, aM.w); vDir = aD.w < 0.0 ? aM.xy : dir;
   gl_Position = vec4((aD.xy + q) / uSimMM * 2.0 - 1.0, 0.0, 1.0);
 }`;
 const FS_DROP = () => GLSL_HEAD() + `
@@ -1850,6 +2216,26 @@ uniform float uHScale;
 out vec4 o;
 void main(){
   float r = vA.x, th = vA.y, el = vA.z, seed = vA.w;
+  if (th < 0.0){
+    // a stellar dendrite: six arms, each with side branches at 60°; it shrinks into a bead of water as it melts
+    float melt = el;
+    vec2 q = vec2(dot(vQ, vDir), dot(vQ, vec2(-vDir.y, vDir.x))) / (r * (1.0 - 0.6 * melt));
+    float rr = length(q);
+    if (rr > 1.05) discard;
+    float a = mod(atan(q.y, q.x), PI / 3.0) - PI / 6.0;
+    vec2 w = rr * vec2(cos(a), sin(a));
+    float d = abs(w.y) + max(w.x - 1.0, 0.0);
+    for (int k = 0; k < 3; k++){
+      float kk = 0.28 + 0.24 * float(k) + 0.06 * (seed - 0.5);
+      vec2 o2 = vec2(w.x - kk, abs(w.y));
+      float t = clamp(dot(o2, vec2(0.5, 0.866)), 0.0, (1.0 - kk) * 0.6);
+      d = min(d, length(o2 - vec2(0.5, 0.866) * t));
+    }
+    float flake = max(smoothstep(0.1, 0.05, d), smoothstep(0.24, 0.16, rr)) * (1.0 - melt * melt * melt);
+    float R = r * 0.45, hb = max(R * R - dot(vQ, vQ), 0.0);
+    o = vec4(sqrt(hb) * 0.5 * melt * uHScale, flake, 0.0, 1.0);
+    return;
+  }
   float u = dot(vQ, -vDir), v = dot(vQ, vec2(-vDir.y, vDir.x));
   float slide = min(el * 2.0, 1.0);
   float ang = atan(v, u);
@@ -1886,6 +2272,8 @@ uniform vec2 uHTex;         // height texture size (texels)
 uniform float uHScale;
 uniform float uTime;
 uniform int uDbg;
+uniform float uFrost, uFogK;     // winter frost on the inside; how heavily the inside condenses this season
+uniform vec4 uGLeaf[3];          // autumn: wet leaves stuck to the outside of the glass (x, y, size, angle; size 0 = none)
 out vec4 o;
 
 const float NW = 1.333;     // water
@@ -1956,7 +2344,7 @@ void main(){
   vec2 pm = guv * uSimMM;
   // ---- glass state: outside mist M, trail film W, inside condensation F, wipe rim
   vec4 st = texture(uState, guv);
-  float M = smoothstep(0.02, 0.9, st.r), W = st.g, Fin = st.b, rim = st.a;
+  float M = smoothstep(0.02, 0.9, st.r), W = st.g, Fin = min(st.b * uFogK, 1.0), rim = st.a;
   // ---- macro drops: height + gradient (condensation on the inside softens what is seen through it)
   float lod = Fin * 3.0;
   vec2 e = exp2(lod) / uHTex;
@@ -2020,6 +2408,41 @@ void main(){
   float speckPx = 0.15 / max(length(fwidth(dg)), 1e-4);
   float speck = step(0.93, dh.z) * smoothstep(0.17, 0.07, length(fract(dg) - 0.25 - 0.5 * dh.xy)) * smoothstep(0.6, 1.3, speckPx);
   glass += (Eg * 0.03 + avgC * 0.3) * speck;
+  float aaG = length(fwidth(P.xy));                          // world size of a pixel on the glass
+  // snowflakes resting on the outside: ice crystals scatter both the street light behind and the lamp in front
+  float flake = textureLod(uHeight, guv, 0.0).g * (1.0 - 0.5 * Fin);
+  if (flake > 0.0) glass = mix(glass, Eg * 0.11 + avgC * 2.2 + uSkyL * 0.25, min(flake, 1.0) * 0.9);
+  // 冰花：严冬里内侧玻璃从下沿和窗框边向上结出的冰晶（脊状噪声的分形「羊齿」，越往上越稀）。它散射台灯光，擦不掉。
+  if (uFrost > 0.0){
+    float yb = P.y < TRANSOM_Y ? P.y - (WIN_Y0 + FW) : P.y - (TRANSOM_Y + TW);
+    float xe = min(min(abs(P.x - (WIN_X0 + FW)), abs(P.x + MW)), min(abs(P.x - MW), abs(P.x - (WIN_X1 - FW))));
+    float edge = min(yb, xe * 1.6);
+    vec2 fq = P.xy * vec2(75.0, 60.0);
+    float fern = 0.0, amp = 0.5;
+    for (int k = 0; k < 4; k++){ fern += amp * (1.0 - abs(2.0 * vnoise(fq) - 1.0)); fq = FBM_R * fq * 1.1 + 5.3; amp *= 0.55; }
+    float corner = min(yb, xe) + 0.6 * max(yb, xe);                 // corners grow first
+    float frost = smoothstep(0.62, 0.86, fern + 0.95 - min(edge * 15.0, corner * 11.0)) * uFrost * (P.y < TRANSOM_Y ? 1.0 : 0.55);
+    glass = mix(glass, Eg * 0.085 + avgC * 0.9 + uSkyL * 0.12, frost * 0.8);
+  }
+  // autumn: wet plane-tree leaves blown against the outside of the glass; translucent with the street light behind
+  for (int i = 0; i < 3; i++){
+    if (uGLeaf[i].z <= 0.0) continue;
+    float Rl = uGLeaf[i].z;
+    vec2 q = rot2(P.xy - uGLeaf[i].xy, uGLeaf[i].w);
+    if (dot(q, q) > Rl * Rl * 1.3) continue;
+    vec2 c = q - vec2(0.0, Rl * 0.35);
+    float rl = length(c), al = atan(c.x, c.y);
+    float lobes = 0.6 + 0.4 * pow(abs(cos(al * 2.5)), 0.6) + 0.035 * sin(al * 26.0);
+    float aaL = aaG * 1.2 + 0.0003;
+    float blade = smoothstep(aaL, -aaL, rl - Rl * 0.62 * lobes) * step(abs(al), 2.65);
+    float stem = smoothstep(0.002 + aaL, 0.0, abs(q.x)) * step(-Rl * 0.45, q.y) * step(q.y, Rl * 0.0);
+    float lf = max(blade, stem);
+    if (lf <= 0.0) continue;
+    float vein = smoothstep(0.0025, 0.0, abs(fract(al / 1.2566 + 0.5) - 0.5) * rl) * step(rl, Rl * 0.55);
+    vec3 alb = mix(vec3(0.36, 0.20, 0.04), vec3(0.22, 0.10, 0.03), smoothstep(0.4, 0.8, vnoise(q * 60.0 + float(i) * 9.0)));
+    vec3 leafC = avgC * vec3(0.55, 0.36, 0.08) * (1.0 - 0.5 * vein) + Eg * alb / PI * 0.6;
+    glass = mix(glass, leafC + refl * 0.5, lf);                                // wet: it keeps a sheen
+  }
   // paper-cut corner flowers: red paper glowing with the street light behind it, lit warm from the front by the lamp
   float aaW = length(fwidth(P.xy)) * 0.8 + 0.0002;
   vec2 dL = vec2(P.x - (WIN_X0 + FW), (TRANSOM_Y - TW) - P.y), dR = vec2((WIN_X1 - FW) - P.x, (TRANSOM_Y - TW) - P.y);
@@ -2277,6 +2700,7 @@ function makeTex(w, h, fmt, opts = {}) {
   const F = {
     rgba16f: [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT],
     r16f: [gl.R16F, gl.RED, gl.HALF_FLOAT],
+    rg16f: [gl.RG16F, gl.RG, gl.HALF_FLOAT],
     rgba8: [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE],
   }[fmt];
   const levels = opts.mips ? Math.floor(Math.log2(Math.max(w, h))) + 1 : 1;
@@ -2506,7 +2930,8 @@ function vnoiseJS(x, y) {
   SIM.GCELL = 5;   // merge hash cell (mm)
   SIM.HW = Math.ceil(W / SIM.GCELL); SIM.HH = Math.ceil(H / SIM.GCELL);
   SIM.head = new Int32Array(SIM.HW * SIM.HH); SIM.next = new Int32Array(M);
-  SIM.inst = new Float32Array(M * 8);
+  SIM.inst = new Float32Array((M + 200) * 8);
+  SIM.flakes = [];                    // snowflakes resting on the glass, melting
 })();
 const gidx = (x, y) => clamp(Math.floor(y / SIM.CELL), 0, SIM.GH - 1) * SIM.GW + clamp(Math.floor(x / SIM.CELL), 0, SIM.GW - 1);
 function paneOf(x, y) { for (let k = 0; k < 4; k++) { const p = SIM.panes[k]; if (x >= p[0] && x <= p[2] && y >= p[1] && y <= p[3]) return k; } return -1; }
@@ -2556,8 +2981,10 @@ function compact() {
   SIM.n = j;
 }
 function rainImpact() {
-  // Marshall–Palmer drop-size distribution, truncated to the visible range
-  const R = 1.5 + 34 * SIM.rain * SIM.rain;                 // rain rate, mm/h
+  const SE = SEASONS[WORLD.season];
+  // Marshall–Palmer drop-size distribution, truncated to the visible range (the season scales the rain rate:
+  // spring drizzle has few big drops, a summer downpour many)
+  const R = (1.5 + 34 * SIM.rain * SIM.rain) * SE.rainR;    // rain rate, mm/h
   const Lam = 4.1 * Math.pow(R, -0.21);
   const Dmin = 0.6, Dmax = 5.0;
   const D = Dmin - Math.log(1 - rnd() * (1 - Math.exp(-Lam * (Dmax - Dmin)))) / Lam;
@@ -2567,6 +2994,12 @@ function rainImpact() {
   while (a > SIM.paneArea[k] && k < 3) a -= SIM.paneArea[k++];
   const p = SIM.panes[k];
   const x = p[0] + rnd() * (p[2] - p[0]), y = p[1] + rnd() * (p[3] - p[1]);
+  if (SE.snow) {
+    // 雪花落在玻璃上：停留几秒，被玻璃（室内一侧是暖的）慢慢化开，最后变成一颗等水量的小水滴
+    if (SIM.flakes.length < 320) SIM.flakes.push({ x, y, r: 0.7 + 1.6 * rnd() ** 1.5, rot: rnd() * 6.283, age: 0, melt: 8 + 14 * rnd(), seed: rnd(), pane: k });
+    if (SIM.events.length < 64) SIM.events.push({ type: 'flake', x, y });
+    return;
+  }
   if (D > 2.2) {                                             // splash: satellites share ~28% of the volume
     const ns = 2 + Math.floor(rnd() * 4), vs = V * 0.28;
     for (let s = 0; s < ns; s++) {
@@ -2589,10 +3022,15 @@ function simStep(dt) {
   const c = SIM.clock, swell = 0.5 + 0.22 * Math.sin(c / 37 + 1.3) + 0.17 * Math.sin(c / 83 + 4.1) + 0.11 * Math.sin(c / 151);
   SIM.rain = clamp(SIM.rainBase * (0.62 + 0.76 * swell), 0, 1);
   // 1) rain arrivals (Poisson)
-  const lam = (0.5 + 160 * Math.pow(SIM.rain, 1.25)) * dt;        // impacts per second over the whole window
+  const lam = (0.5 + 160 * Math.pow(SIM.rain, 1.25)) * SEASONS[WORLD.season].rate * dt;   // impacts per second over the whole window
   let k = 0; const L = Math.exp(-lam); let p = rnd();
   while (p > L && k < 20) { k++; p *= rnd(); }
   for (let q = 0; q < k; q++) rainImpact();
+  for (const f of SIM.flakes) {
+    f.age += dt;
+    if (f.age > f.melt) { f.done = true; addDrop(f.x, f.y, 0.07 * f.r ** 3, f.pane); }   // meltwater: ~0.07 r³ mm³ (a dendrite is mostly air)
+  }
+  if (SIM.flakes.some(f => f.done)) SIM.flakes = SIM.flakes.filter(f => !f.done);
   // 2) forces & motion
   for (let i = 0; i < SIM.n; i++) {
     const r = SIM.r[i]; if (r <= 0) continue;
@@ -2684,7 +3122,7 @@ let fieldRow = 0;
 function fieldStep(dt) {
   const GW = SIM.GW, GH = SIM.GH, rows = Math.ceil(GH / 4);
   const dtt = dt * 4;
-  const aM = (0.004 + 0.06 * SIM.rain) * dtt, dW = Math.exp(-dtt / 22), dR = Math.exp(-dtt / 45);
+  const aM = (0.004 + 0.06 * SIM.rain) * SEASONS[WORLD.season].mist * dtt, dW = Math.exp(-dtt / 22), dR = Math.exp(-dtt / 45);
   for (let r = 0; r < rows; r++) {
     const j = (fieldRow + r * 4) % GH;
     for (let i = 0, k = j * GW; i < GW; i++, k++) {
@@ -2716,6 +3154,14 @@ function packDrops() {
     a[o] = SIM.x[i]; a[o + 1] = SIM.y[i]; a[o + 2] = SIM.r[i] * (0.55 + 0.45 * grow); a[o + 3] = SIM.th[i];
     a[o + 4] = dx; a[o + 5] = dy; a[o + 6] = Math.max(el, 0); a[o + 7] = SIM.seed[i];
   }
+  // snowflakes go in the same instance stream, flagged by θ < 0 (they draw into the second channel)
+  let o = SIM.n * 8;
+  for (const f of SIM.flakes) {
+    a[o] = f.x; a[o + 1] = f.y; a[o + 2] = f.r; a[o + 3] = -1;
+    a[o + 4] = Math.cos(f.rot); a[o + 5] = Math.sin(f.rot); a[o + 6] = clamp(f.age / f.melt, 0, 1); a[o + 7] = f.seed;
+    o += 8;
+  }
+  return SIM.n + SIM.flakes.length;
 }
 function simStats() {
   const rs = Array.from(SIM.r.subarray(0, SIM.n)).sort((a, b) => a - b);
@@ -2783,6 +3229,9 @@ function camRay(ndcX, ndcY) {
    ========================================================================== */
 // 每次打开都略有不同：暖水瓶的漆色、挂历的画、对街的天际线
 const VARY = { v: [rnd(), rnd(), rnd(), rnd()], city: Math.floor(rnd() * 97) };
+// autumn: where three wet leaves have stuck to the glass this time (world x, y, size, angle)
+VARY.glassLeaves = new Float32Array([0, 1, 2].flatMap(i => { const pane = S.PANES[[0, 1, 1][i]];
+  return [lerp(pane[0] + 0.07, pane[2] - 0.07, rnd()), lerp(pane[1] + 0.1, pane[3] - 0.08, rnd() ** 0.7), 0.045 + 0.025 * rnd(), (rnd() - 0.5) * 2.4]; }));
 
 /* ============================================================================
    WORLD — season and hour. Everything that depends on them is derived here,
@@ -2815,10 +3264,39 @@ function skyAt(h) {
   const hor = add3(mulc(hcw, Lz * lerp(0.45, 1.75, twi)), [0.009, 0.0058, 0.0034]);
   return { zen, hor };
 }
+// 四季：降水（Marshall–Palmer 雨强倍数、撞击率、雾珠增长）、梧桐叶幕、风、雷暴、内侧冷凝的轻重
+const SEASONS = [
+  { name: '春', rainR: 0.35, rate: 0.85, mist: 1.6, leaf: [0.55, 0.12, 0.22, 0.05], snow: 0, wind: 0.12, storm: 0, fog: 1.0 },
+  { name: '夏', rainR: 2.4, rate: 1.5, mist: 1.1, leaf: [1.0, 0.045, 0.10, 0.04], snow: 0, wind: 0.2, storm: 1, fog: 0.75 },
+  { name: '秋', rainR: 1.0, rate: 1.0, mist: 1.0, leaf: [0.6, 0.34, 0.21, 0.035], snow: 0, wind: 0.55, storm: 0, fog: 1.0 },
+  { name: '冬', rainR: 1.0, rate: 0.3, mist: 0.35, leaf: [0.0, 0.05, 0.04, 0.03], snow: 1, wind: 0.3, storm: 0, fog: 1.0 },
+];
+// the plane tree's skeleton (recursive branching), in the plane of the tree card: world x, y
+const BRANCHES = (() => {
+  const GY = S.GROUND_Y, segs = [], r = mulberry32(4242);
+  const grow = (x, y, ang, len, rad, depth) => {
+    const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len;
+    segs.push([x, y, x2, y2, rad, depth === 0 ? 1 : 0]);
+    if (depth === 0) return;
+    const n = depth >= 3 ? 2 : 2 + (r() < 0.45 ? 1 : 0);
+    for (let i = 0; i < n; i++) grow(x2, y2, ang + (i - (n - 1) / 2) * (0.55 + 0.25 * r()) + (r() - 0.5) * 0.4, len * (0.6 + 0.15 * r()), rad * 0.6, depth - 1);
+  };
+  segs.push([-3.1, GY, -2.92, GY + 4.6, 0.17]);
+  grow(-2.92, GY + 4.4, 0.85, 1.25, 0.075, 3);      // the long limb reaching over toward the window
+  grow(-2.95, GY + 4.55, 1.45, 1.25, 0.07, 3);      // straight up
+  grow(-2.95, GY + 4.5, 2.25, 1.2, 0.06, 2);        // back over the pavement
+  const a = new Float32Array(64 * 4), rr = new Float32Array(64), tips = new Float32Array(24 * 4);
+  segs.slice(0, 64).forEach((g, i) => { a.set(g.slice(0, 4), i * 4); rr[i] = g[4]; });
+  // the outer twigs carry the foliage
+  const ends = segs.filter(g => g[5]).slice(0, 24);
+  ends.forEach((g, i) => tips.set([g[2], g[3], 0.75 + 0.25 * r(), 0], i * 4));
+  return { a, r: rr, tips, n: Math.min(64, segs.length) };
+})();
 const WORLD = {
   season: QS.has('season') ? clamp(+QS.get('season') | 0, 0, 3) : [3, 3, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3][new Date().getMonth()],
   tod: 0, atDusk: !QS.has('tod'), flowing: QS.has('flow'), dayMinutes: 20,
-  h: -4, lampsOn: false, lampWarm: 1, U: {},
+  h: -4, lampsOn: false, lampWarm: 1, U: {}, flash: 0,
+  bolt: { t: 0, next: 10, strokes: [], rnd: mulberry32(1234) },
 };
 WORLD.tod = QS.has('tod') ? +QS.get('tod') : duskTime(WORLD.season);
 // households awake and at home, by hour; windows light up when that meets the dark
@@ -2838,7 +3316,30 @@ function worldUpdate(wdt) {
   const warm = smooth(0, 1, W.lampWarm);
   const lampsOut = W.lampsOn ? 0.15 + 0.85 * warm * warm : 0;
   const lampCol = mix3([0.85, 0.55, 0.75], [1.0, 0.55, 0.18], warm);
-  const sky = skyAt(h);
+  // 夏天的雷阵雨：每隔几十秒一道闪电，由 2–5 次回击组成（间隔 40–150 ms），每次回击是几十毫秒的衰减脉冲，
+  // 有的带一段持续电流（余辉更长）。云底被照亮：天光、窗光、楼面一起陡然变亮。眼睛来不及适应（曝光只看不含闪电的天光）。
+  // 雷声按声速 343 m/s 延迟到达。
+  const SE0 = SEASONS[W.season], B = W.bolt;
+  B.t += wdt;
+  if (SE0.storm && !DBG.shot) {
+    B.next -= wdt * (0.4 + SIM.rain);
+    if (B.next <= 0) {
+      B.next = 15 + 45 * B.rnd();
+      const dist = 1.2 + 7 * B.rnd() ** 1.3, n = 2 + Math.floor(B.rnd() * 4), I0 = 2.5 / (0.5 + dist / 2);
+      let ts = B.t;
+      for (let i = 0; i < n; i++) {
+        B.strokes.push({ t: ts, I: I0 * (i === 0 ? 1 : 0.35 + 0.65 * B.rnd()), tau: B.rnd() < 0.25 ? 0.16 : 0.025 + 0.035 * B.rnd() });
+        ts += 0.04 + 0.11 * B.rnd();
+      }
+      AUDIO.thunder && AUDIO.thunder(dist);
+    }
+  }
+  let fl = 0;
+  for (const st of B.strokes) { const a = B.t - st.t; if (a >= 0) fl += st.I * Math.min(1, a / 0.003) * Math.exp(-a / st.tau); }
+  if (B.strokes.length && B.t - B.strokes[B.strokes.length - 1].t > 1.5) B.strokes.length = 0;
+  W.flash = DBG.flash || fl;
+  const sky0 = skyAt(h), FC = [0.86, 0.93, 1.0];
+  const sky = { zen: add3(sky0.zen, mulc(FC, W.flash)), hor: add3(sky0.hor, mulc(FC, W.flash * 0.75)) };
   const dark = smooth(4, -3, h);
   const occ = curve(HOME, W.tod) * (0.12 + 0.88 * dark) * 0.5;
   const shops = smooth(7, 8, W.tod) * (1 - smooth(21, 23, W.tod));
@@ -2847,7 +3348,13 @@ function worldUpdate(wdt) {
   const eGround = mulc(add3(mulc(sky.zen, 0.75), mulc(sky.hor, 0.25)), Math.PI);
   const cityLights = 0.6 * lampsOut + 0.8 * occ + 0.4 * shops * dark;
   const cityWin = add3(mulc(eVert, 0.2 / Math.PI), mulc([1.0, 0.72, 0.45], 0.028 * cityLights / 0.76));
-  W.U = { sky, skyWin, cityWin, eVert, eGround, occ, lampsOut, lampCol, shops, dark,
+  const SE = SEASONS[W.season];
+  W.gustT = (W.gustT || 0) - wdt;
+  if (W.gustT <= 0) { W.gustT = 2 + rnd() * 4; W.gustTo = 0.4 + 0.9 * rnd(); }
+  W.gust = lerp(W.gust || 0.7, W.gustTo || 0.7, 1 - Math.exp(-wdt / 1.5));
+  W.windNow = SE.wind * W.gust;
+  W.U = { sky, skyWin, cityWin, eVert, eGround, occ, lampsOut, lampCol, shops, dark, flash: W.flash,
+          skyWinBase: add3(mulc(sky0.hor, 0.6), mulc(sky0.zen, 0.4)),
           glow: mulc([0.05, 0.028, 0.018], 0.3 + 0.7 * lampsOut), shopsLit: shops * (0.3 + 0.7 * dark) };
 }
 function periodName(tod, h) {
@@ -2878,7 +3385,7 @@ function lightUniforms(t, dt) {
   // 眼睛的适应：由已知光照解析地估计场景的基准亮度（台灯 + 窗光），不做 GPU 回读。
   // 只部分补偿：比参考暗时补偿 85%（夜里关灯后房间仍是暗的），比参考亮时补偿 70%（白天窗户偏亮、房间仍明亮）。
   // 变暗适应 2.6 s，变亮 0.7 s。
-  const key = lv * lv + 2.0 * lum3(skyL) + 0.5 * lum3(cityL);
+  const key = lv * lv + 2.0 * lum3(WORLD.U.skyWinBase) + 0.5 * lum3(cityL);
   const ev = Math.log2(Math.max(key, 0.12) / 1.25);                   // stops above / below the dusk-with-lamp reference
   const target = clamp(Math.pow(2, -ev * (ev > 0 ? 0.7 : 0.85)), 0.03, 7);
   const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
@@ -2968,7 +3475,7 @@ function allocTargets() {
   // height field: about one texel per screen pixel of glass, 512..1408 wide
   const glassPx = W * (S.WIN_X1 - S.WIN_X0) / (2 * CAM.tan[0] * Math.abs(CAM.focus || 1.9));
   const hw = clamp(Math.round(glassPx * 1.1 / 64) * 64, 512, 1408);
-  T.height = makeTarget(hw, Math.round(hw * SIM.H / SIM.W), [caps.hdr ? 'r16f' : 'rgba8'], { mips: true });
+  T.height = makeTarget(hw, Math.round(hw * SIM.H / SIM.W), [caps.hdr ? 'rg16f' : 'rgba8'], { mips: true });   // r: water height (mm), g: snowflake
 }
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, R.dprCap);
@@ -3021,9 +3528,14 @@ function outsideUniforms(pr, t) {
   U(pr, 'uEVert', Wu.eVert); U(pr, 'uEGround', Wu.eGround);
   U(pr, 'uOcc', Wu.occ); U(pr, 'uLampsOut', Wu.lampsOut); U(pr, 'uLampTint', Wu.lampCol);
   U(pr, 'uShopsLit', Wu.shopsLit); U(pr, 'uDark', Wu.dark); U(pr, 'uTod', WORLD.tod);
+  U(pr, 'uSnow', SEASONS[WORLD.season].snow * 0.85); U(pr, 'uLeafFall', WORLD.season === 2 ? 1 : 0);
 }
 
 function cityUniforms(pr) {
+  if (pr.u.uBr) { gl.uniform4fv(pr.u.uBr, BRANCHES.a); gl.uniform1fv(pr.u.uBrR, BRANCHES.r); }
+  if (pr.u.uTips) gl.uniform4fv(pr.u.uTips, BRANCHES.tips);
+  const SE = SEASONS[WORLD.season];
+  U(pr, 'uLeaf', SE.leaf); U(pr, 'uWindNow', WORLD.windNow || 0);
   const b = OUT.cars.find(c => c.bus);
   U(pr, 'uBus', b ? [b.x, b.z + 1.25, b.dir, smooth(0, 3, b.age)] : [0, 0, 0, 0]);
   U(pr, 'uCity', VARY.city);
@@ -3077,15 +3589,15 @@ function render(t, dt, rt) {
   // 2b) drops → height field (MAX blend), with mips for the condensation blur
   bindTarget(T.height);
   gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-  if (SIM.n > 0) {
-    packDrops();
+  if (SIM.n + SIM.flakes.length > 0) {
+    const nInst = packDrops();
     gl.useProgram(P.drop.p);
     U(P.drop, 'uSimMM', [SIM.W, SIM.H]); U(P.drop, 'uHScale', hScale);
     gl.bindVertexArray(dropVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, dropBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, SIM.inst, 0, SIM.n * 8);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, SIM.inst, 0, nInst * 8);
     gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.blendFunc(gl.ONE, gl.ONE);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, SIM.n);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nInst);
     gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
   }
@@ -3101,7 +3613,7 @@ function render(t, dt, rt) {
   camUniforms(P.room); lightU(P.room, Lt);
   U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t % 900);
   const ct = WORLD.tod;
-  U(P.room, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0);
+  U(P.room, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0); U(P.room, 'uSeason', WORLD.season);
   const hal = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
   const ji = (frame % 16) + 1;
   R.jitter = QS.has('nojitter') ? [0, 0] : [hal(ji, 2) - 0.5, hal(ji, 3) - 0.5];
@@ -3136,6 +3648,9 @@ function render(t, dt, rt) {
   gl.useProgram(P.composite.p);
   camUniforms(P.composite); lightU(P.composite, Lt);
   U(P.composite, 'uRes', [T.hdr.w, T.hdr.h]); U(P.composite, 'uTime', t); U(P.composite, 'uDbg', I(+(QS.get('dbg') || 0)));
+  const SEc = SEASONS[WORLD.season];
+  U(P.composite, 'uFrost', SEc.snow ? 1 : 0); U(P.composite, 'uFogK', SEc.fog);
+  gl.uniform4fv(P.composite.u.uGLeaf, WORLD.season === 2 ? VARY.glassLeaves : new Float32Array(12));
   U(P.composite, 'uSimMM', [SIM.W, SIM.H]); U(P.composite, 'uHTex', [T.height.w, T.height.h]); U(P.composite, 'uHScale', hScale);
   bindTex(P.composite, 'uRoom', R.roomOut.tex, 0);
   bindTex(P.composite, 'uDefocus', T.defocus.tex, 1);
@@ -3304,7 +3819,8 @@ const UI = (() => {
   if (IS_MOBILE) panel.querySelector('.hint').innerHTML = '轻触台灯开关；在玻璃上划过可擦去雾气；倾斜手机看看。';
   // season / hour / flow
   const segS = document.getElementById('season'), todIn = document.getElementById('tod'), todLabel = document.getElementById('todLabel'), flowB = document.getElementById('flow');
-  const showSeason = () => segS.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.s === WORLD.season));
+  const rainLbl = document.getElementById('rainLbl');
+  const showSeason = () => { segS.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.s === WORLD.season)); rainLbl.textContent = SEASONS[WORLD.season].snow ? '雪势' : '雨势'; };
   const setSeason = k => {
     WORLD.season = (k + 4) % 4;
     if (WORLD.atDusk) WORLD.tod = duskTime(WORLD.season);         // "dusk" stays dusk: summer's is later than winter's
@@ -3349,7 +3865,7 @@ const UI = (() => {
    ========================================================================== */
 Object.assign(AUDIO, (() => {
   let ctx = null, master, comp, wet, enabled = true, ready = false;
-  let bedGain, bedLP, patGain, roomGain, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0;
+  let bedGain, bedLP, patGain, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0, birdT = 2;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
   function noiseBuffer(sec, kind) {
@@ -3443,6 +3959,13 @@ Object.assign(AUDIO, (() => {
     const pLP = ctx.createBiquadFilter(); pLP.type = 'lowpass'; pLP.frequency.value = 4200;
     loop(pat, 1.0, pLP); loop(pat, 0.913, pLP);
     pLP.connect(patGain); patGain.connect(master);
+    // wind round the building: band-passed noise swept by the gusts, and a faint whistle in the window's gaps
+    windGain = ctx.createGain(); windGain.gain.value = 0;
+    windBP = ctx.createBiquadFilter(); windBP.type = 'bandpass'; windBP.frequency.value = 400; windBP.Q.value = 0.9;
+    whistle = ctx.createBiquadFilter(); whistle.type = 'bandpass'; whistle.frequency.value = 820; whistle.Q.value = 28;
+    const wg = ctx.createGain(); wg.gain.value = 2.2;
+    loop(pink, 0.71, windBP); loop(pink, 1.13, whistle);
+    windBP.connect(windGain); whistle.connect(wg); wg.connect(windGain); windGain.connect(master);
     // room tone
     roomGain = ctx.createGain(); roomGain.gain.value = 0.05;
     const rLP = ctx.createBiquadFilter(); rLP.type = 'lowpass'; rLP.frequency.value = 160;
@@ -3468,6 +3991,25 @@ Object.assign(AUDIO, (() => {
       cars.push({ g, pan, bp, s1, s2 });
     }
     ready = true;
+  }
+  // 鸟：清晨（春夏）的一串鸣叫，隔着玻璃。两种：麻雀的短促「啾」，和白头鹎那样起伏的几个音。
+  function birdPhrase() {
+    const t0 = ctx.currentTime + 0.05, sparrow = rand() < 0.55, n = sparrow ? 2 + Math.floor(rand() * 4) : 3 + Math.floor(rand() * 3);
+    const g = ctx.createGain(); g.gain.value = 0;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4800;
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.connect(g); g.connect(lp);
+    if (p) { p.pan.value = rand() * 1.6 - 0.8; lp.connect(p); p.connect(master); p.connect(wet); } else lp.connect(master);
+    let t = t0; const base = sparrow ? 3300 + rand() * 700 : 1700 + rand() * 600, amp = 0.025 + 0.03 * rand();
+    for (let i = 0; i < n; i++) {
+      const d = sparrow ? 0.05 + 0.03 * rand() : 0.09 + 0.12 * rand();
+      const f0 = base * (sparrow ? 1 + 0.1 * rand() : 0.85 + 0.5 * rand()), f1 = f0 * (sparrow ? 0.7 + 0.2 * rand() : 0.8 + 0.5 * rand());
+      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + d);
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp, t + 0.012); g.gain.setTargetAtTime(0, t + d * 0.6, d * 0.25);
+      t += d + (sparrow ? 0.06 + 0.08 * rand() : 0.04 + 0.1 * rand());
+    }
+    o.start(t0); o.stop(t + 0.3);
   }
   function oneShot(buf, gain, pan, rate = 1, toWet = 0.3, lp = 0) {
     if (!ready) return;
@@ -3500,6 +4042,34 @@ Object.assign(AUDIO, (() => {
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
     click(on) { if (ready) oneShot(clickBuf, 0.5, -0.45, on ? 1.0 : 0.88, 0.4); },
+    // 雷声：闪电通道有几公里长，各段的声音先后到达，所以是一串此起彼伏的滚动；近雷先有一声撕裂的「咔」。
+    // 空气吸收高频，越远越闷（低通截止 ∝ 1/距离）；隔着玻璃再削一点高频。延迟 = 距离 / 343 m/s。
+    thunder(dist) {
+      if (!ready || ctx.state !== 'running') return;
+      const sr = ctx.sampleRate, dur = 4 + 3 * rand() + dist * 0.4, n = Math.floor(sr * dur), buf = ctx.createBuffer(2, n, sr);
+      const peaks = [];
+      for (let i = 0, np = 4 + Math.floor(rand() * 5); i < np; i++)
+        peaks.push({ t: i === 0 ? 0.02 : 0.1 + rand() ** 1.5 * dur * 0.5, a: i === 0 ? 1 : 0.3 + 0.7 * rand(), r: 0.04 + 0.25 * rand(), d: 0.4 + 1.3 * rand() });
+      const crack = clamp(1 - dist / 2.5, 0, 1), fc = 1800 / (1 + dist), k1 = 1 - Math.exp(-6.2832 * fc / sr), k2 = 1 - Math.exp(-6.2832 * 40 / sr);
+      let peak = 1e-6;
+      for (let ch = 0; ch < 2; ch++) {
+        const d = buf.getChannelData(ch); let a = 0, b = 0, lo = 0;
+        for (let i = 0; i < n; i++) {
+          const t = i / sr, w = rand() * 2 - 1;
+          a += (w - a) * k1; b += (a - b) * k1; lo += (b - lo) * k2;      // two-pole low-pass, minus the sub-audible drift
+          let env = 0;
+          for (const p of peaks) { const u = t - p.t; if (u > 0) env += p.a * (1 - Math.exp(-u / p.r)) * Math.exp(-u / p.d); }
+          d[i] = (b - lo) * env + crack * w * Math.exp(-t / 0.05) * 0.25 * (t < 0.002 ? t / 0.002 : 1);
+          peak = Math.max(peak, Math.abs(d[i]));
+        }
+      }
+      for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] /= peak; }
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const g = ctx.createGain(); g.gain.value = clamp(0.9 / (0.6 + dist * 0.5), 0.08, 0.7);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
+      src.connect(lp); lp.connect(g); g.connect(master); g.connect(wet);
+      src.start(ctx.currentTime + dist / 0.343 / Math.max(TIME.scale, 0.25));
+    },
     rub(dist) {
       if (!ready || dist < 0.002 || ctx.currentTime - lastRub < 0.035) return;
       lastRub = ctx.currentTime;
@@ -3510,10 +4080,20 @@ Object.assign(AUDIO, (() => {
       const now = ctx.currentTime, I = SIM.rain;
       // slow gusts: random walk retargeted every couple of seconds
       gustT -= dt; if (gustT <= 0) { gustT = 1.5 + rand() * 2.5; gust = clamp(gust * 0.6 + (rand() - 0.45) * 0.8, -0.4, 0.6); }
-      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * Math.min(1, TIME.scale * 1.3 + 0.2);
+      // snow falls almost silently and the snow cover soaks up the street's echoes: the bed drops and darkens
+      const SE = SEASONS[WORLD.season], snow = SE.snow, ts = Math.min(1, TIME.scale * 1.3 + 0.2);
+      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * ts * (snow ? 0.22 : 1) * (0.8 + 0.25 * Math.sqrt(SE.rainR));
       bedGain.gain.setTargetAtTime(bed, now, 0.8);
-      bedLP.frequency.setTargetAtTime(2500 + 1300 * I + 600 * gust, now, 0.8);
-      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust), now, 0.6);
+      bedLP.frequency.setTargetAtTime((2500 + 1300 * I + 600 * gust) * (snow ? 0.4 : 1), now, 0.8);
+      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust) * (snow ? 0.08 : 1), now, 0.6);
+      const wn = WORLD.windNow;
+      windGain.gain.setTargetAtTime(0.16 * Math.pow(wn, 1.4) * ts, now, 0.7);
+      windBP.frequency.setTargetAtTime(260 + 520 * wn + 120 * gust, now, 1.0);
+      whistle.frequency.setTargetAtTime(760 + 160 * wn + 60 * gust, now, 1.5);
+      // birds at first light in spring and summer, fewer in heavy rain; a stray sparrow during the day
+      const dawn = WORLD.season < 2 ? smooth(-7, -2, WORLD.h) * (1 - smooth(8.5, 10, WORLD.tod)) + 0.12 * smooth(2, 8, WORLD.h) : 0;
+      birdT -= wdt;
+      if (birdT <= 0) { birdT = 1.2 + rand() * 5; if (rand() < dawn * (1.1 - I)) birdPhrase(); }
       // window ticks from real impacts (rate-limited)
       secT += dt; if (secT > 1) { secT = 0; ticksThisSec = 0; }
       for (const ev of SIM.events) {
@@ -3580,6 +4160,7 @@ function loop(now) {
     if (!DBG.shot) setTimeout(() => { UI.show(); const h = document.getElementById('hint'); h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 7000); }, 3800);
   }
 }
+if (QS.has('hooks')) window.__dbg = { AUDIO, WORLD, SIM, LIGHT };        // test harness hooks
 function start() {
   if (running) return;
   running = true; lastT = 0;
