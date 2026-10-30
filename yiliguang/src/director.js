@@ -15,12 +15,25 @@
    第三幕 · 雪夜·木刻
      print     这张纸被印上去：先靛版，再墨版，最后朱版——世界一块版一块版地出现；它随着雪落下来
      woodcut   它找到那盏黑着的灯笼，钻进去，灯亮了；你在黑处划一刀，它就沿着你的刀痕走
-     leave     最后它从灯笼里出来，自己刻出一条路，走到冰窟窿，沉进黑水里
-   转场 3→4 · 冰窟窿
-     tear      冰窟窿里的黑水变成了真的水；纸从洞口撕开，越撕越大，我们掉进去
+   转场 · 灯笼里
+     inlantern 镜头推进灯笼，直到只剩它透亮的纸；那张纸变成另一盏灯的纸
+   走马灯·皮影
+     shadow    一盏走马灯：烛火的热气推着纸轮转，骑马的人、跃起的鲤鱼、浪、渔船的影子在纸幕上奔跑
+     snuff     烛火一缩，纸幕暗下去，影子的黑涌上来，只剩那一点火——它落进黑水里
+   （旧的出口，只在调试里还能看到：leave 刻一条路走到冰窟窿，tear 纸从洞口撕开）
    第四幕 · 深海
      deepsea   只有它照亮的那一小团水是看得见的。手牵着它走；不动，黑暗里的小生命就过来看它；
                一会儿，黑暗里出现另一粒一模一样的光
+   转场 · 墨
+     inkbloom  黑水化开：像一滴墨落进清水，翻涌、散成丝，沉下来，沉成山
+   水墨·烟雨山水
+     ink       远山、中景、石壁和老松一笔一笔洇开；雾流过山腰，细雨；一点朱砂落在小舟上
+     dawn      天边破晓：颜色从水墨里渗出来
+   印象派·清晨睡莲池
+     burst     颜色炸开：一万多笔从太阳那里往外铺开，成了一片清晨的睡莲池
+     pond      全是笔触的水、天光、柳、睡莲；一粒光是水上第一点阳光
+     dew       它停进一片叶子上的露珠里；露珠滚落——落进那杯茶
+   （旧的出口，只在调试里还能看到：rise 往上浮到杯底）
    转场 4→5 · 杯底
      rise      它往上浮。头顶有一圈暖光——杯口那么大，边上一圈白搪瓷，几片茶叶的影子漂着；水越来越像茶
    第五幕 · 回到房间
@@ -43,23 +56,37 @@ const ROUTE = [
   { p: [0.26, 1.07, 0.04], travel: 3.4, dwell: 2.4 },       // in among the spider plant's leaves
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
-const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24, T_SEA = 46, T_RISE = 8, T_SURF = 4.5;
+let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
+let T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_WHALE = 10, T_LURE = 24, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+/* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
+   深海里小鱼一齐受惊，然后鲸来了。 */
+const FILM = QS.has('film');
+const FILM_ROUTE = [
+  { p: S.BULB },
+  { p: [-0.50, 0.985, 0.27], travel: 0.6, dwell: 0.4 },
+  { p: [-0.17, 0.905, 0.19], travel: 1.5, dwell: 0.8 },     // the tea's steam
+  { p: [0.26, 1.07, 0.04], travel: 2.0, dwell: 0.7 },       // the spider plant
+  { p: [0.20, 1.42, -0.098], travel: 1.8, dwell: 0 },       // the glass
+];
+if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
+  { T_HOLD: 0.4, T_DAY: 1.7, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 11.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 13.0, T_BLOOM: 4.0, T_INK: 8.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 7.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
 YL.reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const D = YL.director = {
-  phase: 'intro', t: 0, pt: 0,
-  go(ph) { D.phase = ph; D.pt = 0; },
+  phase: 'intro', t: 0, pt: 0, clock: 0, later: [],
+  go(ph) { D.phase = ph; D.pt = 0; if (FILM) console.log('film ' + D.clock.toFixed(2) + ' ' + ph); },
+  // do something a little later, by the film's own clock (the recorder runs far slower than real time)
+  after(s, fn) { D.later.push({ at: D.clock + s, fn }); },
   escape() {
     if (D.phase !== 'intro') return;
     D.go('wander'); D.t = 0;
     HERO.on = true; HERO.glow = 0; YL.hero.glowTarget = 1;
-    YL.hero.setRoute(ROUTE);
+    YL.hero.setRoute(FILM ? FILM_ROUTE : ROUTE);
     LIGHT.on = 0; LIGHT.dip = 0;
     YL.AUDIO.click && YL.AUDIO.click(0);
-    setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(-0.4), 350);
+    D.after(0.35, () => YL.AUDIO.motif && YL.AUDIO.motif(-0.4));
   },
   // the window shot (and where the dive goes)
   winShot(aspect) {
@@ -67,21 +94,27 @@ const D = YL.director = {
     return { pos: portrait ? [0.16, 1.38, 0.72] : [0.12, 1.41, 0.62], tgt: [0.20, 1.42, S.GLASS_Z], vfov: portrait ? 44 : 30 };
   },
   update(dt, realT) {
-    D.t += dt; D.pt += dt;
+    D.t += dt; D.pt += dt; D.clock += dt;
+    for (const e of D.later.filter(e => e.at <= D.clock)) { D.later.splice(D.later.indexOf(e), 1); e.fn(); }
+    if (FILM) D.fade(dt);
     const summer = YL.worlds.summer;
     if (D.phase === 'intro') {
-      // it wants out: two little flickers of the lamp, then it goes by itself
-      LIGHT.dip = 0.55 * (smooth(7.4, 7.5, D.t) - smooth(7.6, 7.75, D.t)) + 0.35 * (smooth(8.3, 8.36, D.t) - smooth(8.45, 8.6, D.t));
-      if (D.t > 10) D.escape();
+      // it wants out: two little flickers of the lamp, then it goes by itself (in the film, almost at once)
+      const t = D.t + (FILM ? 6.6 : 0);
+      LIGHT.dip = 0.55 * (smooth(7.4, 7.5, t) - smooth(7.6, 7.75, t)) + 0.35 * (smooth(8.3, 8.36, t) - smooth(8.45, 8.6, t));
+      if (t > 10) D.escape();
       YL.cam = null;
       return;
     }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
-    if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'leave') { D.inPrint(dt); return; }
+    if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'inlantern' || D.phase === 'leave') { D.inPrint(dt); return; }
+    if (D.phase === 'shadow' || D.phase === 'snuff') { D.inShadow(dt); return; }
+    if (D.phase === 'inkbloom' || D.phase === 'ink' || D.phase === 'dawn') { D.inInk(dt); return; }
+    if (D.phase === 'burst' || D.phase === 'pond' || D.phase === 'dew') { D.inPond(dt); return; }
     if (D.phase === 'tear' || D.phase === 'deepsea' || D.phase === 'rise') { D.inSea(dt); return; }
     if (D.phase === 'surface' || D.phase === 'home' || D.phase === 'end') { D.inRoom(dt, realT); return; }
     YL.hero.update(dt, realT);
-    const L = YL.hero.routeLength(), Tw = L - 2.0;
+    const L = YL.hero.routeLength(), Tw = L - (FILM ? 2.4 : 2.0), Tww = FILM ? 2.8 : 3.5;
     if (D.phase === 'wander' && D.t > L) D.go('window');
     if (D.phase === 'window' && D.pt > 0.2 && !summer.ready) summer.init();                 // compile the next world early
     if (D.phase === 'window' && D.pt > T_HOLD) D.go('daydrops');
@@ -92,7 +125,7 @@ const D = YL.director = {
     const base = YL.framing(aspect), h = HERO.p;
     const follow = { pos: V.add(base.pos, V.mul(V.sub(h, base.tgt), 0.12)), tgt: base.tgt.map((v, i) => lerp(v, h[i], 0.45)), vfov: base.vfov * 0.92 };
     const win = D.winShot(aspect);
-    const ww = D.phase === 'wander' ? smooth(Tw, Tw + 3.5, D.t) : 1;
+    const ww = D.phase === 'wander' ? smooth(Tw, Tw + Tww, D.t) : 1;
     let pos = follow.pos.map((v, i) => lerp(v, win.pos[i], ww)), tgt = follow.tgt.map((v, i) => lerp(v, win.tgt[i], ww));
     let vfov = lerp(follow.vfov, win.vfov, ww);
     if (D.phase === 'dive') {
@@ -118,12 +151,32 @@ const D = YL.director = {
     D.go('summer');
     YL.sharpMix = 0; YL.roomTarget = null; YL.roomVol = 0;
     D.world = 'summer'; D.placeHero = true;              // (placed on the first summer frame, once the world exists)
-    setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(0, 0.05, 1), 400);
+    D.after(0.4, () => YL.AUDIO.motif && YL.AUDIO.motif(0, 0.05, 1));
+  },
+  /* ---- the film's own hand. In the summer: one sweep across the field (a gust: the grass goes down in a wave and the
+     light is blown along), then a press held still (the wind drops and the cicadas swell). */
+  filmHand(world, t) {
+    const set = (nx, ny, speed, down) => { YL.ptr = { nx, ny, t: YL.now(), speed }; YL.ptrDown = down; };
+    if (world === 'summer') {
+      const a = [-0.85, -0.40], b = [0.80, -0.05], t0 = 1.4, t1 = 2.2;
+      if (t > t0 && t < t1) { const u = ease((t - t0) / (t1 - t0)); set(lerp(a[0], b[0], u), lerp(a[1], b[1], u), 2.6, true); }
+      else if (t >= t1 && t < t1 + 0.1) YL.ptrDown = false;
+      else if (t > 3.3 && t < 6.6) { if (!YL.ptrDown) set(0.15, -0.15, 0, true); }
+      else if (t >= 6.6 && YL.ptrDown) YL.ptrDown = false;
+    }
+  },
+  // the film opens out of black and closes into it
+  fade(dt) {
+    let el = D.fadeEl;
+    if (!el) { el = D.fadeEl = document.createElement('div'); el.style.cssText = 'position:fixed;inset:0;background:#000;pointer-events:none;z-index:50'; document.body.appendChild(el); }
+    const a = Math.max(1 - smooth(0.2, 1.6, D.clock), D.phase === 'end' ? smooth(4.0, 6.0, D.pt) : 0);
+    el.style.opacity = a.toFixed(3);
+    if (D.phase === 'end' && D.pt > 6.5) D.filmDone = true;
   },
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
-    if (D.phase === 'summer') { if (D.pt > T_SUMMER) D.go('updraft'); return; }
+    if (D.phase === 'summer') { if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('updraft'); } return; }
     // the light is carried up toward the tower of cloud, further and further away; the eye follows it up
     const T = summer.tower, dir = [Math.sin(T[0]) * Math.cos(T[1]), Math.sin(T[1]), -Math.cos(T[0]) * Math.cos(T[1])];
     if (D.phase === 'updraft') {
@@ -140,7 +193,7 @@ const D = YL.director = {
       H.fly = V.add([0, 0.85, 0], V.mul(dir, 30 + 40 * u));
       summer.vol = 1 - ease(clamp((u - 0.2) / 0.7, 0, 1));
       if (D.pt > T_CLOUD) {
-        D.go('print'); D.world = 'woodcut';
+        D.go('print'); D.world = 'woodcut'; if (FILM) wood.pace = 1.7;
         const hp = D.drainHero || [0, 0.5];
         wood.show = [0, 0, 0]; wood.vol = 0;
         wood.arrive(hp[0], hp[1], YL.canvasAspect());
@@ -152,7 +205,8 @@ const D = YL.director = {
     const wood = YL.worlds.woodcut;
     if (D.phase === 'print') {
       const t = D.pt;
-      wood.show = [ease(clamp(t / 1.6, 0, 1)), ease(clamp((t - 1.3) / 1.6, 0, 1)), ease(clamp((t - 2.7) / 1.3, 0, 1))];
+      const k = T_PRINT / 4.8;
+      wood.show = [ease(clamp(t / (1.6 * k), 0, 1)), ease(clamp((t - 1.3 * k) / (1.6 * k), 0, 1)), ease(clamp((t - 2.7 * k) / (1.3 * k), 0, 1))];
       wood.vol = ease(clamp(t / 3, 0, 1));
       if (D.pt > T_PRINT) { wood.show = [1, 1, 1]; D.go('woodcut'); }
     } else if (D.phase === 'woodcut') {
@@ -163,13 +217,40 @@ const D = YL.director = {
         const h = document.getElementById('hint');
         if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
       }
-      // nobody has cut anything: it shows how, carving a new moon into the night
-      if (D.pt > 20 && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
-      if (D.pt > T_WOOD && wood.hero.mode === 'home') { wood.leave(); D.go('leave'); }
+      // nobody has cut anything: it shows how, carving a new moon into the night (in the film, as soon as it is home)
+      if (D.pt > (FILM ? 0.6 : 20) && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
+      const done = FILM ? wood.moonDone && !wood.queue.length && wood.hero.mode === 'home' && D.pt > 2 : D.pt > T_WOOD;
+      if (done && wood.hero.mode === 'home') { D.go('inlantern'); const sh = YL.worlds.shadow; if (!sh.ready) sh.init(); }
+    } else if (D.phase === 'inlantern') {
+      const u = clamp(D.pt / T_ZOOM, 0, 1), sh = YL.worlds.shadow;
+      wood.zoomIn = u; wood.whole = true;
+      wood.vol = 1 - smooth(0.5, 1.0, u);
+      if (D.pt > T_ZOOM) { D.go('shadow'); D.world = 'shadow'; wood.vol = 0; sh.vol = 1; sh.pull = 0; sh.light = 1; }
     } else if (D.phase === 'leave') {
       const sea = YL.worlds.deepsea;
       if (!sea.ready) sea.init();                                                // ready the water while it walks
       if (wood.gone) { D.go('tear'); D.tearSound(); }
+    }
+  },
+  // ---- inside the lantern of shadows; then the candle shrinks to nothing, and there is only the black water
+  inShadow(dt) {
+    const sh = YL.worlds.shadow, sea = YL.worlds.deepsea;
+    if (D.phase === 'shadow') {
+      sh.pull = Math.min(1, D.pt / 3.4);
+      if (D.pt > T_SHADOW) { D.go('snuff'); if (!sea.ready) sea.init(); }
+    } else if (D.phase === 'snuff') {
+      const u = clamp(D.pt / T_SNUFF, 0, 1);
+      // the candle gutters: the flame sinks and shrinks, so every shadow stretches up and swells over the paper; then it dies
+      sh.sink = Math.pow(u, 1.4);
+      sh.light = Math.pow(1 - u, 1.8) * (1 - 0.3 * u) + 0.012;
+      sh.vol = 1 - u;
+      if (D.pt > T_SNUFF) {
+        // the deep, with the light just where the flame was on the screen
+        const aspect = YL.canvasAspect(), c = sh.cam, f = sh.flame(sh.t).p, v = YL.V.sub(f, c.eye), z = YL.V.dot(v, c.fwd);
+        sea.arrive(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
+        sea.fade = 0; sea.vol = 1;
+        D.go('deepsea'); D.world = 'deepsea';
+      }
     }
   },
   // ---- through the ice: the print tears open onto the deep, and then there is only the deep
@@ -180,8 +261,20 @@ const D = YL.director = {
       wood.vol = 1 - ease(clamp(u / 0.6, 0, 1)); sea.vol = ease(clamp((u - 0.2) / 0.8, 0, 1));
       if (D.pt > T_TEAR) { D.go('deepsea'); D.world = 'deepsea'; sea.vol = 1; }
     } else if (D.phase === 'deepsea') {
-      if (D.pt > T_LURE && sea.lure.state === 'off') sea.startLure();
-      if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) { D.go('rise'); D.riseY0 = sea.cam ? sea.cam.eye[1] : 0; }
+      sea.fade = Math.min(1, (sea.fade ?? 1) + dt / 1.2);
+      // the small lives come to look; then all at once they flash and scatter: something big is coming. It is the whale
+      if (FILM && D.pt > T_WHALE - 0.8 && !D.scared) { D.scared = true; sea.scare(); }
+      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 8.0 : 9.0);
+      if (!FILM && D.pt > T_LURE && sea.lure.state === 'off' && (!sea.pass || sea.t - sea.pass.t0 > 12)) sea.startLure();
+      if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) {
+        // the black water breaks up into ink; the light keeps its place on the screen and turns to vermilion
+        sea.hero.hold = null;
+        const ink = YL.worlds.ink; if (!ink.ready) ink.init();
+        const c = sea.cam, v = YL.V.sub(sea.hero.p, c.eye), z = Math.max(YL.V.dot(v, c.fwd), 0.05), aspect = YL.canvasAspect();
+        const P = ink.toPaint(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
+        ink.arrive(P[0], P[1]); ink.bloom = 1; ink.dawn = 0; ink.grow = [0, 0, 0, 0]; ink.vol = 0;
+        D.go('inkbloom');
+      }
     } else if (D.phase === 'rise') {
       // up toward the light above; the water turns to tea; then the surface
       const u = clamp(D.pt / T_RISE, 0, 1);
@@ -193,11 +286,54 @@ const D = YL.director = {
       if (D.pt > T_RISE) D.surface();
     }
   },
+  // ---- ink: the deep's black breaking up into it, the painting laying itself down, then the dawn
+  inInk(dt) {
+    const ink = YL.worlds.ink, sea = YL.worlds.deepsea;
+    const G = (a, b, x) => smooth(a, b, x);
+    if (D.phase === 'inkbloom') {
+      const u = clamp(D.pt / T_BLOOM, 0, 1);
+      ink.bloom = 1 - smooth(0.12, 1.0, u);
+      ink.grow = [G(0.35, 0.85, u), G(0.55, 1.0, u), 0, 0];
+      ink.vol = smooth(0.1, 0.8, u); sea.vol = 1 - smooth(0.0, 0.3, u);
+      if (D.pt > T_BLOOM) { D.go('ink'); D.world = 'ink'; ink.bloom = 0; sea.vol = 0; }
+    } else if (D.phase === 'ink') {
+      const t = D.pt;
+      ink.grow = [1, 1, G(0.0, 2.6, t), G(2.2, 4.2, t)];
+      if (D.pt > T_INK) D.go('dawn');
+    } else if (D.phase === 'dawn') {
+      ink.dawn = smooth(0, T_DAWN, D.pt);
+      if (D.pt > T_DAWN) {
+        const pond = YL.worlds.pond; if (!pond.ready) pond.init();
+        const aspect = YL.canvasAspect(), H = ink.hero.p;
+        const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (ink.pan ? ink.pan[0] : 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
+        pond.arrive(...pond.toPaint(nx, ny, aspect)); pond.reveal = 0; pond.dew = 0; pond.drop = 0; pond.white = 0; pond.vol = 0;
+        D.go('burst');
+      }
+    }
+  },
+  // ---- the pond: bursting out of the dawn; then the light into a dewdrop, and the drop into the tea
+  inPond(dt) {
+    const pond = YL.worlds.pond, ink = YL.worlds.ink;
+    if (D.phase === 'burst') {
+      const u = clamp(D.pt / T_BURST, 0, 1);
+      pond.reveal = smooth(0.15, 1.0, u); pond.vol = smooth(0.0, 0.8, u); ink.vol = 1 - smooth(0.0, 0.5, u);
+      if (D.pt > T_BURST) { D.go('pond'); D.world = 'pond'; pond.reveal = 1; ink.vol = 0; }
+    } else if (D.phase === 'pond') {
+      if (D.pt > T_POND) D.go('dew');
+    } else if (D.phase === 'dew') {
+      const t = D.pt;
+      pond.dew = smooth(0.0, 1.2, t);
+      pond.drop = smooth(1.7, 2.5, t);
+      pond.white = smooth(2.3, T_DEW, t);
+      if (t > 1.7 && !D.dropSound) { D.dropSound = true; pond.plip && pond.plip(0.14); }
+      if (D.pt > T_DEW) { D.dropSound = false; pond.vol = 0; D.surface(); }
+    }
+  },
   // ---- back in the room: out of the tea, home to the lamp
   surface() {
     const sea = YL.worlds.deepsea, S_ = YL.S, wood = YL.worlds.woodcut;
     D.go('surface'); D.world = 'room'; YL.roomTarget = null;
-    sea.vol = 0; if (wood) wood.vol = 0; YL.roomVol = 1;
+    sea.vol = 0; if (wood) wood.vol = 0; if (YL.worlds.ink) YL.worlds.ink.vol = 0; if (YL.worlds.pond) YL.worlds.pond.vol = 0; YL.roomVol = 1;
     const tea = [S_.MUG_X, S_.DESK_TOP + S_.MUG_H * 0.70 + 0.004, S_.MUG_Z];
     HERO.on = true; HERO.glow = 1; HERO.p = tea.slice(); YL.hero.glowTarget = 1;
     YL.hero.setRoute([
@@ -227,7 +363,7 @@ const D = YL.director = {
       D.go('end');
       LIGHT.on = 1; YL.hero.glowTarget = 0;
       YL.AUDIO.click && YL.AUDIO.click(1);
-      setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(-0.4, 0.05, 1), 300);
+      D.after(0.3, () => YL.AUDIO.motif && YL.AUDIO.motif(-0.4, 0.05, 1));
     }
     if (D.phase === 'end' && HERO.glow < 0.02) HERO.on = false;
     if (D.phase === 'end') YL.hero.update(dt, realT);
@@ -236,8 +372,12 @@ const D = YL.director = {
   replay() {
     const sm = YL.worlds.summer, wd = YL.worlds.woodcut, sea = YL.worlds.deepsea;
     if (sm) { sm.lift = 0; sm.zoom = 0; if (sm.hero) { sm.hero.fly = null; sm.hero.on = false; } sm.vol = 0; }
-    if (wd) { wd.gone = false; wd.hero.mode = 'home'; wd.show = [1, 1, 1]; wd.lanLight = 1; wd.vol = 0; }
-    if (sea) { sea.hero.on = false; sea.rise = 0; sea.riseY = 0; sea.surf = 0; sea.tea = 0; sea.flash = 0; sea.lure.state = 'off'; sea.vol = 0; }
+    if (wd) { wd.gone = false; wd.hero.mode = 'home'; wd.show = [1, 1, 1]; wd.lanLight = 1; wd.vol = 0; wd.zoomIn = 0; wd.whole = false; }
+    const sh = YL.worlds.shadow; if (sh) { sh.vol = 0; sh.light = 1; sh.pull = 1; sh.sink = 0; }
+    const ik = YL.worlds.ink; if (ik) { ik.vol = 0; ik.bloom = 0; ik.dawn = 0; }
+    const pd = YL.worlds.pond; if (pd) { pd.vol = 0; pd.dew = 0; pd.drop = 0; pd.white = 0; }
+    if (sea) { sea.hero.on = false; sea.hero.hold = null; sea.pass = null; sea.rise = 0; sea.riseY = 0; sea.surf = 0; sea.tea = 0; sea.flash = 0; sea.lure.state = 'off'; sea.vol = 0; }
+    D.scared = false;
     YL.sharpMix = 0; YL.cam = null; D.world = 'room'; YL.roomVol = 1;
     D.phase = 'intro'; D.escape();
   },
@@ -388,6 +528,25 @@ void main(){
   float inside = (1.0 - smoothstep(-1.0, 1.0, edgePx)) * mix(seep, 1.0, step(0.18, uU));
   o = vec4(mix(print_, sea, inside), 1.0);
 }`;
+// ---- one world dissolving into the next through a warm glow
+const FS_MIX = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uK, uGlow;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, uK);
+  c = mix(c, vec3(1.0, 0.82, 0.55), uGlow * (1.0 - 0.5 * length(uv - 0.5)));
+  o = vec4(c, 1.0);
+}`;
+let mixProg = null;
+function mixP() {
+  if (mixProg) return mixProg;
+  mixProg = YL.makeProgram('mix', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_MIX);
+  YL.checkProgram(mixProg);
+  return mixProg;
+}
 let tearP = null;
 function tear() {
   if (tearP) return tearP;
@@ -446,6 +605,46 @@ D.renderFrame = (dt, realT) => {
     YL.U(p, 'uFog', S(0.0, 0.35, u)); YL.U(p, 'uCold', S(0.2, 0.62, u)); YL.U(p, 'uSnow', S(0.38, 0.7, u)); YL.U(p, 'uPaper', S(0.72, 1.0, u));
     YL.U(p, 'uHero', [hp[0], hp[1], 1]);
     YL.bindTex(p, 'uA', I.B.tex, 0); YL.bindTex(p, 'uB', I.A.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inkbloom' && D.pt < 1.2) {
+    const I = irisTargets(), gl = YL.gl, sea = YL.worlds.deepsea, ink = YL.worlds.ink, aspect = YL.canvasAspect();
+    sea.update(dt); sea.render(I.A, aspect);
+    ink.update(dt); ink.render(I.B, aspect);
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.2, D.pt)); YL.U(p, 'uGlow', 0);
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inkbloom' && D.world !== 'ink') D.world = 'ink';
+  if (D.phase === 'burst') {
+    // the colour bursts out of the ink: the pond's strokes spreading from the sun over the dawn-lit painting
+    const I = irisTargets(), gl = YL.gl, ink = YL.worlds.ink, pond = YL.worlds.pond, aspect = YL.canvasAspect();
+    if (!pond.ready) pond.init();
+    ink.update(dt); ink.render(I.A, aspect);
+    pond.update(dt); pond.render(I.B, aspect);
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.1, D.pt)); YL.U(p, 'uGlow', 0.25 * Math.exp(-Math.pow((D.pt - 0.6) / 0.35, 2)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inlantern') {
+    const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, sh = YL.worlds.shadow, aspect = YL.canvasAspect();
+    const u = clamp(D.pt / T_ZOOM, 0, 1), k = smooth(0.70, 1.0, u);
+    wood.update(dt); wood.render(I.A, aspect);
+    if (k > 0) { if (!sh.ready) sh.init(); sh.pull = 0; sh.update(dt); sh.render(I.B, aspect); }
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.55 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
   }
@@ -523,7 +722,7 @@ D.afterRoom = () => {
 if (D.world !== 'room') YL.roomVol = 0;
 // a lost and restored GL context: everything the worlds and the transitions made belongs to the old one
 YL.onContextRestored = () => {
-  iris = null; tearP = null; drainP = null; YL.sharp2 = null; YL.roomTarget = null;
+  iris = null; tearP = null; drainP = null; mixProg = null; YL.sharp2 = null; YL.roomTarget = null;
   for (const w of Object.values(YL.worlds || {})) {
     w.ready = false;
     w.res = null; w.tw = 0; w.inks = null; w.A = null; w.B = null;
@@ -539,7 +738,7 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave', 'tear', 'deepsea', 'rise', 'surface'];
+    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'inlantern', 'shadow', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];
     if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
@@ -548,6 +747,9 @@ if (QS.get('phase')) {
         // straight into the print (once the GL context exists: see renderFrame)
         D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
         if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
+        if (ph === 'shadow' || ph === 'snuff') { D.world = 'shadow'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.shadow.t = 1 + pt; }
+        if (ph === 'burst' || ph === 'pond' || ph === 'dew') { D.world = ph === 'burst' ? 'ink' : 'pond'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.ink.dawn = 1; }
+        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; }
         if (ph === 'surface') { D.jump = null; YL.roomVol = 1; setTimeout(() => { D.surface(); D.pt = pt; YL.hero.t = pt; if (pt > T_SURF) D.go('home'); }, 0); }
       }
     }

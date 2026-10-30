@@ -29,7 +29,8 @@
 const YL = window.YL = window.YL || {};          // 《一粒光》: shared with director.js, hero.js and the other worlds
 const QS = new URLSearchParams(location.search);
 const DBG = {
-  shot: QS.has('shot'),                 // screenshot mode: no fade, preserve buffer
+  shot: QS.has('shot') || QS.has('rec'),   // screenshot mode: no fade, preserve buffer
+  rec: QS.has('rec') ? +(QS.get('fps') || 24) : 0,   // recording a film: fixed steps of 1/fps s, sound rendered offline in step
   seed: +(QS.get('seed') || 0) || ((Math.random() * 1e9) | 0),
   lamp: QS.get('lamp') !== '0',
   still: QS.has('still'),               // freeze handheld drift
@@ -4362,7 +4363,7 @@ function pickWindowOut(ro, rd) {
 }
 function onDown(e) {
   AUDIO.unlock && AUDIO.unlock();
-  YL.ptrDown = true; { const [nx, ny] = toNdc(e); YL.ptr = { nx, ny, t: performance.now() / 1000, speed: 0 }; }
+  YL.ptrDown = true; { const [nx, ny] = toNdc(e); YL.ptr = { nx, ny, t: YL.now(), speed: 0 }; }
   requestGyro();
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
@@ -4381,7 +4382,7 @@ function onDown(e) {
 function onMove(e) {
   UI.poke();
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
-  const now = performance.now() / 1000, P0 = YL.ptr;     // where the pointer is, and how fast it moves (for the little light)
+  const now = YL.now(), P0 = YL.ptr;     // where the pointer is, and how fast it moves (for the little light)
   YL.ptr = { nx, ny, t: now, speed: P0 ? Math.hypot(nx - P0.nx, ny - P0.ny) / Math.max(now - P0.t, 1e-3) : 0 };
   if (!PTR.down) {
     if (e.pointerType === 'mouse') {
@@ -4504,6 +4505,8 @@ Object.assign(AUDIO, (() => {
   let bedGain, bedLP, patGain, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0, birdT = 2;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
+  // (recording: the offline context is suspended between frames, which is when the film schedules its sounds)
+  const live = () => ready && (DBG.rec || ctx.state === 'running');
   function noiseBuffer(sec, kind) {
     const sr = ctx.sampleRate, n = Math.floor(sr * sec), buf = ctx.createBuffer(2, n, sr);
     for (let ch = 0; ch < 2; ch++) {
@@ -4665,6 +4668,7 @@ Object.assign(AUDIO, (() => {
     unlock() {
       if (!enabled) return;
       try {
+        if (!ctx && DBG.rec) { ctx = new OfflineAudioContext(2, Math.ceil(48000 * AUDIO.recDur), 48000); build(); film.gain.value = 1; return; }
         if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; ctx = new AC(); build(); }
         if (ctx.state === 'suspended') ctx.resume();
         master.gain.cancelScheduledValues(ctx.currentTime);
@@ -4679,12 +4683,13 @@ Object.assign(AUDIO, (() => {
     },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     // other worlds play into the film bus (and may borrow the noise generator)
-    bus() { return ready && ctx.state === 'running' ? { ctx, out: film, noiseBuffer, loop } : null; },
+    bus() { return live() ? { ctx, out: film, noiseBuffer, loop } : null; },
+    recCtx() { return ctx; },
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
     click(on) { if (ready) oneShot(clickBuf, 0.5 * (1 - 0.92 * VIEW.mix), -0.45, on ? 1.0 : 0.88, 0.4, VIEW.mix > 0.5 ? 1500 : 0); },
     // 一粒光的动机：三个音（A–C♯–E 的上行），每个世界换一种音色；这里是房间里的版本：柔和的钢片琴
     motif(pan = 0, gain = 0.06, rate = 1) {
-      if (!ready || ctx.state !== 'running') return;
+      if (!live()) return;
       const t0 = ctx.currentTime + 0.02, notes = [880, 1108.7, 1318.5];
       const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       const g = ctx.createGain(); g.gain.value = 1;
@@ -4703,7 +4708,7 @@ Object.assign(AUDIO, (() => {
     // 雷声：闪电通道有几公里长，各段的声音先后到达，所以是一串此起彼伏的滚动；近雷先有一声撕裂的「咔」。
     // 空气吸收高频，越远越闷（低通截止 ∝ 1/距离）；隔着玻璃再削一点高频。延迟 = 距离 / 343 m/s。
     thunder(dist) {
-      if (!ready || ctx.state !== 'running') return;
+      if (!live()) return;
       const sr = ctx.sampleRate, dur = 4 + 3 * rand() + dist * 0.4, n = Math.floor(sr * dur), buf = ctx.createBuffer(2, n, sr);
       const peaks = [];
       for (let i = 0, np = 4 + Math.floor(rand() * 5); i < np; i++)
@@ -4734,7 +4739,7 @@ Object.assign(AUDIO, (() => {
       oneShot(rubBuf[(rand() * rubBuf.length) | 0], clamp(dist * 9, 0.02, 0.25), 0, 0.9 + rand() * 0.2, 0.2, 1800);
     },
     update(dt, wdt) {
-      if (!ready || ctx.state !== 'running') { SIM.events.length = 0; return; }
+      if (!live()) { SIM.events.length = 0; return; }
       const now = ctx.currentTime, I = SIM.rain;
       roomVol.gain.setTargetAtTime(YL.roomVol ?? 1, now, 0.5);
       // slow gusts: random walk retargeted every couple of seconds
@@ -4820,6 +4825,9 @@ function loop(now) {
   const t = now / 1000;
   const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t))) * FAST;      // (&fast=k: run k times faster, for testing the whole film)
   lastT = t;
+  tick(dt);
+}
+function tick(dt) {
   realT += dt;
   const wdt = dt * TIME.scale;                 // world time (rain, street) follows the time-flow slider
   simT += wdt;
@@ -4838,6 +4846,7 @@ function loop(now) {
   AUDIO.update && AUDIO.update(dt, wdt);
   frame++;
   if (DBG.shot) gl.finish();                     // screenshots: count frames the GPU has actually finished
+  if (DBG.rec) return;
   window.__frames = frame;
   if (frame === 2) {
     const v = document.getElementById('veil'); v.classList.add('gone'); if (DBG.shot) v.style.display = 'none';
@@ -4851,6 +4860,50 @@ function start() {
   requestAnimationFrame(loop);
 }
 function stop() { running = false; }
+/* 录制（?rec&fps=24&dur=秒）：不跟真实时间走，每帧固定 1/fps 秒。声音在一个离线音频上下文里渲染，
+   它在每一帧的边界停下：先推进整部片子一帧、画出来、交给录制程序（tools/rec.mjs）存下，声音才往前渲染这一帧。
+   所以环境声和画面严格对齐，和机器快慢无关。 */
+AUDIO.recDur = +(QS.get('dur') || 60);
+async function recRun() {
+  const F = DBG.rec, N = Math.round(AUDIO.recDur * F);
+  document.getElementById('veil').style.display = 'none';
+  AUDIO.unlock();
+  const ctx = AUDIO.recCtx();
+  let k = 0;
+  const frameOut = async () => {
+    try { tick(1 / F); gl.finish(); if (window.__recFrame) await window.__recFrame(k); }
+    catch (e) { console.error('rec frame ' + k + ': ' + e.message); }
+    k++;
+  };
+  await frameOut();
+  const step = async () => {
+    await frameOut();
+    if (k < N && !(YL.director && YL.director.filmDone)) ctx.suspend(k / F).then(step);
+    else window.__recFrames = k;
+    ctx.resume();
+  };
+  if (k < N) ctx.suspend(k / F).then(step);
+  const buf = await ctx.startRendering();
+  // 16-bit stereo WAV, handed over in pieces
+  const n = buf.length, L = buf.getChannelData(0), Rc = buf.getChannelData(1);
+  const wav = new DataView(new ArrayBuffer(44 + n * 4));
+  const str = (o, x) => { for (let i = 0; i < x.length; i++) wav.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, 'RIFF'); wav.setUint32(4, 36 + n * 4, true); str(8, 'WAVEfmt '); wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 2, true);
+  wav.setUint32(24, 48000, true); wav.setUint32(28, 48000 * 4, true); wav.setUint16(32, 4, true); wav.setUint16(34, 16, true); str(36, 'data'); wav.setUint32(40, n * 4, true);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    peak = Math.max(peak, Math.abs(L[i]), Math.abs(Rc[i]));
+    wav.setInt16(44 + i * 4, clamp(L[i], -1, 1) * 32767, true); wav.setInt16(46 + i * 4, clamp(Rc[i], -1, 1) * 32767, true);
+  }
+  console.log('rec audio', n, 'samples, peak', peak.toFixed(3));
+  const bytes = new Uint8Array(wav.buffer), CH = 1 << 21;
+  for (let o = 0, i = 0; o < bytes.length; o += CH, i++) {
+    let bin = ''; const sub = bytes.subarray(o, Math.min(bytes.length, o + CH));
+    for (let j = 0; j < sub.length; j += 8192) bin += String.fromCharCode.apply(null, sub.subarray(j, j + 8192));
+    if (window.__recAudio) await window.__recAudio(i, Math.ceil(bytes.length / CH), btoa(bin));
+  }
+  window.__done = true;
+}
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); AUDIO.suspend(); } else { start(); AUDIO.resume(); } });
 
 // initial render scales from the pixel count; adaptQuality() refines them from measured frame times
@@ -4885,7 +4938,7 @@ function boot() {
     if (done < total) { setTimeout(slice, 0); return; }
     SIM.events.length = 0;
     console.log('prewarm', (performance.now() - t0).toFixed(0) + 'ms', JSON.stringify(simStats()));
-    whenProgramsReady(() => { resize(); start(); });
+    whenProgramsReady(() => { resize(); if (DBG.rec) recRun(); else start(); });
   };
   slice();
 }
@@ -4898,6 +4951,7 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 // 《一粒光》: what the director, the hero and the other worlds need from the host
 Object.assign(YL, { QS, DBG, S, V, CAM, LIGHT, HERO, WORLD, SIM, AUDIO, R, clamp, lerp, smooth, bb, mulc, camRay, pickGlass, drift, rnd: mulberry32(DBG.seed + 1),
+  now: () => (DBG.rec || QS.has('film')) ? realT : performance.now() / 1000,   // the pointer's clock (the film's own time when it plays itself)
   framing, canvasAspect: () => canvas.clientWidth / Math.max(1, canvas.clientHeight), makeProgram, checkProgram, makeTarget, bindTarget, bindTex, drawFull, U, I });
 Object.defineProperty(YL, 'gl', { get: () => gl });          // (a live getter: gl is created at boot)
 setTimeout(boot, 30);

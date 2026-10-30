@@ -48,7 +48,7 @@ const H = YL.hero = {
     // curiosity and fright: the pointer's line of sight
     const P = YL.ptr, CAM = YL.CAM;
     let leanT = [0, 0, 0];
-    if (P && performance.now() / 1000 - P.t < 1.5 && !YL.DBG.shot) {
+    if (P && YL.now() - P.t < 1.5 && !YL.DBG.shot) {
       const rd = YL.camRay(P.nx, P.ny), oc = V.sub(p, CAM.pos), tc = V.dot(oc, rd);
       const q = V.add(CAM.pos, V.mul(rd, tc)), d = V.sub(q, p), dl = Math.hypot(...d);
       if (P.speed > 3.5 && dl < 0.3) H.scare = 1;                         // flung past it: it flinches

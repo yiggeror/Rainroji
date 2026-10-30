@@ -247,6 +247,7 @@ float smin(float a, float b, float k){ float h = sat(0.5 + 0.5 * (b - a) / k); r
 float smax(float a, float b, float k){ return -smin(-a, -b, k); }
 float sq(float x){ return x * x; }
 const float EYE_A = 0.042;                       // half the length of the eye's opening
+float gOpen = 1.0;                               // how open the lids are (a blink closes them)
 const vec3 BALL = vec3(0.0, 0.0, -0.041);        // the eyeball's centre, under the skin
 const float BALL_R = 0.050;
 // the mouth: the lower lip's edge, coming back from the snout and rising to its corner just below and behind the eye
@@ -340,7 +341,7 @@ float whaleH(vec2 p, bool fine, out vec4 mat, out float lice){
     mat.z += smoothstep(0.0020, 0.0006, pit);
   }
   // ---- the eye: a broad mound of thick flesh with the opening in it
-  float d = eyeOpen(p, 1.0);
+  float d = eyeOpen(p, gOpen);
   float ang = eyeAng(p), r = length(p * vec2(0.75, 1.15));
   if (r < 0.22){
     h += 0.012 * exp(-sq((p.x + 0.01) / 0.10) - sq((p.y + 0.004) / 0.065));
@@ -434,6 +435,7 @@ float whaleSurf(vec2 p){ vec4 m; float l; return max(whaleH(p, false, m, l), bal
 // returns the whale's colour (carried to the eye) and its distance, or T unchanged
 vec3 whale(vec3 ro, vec3 rd, inout float T){
   if (uWh.w <= 0.0) return vec3(0.0);
+  gOpen = 1.0 - uWhF.w;
   vec3 F = uWhF.xyz, Up = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up)); Up = cross(Z, F);
   vec3 rl = ro - uWh.xyz;
   vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
@@ -519,7 +521,7 @@ vec3 whale(vec3 ro, vec3 rd, inout float T){
     // wet skin: a broad sheen that shows its shape; a glassy line where the lid meets the eye
     float fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
     float gloss = (0.030 * pow(ndh, 40.0) + 0.005 * pow(ndh, 6.0)) * (1.0 - sat(mat.x) * 0.6);
-    gloss += 0.15 * pow(ndh, 250.0) * smoothstep(0.0025, 0.0005, eyeOpen(p.xy, 1.0)) * smoothstep(0.3, 0.7, vnoise(p.xy * 300.0));
+    gloss += 0.15 * pow(ndh, 250.0) * smoothstep(0.0025, 0.0005, eyeOpen(p.xy, gOpen)) * smoothstep(0.3, 0.7, vnoise(p.xy * 300.0));
     float wrap = sat((ndl + 0.10) / 1.10);
     col = E * (alb * wrap + gloss * (0.4 + fr) * step(0.0, ndl));
   }
@@ -906,6 +908,8 @@ W.deepsea = {
     const recent = this.t - H.moved < 4;
     if (this.rise > 0) {
       tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 0.9)), [0, 0.05, 0]);
+    } else if (H.hold) {
+      tgt = V.add(H.hold, [0.006 * Math.sin(this.t * 0.9), 0.006 * Math.sin(this.t * 0.7 + 1), 0]);
     } else if (H.aim && recent) {
       const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, H.aim[0] * cam.tan[0]), V.mul(cam.up, H.aim[1] * cam.tan[1]))));
       tgt = V.add(cam.eye, V.mul(rd, 1.0));
@@ -918,7 +922,7 @@ W.deepsea = {
     // the eye follows only when the light nears the edge of the picture
     const v = V.sub(H.p, cam.eye), z = Math.max(V.dot(v, cam.fwd), 0.1);
     const nx = V.dot(v, cam.right) / (z * cam.tan[0]), ny = V.dot(v, cam.up) / (z * cam.tan[1]);
-    const push = (x) => Math.sign(x) * Math.max(Math.abs(x) - 0.5, 0);
+    const push = (x) => this.pass ? 0 : Math.sign(x) * Math.max(Math.abs(x) - 0.5, 0);
     this.yawOff = (this.yawOff || 0) + push(nx) * 0.9 * dt;
     this.pitchOff = Math.max(-0.6, Math.min(0.6, (this.pitchOff || 0) + push(ny) * 0.7 * dt));
     H.speed *= Math.exp(-dt * 3);
@@ -1024,10 +1028,55 @@ W.deepsea = {
     const g = ctx.createGain(); g.gain.value = 0.35;
     src.connect(lp); lp.connect(g); g.connect(S.bus); g.connect(S.wet); src.start(t0);
   },
+  /* ---- the whale's pass. It comes out of the dark from the left, a hand's breadth behind the light: first the line of
+     its jaw with the knobs and barnacles slides through the light, then its eye. It slows and stops there; the eye turns
+     to look at the light; it blinks once; and it goes on its way. The light goes to wait where the eye will stop. */
+  startWhale(go = 9.0) {
+    const V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
+    const F = V.norm(V.add(cam.right, V.mul(cam.fwd, 0.18))), Z = V.norm(V.cross(F, [0, 1, 0])), U = V.cross(Z, F);
+    const E = V.add(cam.eye, V.add(V.mul(cam.fwd, 0.55), V.add(V.mul(cam.right, 0.09), V.mul(cam.up, -0.02))));
+    this.pass = { t0: this.t, E, F, go };
+    this.whale.F = F;
+    this.hero.hold = V.add(E, V.add(V.mul(F, 0.07), V.add(V.mul(U, 0.05), V.mul(Z, 0.20))));
+    this.whaleCall();
+  },
+  whalePassUpdate() {
+    const P = this.pass; if (!P) return;
+    const s = this.t - P.t0, W = this.whale;
+    W.look = YL.smooth(4.6, 5.6, s) * (1 - YL.smooth(P.go, P.go + 1.2, s));
+    W.blink = Math.max(0, 1 - Math.abs(s - 7.2) / 0.16);
+    if (s > P.go + 0.5) this.hero.hold = null;
+  },
+  whaleSlide() {
+    const P = this.pass, s = this.t - P.t0, u = Math.min(1, s / 4.8);
+    // gliding in, slowing to a stop; later, gathering way again
+    return -1.15 * Math.pow(1 - u, 2.2) + (s > P.go ? 0.05 * Math.pow(s - P.go, 2) : 0);
+  },
+  // the whale, close: a long low call, and the hush of the water it pushes aside
+  whaleCall() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.1;
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(70, t0); o.frequency.linearRampToValueAtTime(96, t0 + 2.2); o.frequency.exponentialRampToValueAtTime(58, t0 + 5.5);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(260, t0); bp.frequency.linearRampToValueAtTime(420, t0 + 2.4); bp.frequency.linearRampToValueAtTime(180, t0 + 5.5); bp.Q.value = 5;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.09, t0 + 1.2); g.gain.setValueAtTime(0.09, t0 + 3.6); g.gain.linearRampToValueAtTime(0, t0 + 5.6);
+    o.connect(bp); bp.connect(lp); lp.connect(g); g.connect(S.wet); g.connect(S.bus);
+    o.start(t0); o.stop(t0 + 5.8);
+    const sr = ctx.sampleRate, n = Math.floor(sr * 6), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    let b = 0; for (let i = 0; i < n; i++) { b += ((Math.random() * 2 - 1) - b) * 0.02; d[i] = b * 4; }
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const wl = ctx.createBiquadFilter(); wl.type = 'lowpass'; wl.frequency.setValueAtTime(90, t0); wl.frequency.linearRampToValueAtTime(260, t0 + 3); wl.frequency.linearRampToValueAtTime(80, t0 + 6);
+    const wg = ctx.createGain(); wg.gain.setValueAtTime(0, t0); wg.gain.linearRampToValueAtTime(0.5, t0 + 2.5); wg.gain.linearRampToValueAtTime(0, t0 + 6);
+    src.connect(wl); wl.connect(wg); wg.connect(S.bus); src.start(t0);
+  },
+  // the small lives take fright all at once (something big is coming)
+  scare() { const H = this.hero; H.speed = 2.5; H.moved = this.t; },
   // where the whale's eye is (how far along its pass), or null when it isn't near
   whalePos() {
     const W = this.whale, V = YL.V;
     if (this.wtest) { W.F = this.wtest.F; return { eye: V.add(this.wtest.E, V.mul(W.F, this.wtest.x)), x: this.wtest.x }; }
+    if (this.pass) { const x = this.whaleSlide(); return x < 2.0 ? { eye: V.add(this.pass.E, V.mul(this.pass.F, x)), x } : null; }
     // (its pass is still being framed — see M4b; for now it only appears when asked for with &whale=)
     if (W.at === null) return null;
     const x = W.at;
@@ -1153,6 +1202,7 @@ W.deepsea = {
     this.sound(dt);
     this.heroUpdate(dt);
     this.lureUpdate(dt);
+    this.whalePassUpdate();
     this.creaturesUpdate(dt);
     for (const j of this.jel) {
       // the moon jelly swims in pulses: a quick contraction, a long slow relaxing; it rises a little after each

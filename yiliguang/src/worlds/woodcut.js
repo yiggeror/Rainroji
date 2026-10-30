@@ -832,6 +832,7 @@ function makeSeal() {
   return c;
 }
 
+YL.makeSeal = makeSeal;                 // (the ink painting stamps the same seal)
 const FPS = 8;                          // the print's own frame rate: the world is re-printed eight times a second
 const CARVE_W = 1536, CARVE_H = 960;    // the knife's mask, over the whole 1.6 × 1 sheet
 const HOLE = [0.950, 0.285];
@@ -924,7 +925,15 @@ W.woodcut = {
     const s = Math.min(1, 1.6 / aspect), still = YL.DBG.still;
     const pan = still ? 0 : 0.016 * Math.sin(t * 0.05);
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
-    return [0.80 - 0.06 * narrow + pan, 0.5, s];
+    const v = [0.80 - 0.06 * narrow + pan, 0.5, s];
+    // the way out: the eye goes into the lantern until its lit paper is all there is
+    const z = this.zoomIn || 0;
+    if (z > 0) {
+      const L = this.lantern(t), e = z * z * (3 - 2 * z), k = Math.pow(z, 1.6);
+      v[0] += (L[0] - v[0]) * e; v[1] += (L[1] - 0.004 - v[1]) * e;
+      v[2] = s * Math.exp(Math.log(0.011 / s) * k);
+    }
+    return v;
   },
   toPrint(nx, ny, aspect) {
     const v = this.view(aspect, (this.shown > 0 ? this.shown : 0) / FPS);
@@ -967,7 +976,7 @@ W.woodcut = {
     let moving = false;
     if (H.mode === 'fall') {
       // drifting down like the snow, but it knows where it's going
-      const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085, dt, 1.2);
+      const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085 * (this.pace || 1), dt, 1.2);
       moving = true;
       if (d < 0.016) { H.mode = 'enter'; H.k = 0; }
     } else if (H.mode === 'enter') {
@@ -989,20 +998,20 @@ W.woodcut = {
     } else if (H.mode === 'out') {
       this.lanLight += (0.25 - this.lanLight) * Math.min(1, dt * 4);                    // the lantern keeps only an ember
       moving = true;
-      if (H.leg === 'to') { if (this.steer(H.path[0], 0.55, dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
+      if (H.leg === 'to') { if (this.steer(H.path[0], 0.55 * (this.pace || 1), dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
       else if (H.leg === 'along') {
         const s0 = H.s;
-        H.s += (H.path.carve ? 0.16 : 0.30) * dt;
+        H.s += (H.path.carve ? 0.16 : 0.30) * dt * (this.pace || 1);
         H.p = pointAt(H.path, H.s); H.v = [0, 0];
         // a path of its own (the moon): it is the knife, and cuts as it goes
         if (H.path.carve) { const a = pointAt(H.path, Math.max(s0 - 0.003, 0)); this.carveSeg(a, H.p, H.path.carve, H.path.carve); }
         if (H.s >= H.pathL) { H.leg = 'back'; if (this.queue.length) { H.path = this.queue.shift(); H.leg = 'to'; } }
-      } else if (this.steer(core, 0.55, dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
+      } else if (this.steer(core, 0.55 * (this.pace || 1), dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
     } else if (H.mode === 'leave') {
       this.lanLight += (0.12 - this.lanLight) * Math.min(1, dt * 2);
       moving = true;
       const s0 = H.s;
-      H.s += 0.095 * dt;
+      H.s += 0.095 * dt * (this.pace || 1);
       H.p = pointAt(H.path, H.s);
       // it is the knife now: its way down is cut into the print behind it
       const a = pointAt(H.path, Math.max(s0 - 0.004, 0));

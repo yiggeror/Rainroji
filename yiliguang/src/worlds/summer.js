@@ -530,7 +530,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   update(dt, still) {
     this.t += dt;
     // pressing and holding still stops the wind
-    const P = YL.ptr, now = performance.now() / 1000;
+    const P = YL.ptr, now = YL.now();
     const holding = YL.ptrDown && P && now - P.t > 0.5;
     this.calm = (this.calm || 0) + ((holding ? 1 : 0) - (this.calm || 0)) * (1 - Math.exp(-dt / 1.2));
     this.heroUpdate(dt);
