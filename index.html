@@ -256,6 +256,9 @@ uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
 uniform float uTime;
 uniform vec2 uJitter;                 // sub-pixel offset (Halton), accumulated by the TAA pass
+uniform vec4 uClock;                  // stopped wall clock: hand angles (rad, clockwise from 12)
+uniform vec4 uVar;                    // per-visit variation: thermos paint, calendar print, …
+uniform float uSteam;                 // tea warmth
 layout(location = 0) out vec4 oCol;   // rgb: room radiance (premultiplied by 1-coverage), a: glass coverage
 layout(location = 1) out vec4 oAux;   // r: view depth
 
@@ -273,6 +276,25 @@ layout(location = 1) out vec4 oAux;   // r: view depth
 #define M_BOOK2 12.0
 #define M_CURTAIN 14.0
 #define M_CORD 15.0
+#define M_LEAF 16.0
+#define M_POT 17.0
+#define M_SOIL 18.0
+#define M_CLOCK 19.0
+#define M_HANDS 20.0
+#define M_CAL 21.0
+#define M_THERMOS 22.0
+#define M_CORK 23.0
+#define M_PAPER 24.0
+#define M_PEN 25.0
+#define M_RADIO 26.0
+#define M_SECOND 27.0
+#define M_NBCOVER 28.0
+const vec3 PLANT_P = vec3(0.30, WIN_Y0, -0.028);     // spider plant on the sill
+const vec3 CLOCK_P = vec3(-0.735, 1.70, 0.0);        // wall clock above the lamp
+const vec3 CAL_P = vec3(ROOM_X0, 1.47, 0.36);        // calendar on the side wall
+const vec3 TH_P = vec3(0.645, DESK_TOP, 0.275);      // thermos flask
+const vec3 NB_P = vec3(0.05, DESK_TOP, 0.275);       // open notebook
+const vec3 RADIO_P = vec3(0.115, DESK_TOP, 0.072);   // transistor radio under the sill
 
 float sdBox(vec3 p, vec3 b){ vec3 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }
 float sdBox2(vec2 p, vec2 b){ vec2 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
@@ -280,6 +302,17 @@ float sdRBox(vec3 p, vec3 b, float r){ return sdBox(p, b - r) - r; }
 float sdCylY(vec3 p, float r, float h){ vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h); return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)); }
 float sdSeg2(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
 vec2 opU(vec2 a, vec2 b){ return a.x < b.x ? a : b; }
+float sdCylZ(vec3 p, float r, float h){ return sdCylY(p.xzy, r, h); }
+float sdCapsule(vec3 p, vec3 a, vec3 b, float r){ vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h) - r; }
+// Quilez: vertical frustum centred at the origin, half height h, radii r1 (bottom) → r2 (top)
+float sdCappedCone(vec3 p, float h, float r1, float r2){
+  vec2 q = vec2(length(p.xz), p.y);
+  vec2 k1 = vec2(r2, h), k2 = vec2(r2 - r1, 2.0 * h);
+  vec2 ca = vec2(q.x - min(q.x, (q.y < 0.0) ? r1 : r2), abs(q.y) - h);
+  vec2 cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
+  float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+  return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+}
 vec2 rot2(vec2 v, float a){ float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
 
 // ---- walls with the window opening carved through
@@ -393,6 +426,128 @@ vec2 sdBooks(vec3 p){
   return r;
 }
 
+// ---- spider plant (吊兰) in a terracotta pot: arching leaves, each a tapered 3-segment capsule chain
+vec2 sdPlant(vec3 p){
+  vec3 q = p - PLANT_P;
+  float bound = sdBox(q - vec3(0.0, 0.13, 0.05), vec3(0.24, 0.16, 0.14));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float pot = sdCappedCone(q - vec3(0.0, 0.042, 0.0), 0.042, 0.040, 0.052) - 0.002;
+  pot = max(pot, -sdCappedCone(q - vec3(0.0, 0.05, 0.0), 0.042, 0.035, 0.047));
+  float lip = length(vec2(length(q.xz) - 0.052, q.y - 0.084)) - 0.0055;
+  vec2 res = vec2(min(pot, lip), M_POT);
+  res = opU(res, vec2(sdCylY(q - vec3(0.0, 0.074, 0.0), 0.046, 0.002), M_SOIL));
+  if (q.y > -0.07){
+    float dl = 1e9;
+    for (int i = 0; i < 20; i++){
+      float fi = float(i);
+      float h1 = hash11(fi * 7.31 + 1.1), h2 = hash11(fi * 3.17 + 5.2), h3 = hash11(fi * 11.7 + 2.9);
+      float phi = -0.55 + fract(fi * 0.618 + 0.3 * h1) * 4.25;  // golden-ratio spread round the crown, never into the glass
+      float sz = sin(phi);
+      vec3 D = vec3(cos(phi), 0.0, sz < 0.0 ? sz * 0.3 : sz);
+      vec3 W = normalize(vec3(-D.z, 0.0, D.x));                 // the ribbon's width lies across the arch
+      float young = step(13.0, fi);                              // the last leaves are short and upright, the heart of the tuft
+      float L = mix(0.14 + 0.10 * h2, 0.06 + 0.04 * h2, young);
+      // a leaf follows a fountain-like arc (up·L·(a·s − b·s²) + D·L·s), curling a little sideways; 7 short segments
+      // leaves reaching into the room droop over the sill's edge; sideways ones stay above the sill
+      float A = mix(2.0 + 0.8 * h3, 4.5, young), B = mix(2.3 + (0.6 + 1.0 * h1) * (0.4 + 0.4 * max(D.z, 0.0)), 3.0, young);
+      vec3 C = W * (h3 - 0.5) * 0.45;
+      // cheap reject: this leaf lies inside a sphere of radius ≈ 0.75 L around its middle
+      vec3 mid = vec3(0.0, 0.072, 0.0) + D * 0.5 * L + vec3(0.0, L * (A * 0.5 - B * 0.25) * 0.7, 0.0);
+      if (length(q - mid) - 0.8 * L > dl) continue;
+      vec3 prev = vec3(0.0, 0.072, 0.0) + D * 0.006;
+      for (int k = 1; k <= 7; k++){
+        float sN = float(k) / 7.0;
+        vec3 cur = vec3(0.0, 0.072, 0.0) + (D * sN + C * sN * sN) * L + vec3(0.0, L * (A * sN - B * sN * sN) * 0.7, 0.0);
+        vec3 ba = cur - prev, pa = q - prev;
+        float hh = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        vec3 e = pa - ba * hh;
+        float tAlong = (float(k - 1) + hh) / 7.0;
+        float hw = mix(0.005 + 0.0015 * h2, 0.0007, tAlong * tAlong);   // half width tapers to a point
+        float ew = dot(e, W);
+        float et = length(e - W * ew);
+        dl = min(dl, length(vec2(max(abs(ew) - hw, 0.0), et)) - 0.0007);
+        prev = cur;
+      }
+    }
+    res = opU(res, vec2(dl * 0.9, M_LEAF));
+  }
+  return res;
+}
+// ---- an old wall clock, stopped at dusk (hands from uClock)
+vec2 sdClock(vec3 p){
+  vec3 q = p - CLOCK_P;
+  float bound = sdBox(q - vec3(0.0, 0.0, 0.022), vec3(0.125, 0.125, 0.026));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float r = length(q.xy);
+  float body = sdCylZ(q - vec3(0.0, 0.0, 0.016), 0.112, 0.016) - 0.003;
+  float bezel = length(vec2(r - 0.104, q.z - 0.035)) - 0.0065;
+  body = max(body, -sdCylZ(q - vec3(0.0, 0.0, 0.036), 0.098, 0.006));
+  vec2 res = vec2(min(body, bezel), M_CLOCK);
+  float hd = 1e9, sd = 1e9;
+  for (int k = 0; k < 3; k++){
+    float a = k == 0 ? uClock.x : k == 1 ? uClock.y : uClock.z;
+    vec2 dir = vec2(sin(a), cos(a));
+    vec2 uv = vec2(dot(q.xy, vec2(dir.y, -dir.x)), dot(q.xy, dir));
+    float len = k == 0 ? 0.052 : k == 1 ? 0.078 : 0.086;
+    float wid = k == 0 ? 0.0034 : k == 1 ? 0.0023 : 0.0007;
+    float tail = k == 2 ? 0.022 : 0.012;
+    float d2 = sdBox2(uv - vec2(0.0, (len - tail) * 0.5), vec2(wid * (1.0 - 0.45 * sat(uv.y / len)), (len + tail) * 0.5));
+    float d3 = max(d2, abs(q.z - 0.0315 - float(k) * 0.0012) - 0.0005);
+    if (k == 2) sd = d3; else hd = min(hd, d3);
+  }
+  hd = min(hd, length(q - vec3(0.0, 0.0, 0.0335)) - 0.0035);
+  return opU(opU(res, vec2(hd, M_HANDS)), vec2(sd, M_SECOND));
+}
+// ---- picture calendar hung from a nail; its lower edge curls off the damp wall
+vec2 sdCalendar(vec3 p){
+  vec3 q = p - CAL_P;
+  float bound = sdBox(q - vec3(0.015, 0.03, 0.0), vec3(0.025, 0.25, 0.16));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float curl = 0.002 + 0.017 * pow(sat((-q.y - 0.05) / 0.16), 2.0) + 0.004 * sat(abs(q.z) / 0.142) * sat(-q.y / 0.2);
+  vec2 res = vec2(sdBox(vec3(q.x - curl, q.y, q.z), vec3(0.0012, 0.205, 0.142)) * 0.7, M_CAL);
+  float bar = sdRBox(q - vec3(0.004, 0.201, 0.0), vec3(0.004, 0.008, 0.145), 0.002);
+  float nail = length(q - vec3(0.004, 0.262, 0.0)) - 0.0035;
+  res = opU(res, vec2(min(bar, nail), M_BRASS));
+  float cord = min(sdCapsule(q, vec3(0.005, 0.207, -0.125), vec3(0.004, 0.262, 0.0), 0.001), sdCapsule(q, vec3(0.005, 0.207, 0.125), vec3(0.004, 0.262, 0.0), 0.001));
+  return opU(res, vec2(cord, M_CORD));
+}
+// ---- iron-shell thermos flask (暖水瓶) with a cork stopper
+vec2 sdThermos(vec3 p){
+  vec3 q = p - TH_P;
+  float bound = sdCylY(q - vec3(0.0, 0.19, 0.0), 0.11, 0.2);
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float body = sdCylY(q - vec3(0.0, 0.142, 0.0), 0.057, 0.128) - 0.002;
+  float shoulder = sdCappedCone(q - vec3(0.0, 0.291, 0.0), 0.02, 0.059, 0.036);
+  float neck = sdCylY(q - vec3(0.0, 0.318, 0.0), 0.032, 0.01) - 0.002;
+  vec2 res = vec2(min(min(body, shoulder), neck), M_THERMOS);
+  float foot = sdCylY(q - vec3(0.0, 0.007, 0.0), 0.0595, 0.007) - 0.0015;
+  float seam = length(vec2(length(q.xz) - 0.059, q.y - 0.272)) - 0.0028;
+  vec3 hq = q - vec3(0.06, 0.19, 0.0);
+  float handle = max(length(vec2(length(hq.xy * vec2(1.0, 0.5)) - 0.03, hq.z)) - 0.0045, -hq.x);
+  res = opU(res, vec2(min(min(foot, seam), handle), M_BRASS));
+  return opU(res, vec2(sdCappedCone(q - vec3(0.0, 0.346, 0.0), 0.02, 0.0285, 0.024) - 0.001, M_CORK));
+}
+// ---- an open exercise book and a fountain pen (the spread is a height field: pages bow up, the spine dips)
+float nbTop(float ax){ return 0.0035 + 0.0075 * pow(sin(PI * sat(ax / 0.152)), 0.6) * (1.0 - 0.3 * sat(ax / 0.152)); }
+vec2 sdNotebook(vec3 p){
+  vec3 q = p - NB_P; q.xz = rot2(q.xz, 0.24);
+  float bound = sdBox(q - vec3(0.0, 0.012, 0.0), vec3(0.17, 0.02, 0.12));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  float pages = max(max(q.y - nbTop(abs(q.x)), 0.0016 - q.y) * 0.8, sdBox2(q.xz, vec2(0.150, 0.102)));
+  vec2 res = vec2(pages, M_PAPER);
+  res = opU(res, vec2(sdRBox(q - vec3(0.0, 0.0008, 0.0), vec3(0.157, 0.0008, 0.108), 0.0006), M_NBCOVER));
+  return opU(res, vec2(sdCapsule(q, vec3(0.035, 0.0134, -0.07), vec3(0.135, 0.0110, 0.055), 0.0045), M_PEN));
+}
+// ---- small transistor radio, dial glowing
+vec2 sdRadio(vec3 p){
+  vec3 q = p - RADIO_P - vec3(0.0, 0.057, 0.0);
+  float bound = sdBox(q, vec3(0.11, 0.065, 0.048));
+  if (bound > 0.03) return vec2(bound, -1.0);
+  vec2 res = vec2(sdRBox(q, vec3(0.098, 0.056, 0.033), 0.01), M_RADIO);
+  float knobs = min(sdCylZ(q - vec3(0.066, -0.03, 0.035), 0.0105, 0.005), sdCylZ(q - vec3(0.087, -0.03, 0.035), 0.0075, 0.004)) - 0.001;
+  return opU(res, vec2(knobs, M_BRASS));
+}
+
 float curtainZ(vec3 p){
   float bunch = smoothstep(1.15, 0.78, p.y);
   float a = 0.021 + 0.011 * bunch;
@@ -422,6 +577,12 @@ vec2 mapObj(vec3 p, bool solidShade){
   res = opU(res, sdMug(p));
   res = opU(res, sdBooks(p));
   res = opU(res, sdCurtain(p));
+  res = opU(res, sdPlant(p));
+  res = opU(res, sdClock(p));
+  res = opU(res, sdCalendar(p));
+  res = opU(res, sdThermos(p));
+  res = opU(res, sdNotebook(p));
+  res = opU(res, sdRadio(p));
   return res;
 }
 // 房间内部是凸的（盒子），墙面不可能遮挡室内光源 → 阴影射线只测试物体，既消除掠射自遮挡条纹又省一半开销
@@ -506,6 +667,49 @@ vec3 wallpaper(vec2 uv, inout vec3 n, vec3 nAxis){
   float b0 = vnoise(uv * 220.0), bx = vnoise((uv + vec2(e, 0.0)) * 220.0), by = vnoise((uv + vec2(0.0, e)) * 220.0);
   vec3 t = normalize(cross(nAxis, vec3(0.0, 1.0, 0.0)));
   n = normalize(n + (t * (b0 - bx) + vec3(0.0, 1.0, 0.0) * (b0 - by)) * 0.18 + t * seam * 0.08);
+  return c;
+}
+
+// faded offset print on the calendar: a lake under hills, a sunset coast, or peonies (per visit)
+vec3 calPicture(vec2 u, float var){
+  vec3 c;
+  if (var < 0.5){
+    c = mix(vec3(0.62, 0.60, 0.50), vec3(0.40, 0.50, 0.55), u.y);
+    float far = 0.64 + 0.09 * fbm(vec2(u.x * 4.0, 1.0)) - 0.07 * u.x;
+    float near = 0.50 + 0.12 * fbm(vec2(u.x * 3.0 + 9.0, 2.0)) + 0.04 * sin(u.x * 5.0);
+    c = mix(c, vec3(0.36, 0.45, 0.43), smoothstep(0.004, -0.004, u.y - far));
+    c = mix(c, vec3(0.18, 0.29, 0.24), smoothstep(0.004, -0.004, u.y - near));
+    float lake = smoothstep(0.37, 0.365, u.y);
+    vec3 water = mix(vec3(0.44, 0.52, 0.52), vec3(0.24, 0.33, 0.31), smoothstep(0.37, 0.2, u.y) * 0.6) * (0.92 + 0.08 * sin(u.y * 160.0 + 5.0 * fbm(u * 9.0)));
+    c = mix(c, water, lake);
+    float pagoda = step(abs(u.x - 0.72), 0.010 + 0.012 * step(fract(u.y * 45.0), 0.35) * step(u.y, 0.5)) * step(0.37, u.y) * step(u.y, 0.55);
+    c = mix(c, vec3(0.12, 0.13, 0.11), pagoda);
+  } else if (var < 0.8){
+    c = mix(vec3(0.66, 0.42, 0.28), vec3(0.45, 0.36, 0.42), smoothstep(0.4, 1.0, u.y));
+    c = mix(c, vec3(0.80, 0.58, 0.30), smoothstep(0.09, 0.07, length((u - vec2(0.38, 0.52)) * vec2(1.0, 1.3))));
+    float sea = smoothstep(0.45, 0.445, u.y);
+    c = mix(c, mix(vec3(0.16, 0.18, 0.24), vec3(0.42, 0.30, 0.22), smoothstep(0.08, 0.0, abs(u.x - 0.38)) * (0.5 + 0.5 * sin(u.y * 140.0))), sea);
+  } else {
+    // a still life of peonies on a pale ground: layered, slightly ruffled petals, leaves behind
+    c = mix(vec3(0.56, 0.54, 0.46), vec3(0.48, 0.50, 0.44), u.y);
+    for (int k = 0; k < 3; k++){
+      vec2 ce = vec2(0.30 + 0.24 * float(k), 0.38 + 0.22 * fract(float(k) * 0.618));
+      vec2 lf = (u - ce - vec2(0.09, -0.08)) * vec2(1.0, 2.2);
+      c = mix(c, vec3(0.20, 0.30, 0.18), smoothstep(0.012, 0.0, length(lf) - 0.07) * 0.9);
+    }
+    for (int k = 0; k < 3; k++){
+      vec2 ce = vec2(0.30 + 0.24 * float(k), 0.38 + 0.22 * fract(float(k) * 0.618));
+      vec2 d = (u - ce) * vec2(1.0, 1.15); float r = length(d), a = atan(d.y, d.x);
+      float R0 = 0.11 - 0.015 * float(k);
+      float ruffle = 0.86 + 0.08 * sin(9.0 * a + float(k) * 2.0) + 0.06 * sin(17.0 * a);
+      float fl = smoothstep(0.01, 0.0, r - R0 * ruffle);
+      float inner = smoothstep(0.01, 0.0, r - R0 * 0.62 * (0.9 + 0.1 * sin(7.0 * a + 1.0)));
+      vec3 petal = mix(vec3(0.66, 0.30, 0.34), vec3(0.74, 0.50, 0.50), 0.5 + 0.5 * sin(a * 5.0 + r * 40.0));
+      c = mix(c, petal * (0.85 + 0.25 * smoothstep(0.0, R0, r)), fl);
+      c = mix(c, vec3(0.55, 0.20, 0.25), inner * 0.7);
+      c = mix(c, vec3(0.70, 0.58, 0.30), smoothstep(0.02, 0.0, r) * 0.8);
+    }
+  }
   return c;
 }
 
@@ -604,6 +808,125 @@ Mat getMat(float id, vec3 p, inout vec3 n){
     bool pages = abs(b.y) < hs.y - 0.0022 && (b.x > -hs.x + 0.004) && (abs(b.x) > hs.x - 0.004 || abs(b.z) > hs.z - 0.004);
     if (pages){ m.alb = vec3(0.46, 0.41, 0.3) * (0.85 + 0.15 * sin(b.y * 3000.0)); m.rough = 0.9; }
     else { m.alb = cover * (0.8 + 0.3 * fbm(b.xz * 60.0)) * (1.0 - 0.3 * smoothstep(0.7, 0.9, fbm(b.xz * 12.0))); m.rough = 0.75; }
+  } else if (id == M_LEAF){
+    vec3 q = p - PLANT_P;
+    float v = vnoise(p.xz * 140.0 + p.y * 60.0);
+    m.alb = mix(vec3(0.045, 0.12, 0.028), vec3(0.10, 0.19, 0.045), v) * (0.75 + 0.45 * sat((q.y - 0.04) / 0.14));
+    m.alb = mix(m.alb, vec3(0.30, 0.33, 0.18), 0.45 * smoothstep(0.72, 0.9, vnoise(vec2(atan(q.z, q.x) * 26.0, q.y * 7.0))));  // pale variegation
+    m.alb = mix(m.alb, vec3(0.20, 0.13, 0.05), smoothstep(-0.02, -0.06, q.y));                                               // dry brown tips
+    m.rough = 0.42; m.trans = vec3(0.09, 0.19, 0.035);
+  } else if (id == M_POT){
+    vec3 q = p - PLANT_P;
+    vec3 c = vec3(0.30, 0.12, 0.065) * (0.85 + 0.3 * fbm(vec2(atan(q.z, q.x) * 6.0, q.y * 40.0)));
+    c = mix(c, vec3(0.44, 0.41, 0.36), 0.7 * smoothstep(0.55, 0.75, fbm(vec2(atan(q.z, q.x) * 5.0, q.y * 25.0) + 4.0)) * smoothstep(0.05, 0.085, q.y));   // lime bloom
+    m.alb = c; m.rough = 0.85;
+  } else if (id == M_SOIL){
+    m.alb = vec3(0.028, 0.019, 0.013) * (0.7 + 0.6 * vnoise(p.xz * 500.0)); m.rough = 0.95;
+  } else if (id == M_CLOCK){
+    vec3 q = p - CLOCK_P;
+    float r = length(q.xy);
+    if (q.z > 0.0285 && r < 0.0985){
+      // dial behind a glass cover: aged cream paper, hour batons, minute ticks, a small red maker's mark
+      float a = atan(q.x, q.y);
+      float hourT = abs(fract(a / (PI / 6.0) + 0.5) - 0.5) * (PI / 6.0) * r;
+      float minT = abs(fract(a / (PI / 30.0) + 0.5) - 0.5) * (PI / 30.0) * r;
+      float big = step(abs(fract(a / (PI / 2.0) + 0.5) - 0.5), 0.05);
+      float hourMark = smoothstep(0.0024 + 0.0012 * big, 0.0014 + 0.0012 * big, hourT) * smoothstep(0.064, 0.067, r) * smoothstep(0.090, 0.087, r);
+      float minMark = smoothstep(0.0007, 0.0003, minT) * smoothstep(0.084, 0.086, r) * smoothstep(0.091, 0.089, r);
+      vec3 dial = vec3(0.50, 0.46, 0.35) * (0.88 + 0.12 * fbm(q.xy * 60.0));
+      dial *= 1.0 - 0.25 * smoothstep(0.6, 0.9, fbm(q.xy * 14.0 + 3.0));
+      dial = mix(dial, vec3(0.03), max(hourMark, minMark));
+      dial = mix(dial, vec3(0.42, 0.05, 0.03), smoothstep(0.0045, 0.003, length((q.xy - vec2(0.0, 0.036)) * vec2(0.6, 1.0))));
+      m.alb = dial; m.rough = 0.06;            // the glass cover catches the lamp and the window
+    } else if (r > 0.097 && q.z > 0.026){ m.alb = vec3(0.62, 0.60, 0.55); m.metal = 1.0; m.rough = 0.25; }
+    else { m.alb = vec3(0.055, 0.028, 0.013) * (0.8 + 0.4 * fbm(q.xy * 40.0)); m.rough = 0.32; }
+  } else if (id == M_HANDS){
+    m.alb = vec3(0.018); m.rough = 0.4;
+  } else if (id == M_SECOND){
+    m.alb = vec3(0.34, 0.03, 0.02); m.rough = 0.4;
+  } else if (id == M_CAL){
+    vec3 q = p - CAL_P;
+    vec2 uv = vec2((0.142 - q.z) / 0.284, (q.y + 0.205) / 0.41);
+    vec3 paper = vec3(0.50, 0.47, 0.39);
+    vec3 c = paper;
+    if (uv.y > 0.40){
+      vec2 pv = vec2((uv.x - 0.06) / 0.88, (uv.y - 0.43) / 0.53);
+      if (pv.x > 0.0 && pv.x < 1.0 && pv.y > 0.0 && pv.y < 1.0) c = calPicture(pv, uVar.y);
+    } else if (uv.y > 0.335){
+      c = vec3(0.50, 0.08, 0.05);
+      c = mix(c, vec3(0.62, 0.52, 0.36), step(0.6, vnoise(vec2(uv.x * 60.0, 3.0))) * step(abs(uv.y - 0.367), 0.012) * step(abs(uv.x - 0.5), 0.2));
+    } else if (uv.y > 0.04){
+      // the month: 7 columns × 5 weeks of numerals, Sundays in red, one date circled in pen
+      vec2 g = vec2((uv.x - 0.05) / 0.9 * 7.0, (0.315 - uv.y) / 0.27 * 5.0);
+      vec2 gi = floor(g), gf = fract(g) - vec2(0.5, 0.45);
+      float on = step(0.0, g.x) * step(g.x, 7.0) * step(0.0, g.y) * step(g.y, 5.0);
+      float digit = step(abs(gf.x), 0.16) * step(abs(gf.y), 0.2) * step(0.35, vnoise(gf * 9.0 + gi * 3.1));
+      vec3 ink = gi.x < 0.5 ? vec3(0.45, 0.06, 0.04) : vec3(0.06, 0.05, 0.045);
+      c = mix(c, ink, digit * on);
+      float circ = smoothstep(0.03, 0.0, abs(length(gf * vec2(1.0, 1.3)) - 0.33)) * step(abs(gi.x - 4.0), 0.1) * step(abs(gi.y - 2.0), 0.1);
+      c = mix(c, vec3(0.5, 0.06, 0.05), circ * 0.9);
+    }
+    c *= 0.88 + 0.12 * vnoise(uv * 90.0);
+    c = mix(c, c * vec3(1.0, 0.88, 0.68), 0.55 * smoothstep(0.4, 0.85, fbm(uv * 3.0 + 1.0)));   // yellowed with age
+    c *= mix(vec3(0.82, 0.86, 0.9), vec3(1.0), smoothstep(0.0, 0.25, uv.y));                    // grubby lower edge, thumbed through every month
+    m.alb = c; m.rough = 0.75;
+  } else if (id == M_THERMOS){
+    vec3 q = p - TH_P;
+    float ang = atan(q.z, q.x);
+    vec3 base = uVar.x < 0.4 ? vec3(0.30, 0.035, 0.03) : uVar.x < 0.75 ? vec3(0.045, 0.17, 0.10) : vec3(0.08, 0.20, 0.30);
+    vec3 c = base;
+    // printed band of peonies with leaves, gold pin-stripes
+    vec2 fp = vec2((fract(ang / (PI / 3.0)) - 0.5) * 0.0626, q.y - 0.168);
+    float fr = length(fp), fa = atan(fp.y, fp.x);
+    float flower = smoothstep(0.0015, 0.0, fr - 0.018 * (0.72 + 0.28 * cos(6.0 * fa)));
+    float leaf = smoothstep(0.0015, 0.0, length((fp - vec2(0.022, -0.012)) * vec2(1.0, 2.2)) - 0.008);
+    c = mix(c, vec3(0.06, 0.18, 0.07), leaf);
+    c = mix(c, mix(vec3(0.66, 0.42, 0.40), vec3(0.62, 0.55, 0.35), smoothstep(0.012, 0.0, fr)), flower);
+    float stripe = smoothstep(0.0013, 0.0, abs(q.y - 0.105)) + smoothstep(0.0013, 0.0, abs(q.y - 0.235));
+    c = mix(c, vec3(0.55, 0.40, 0.12), sat(stripe));
+    // decades of use: chipped paint, rust creeping up from the foot
+    float chip = smoothstep(0.75, 0.78, fbm(vec2(ang * 8.0, q.y * 60.0)));
+    float rust = smoothstep(0.06, 0.0, q.y) * smoothstep(0.4, 0.7, fbm(vec2(ang * 5.0, q.y * 50.0)));
+    c = mix(c, vec3(0.12, 0.05, 0.025), sat(chip + rust));
+    m.alb = c; m.rough = mix(0.26, 0.7, sat(chip + rust));
+  } else if (id == M_CORK){
+    m.alb = vec3(0.20, 0.11, 0.05) * (0.7 + 0.5 * vnoise(p.xz * 600.0 + p.y * 300.0)); m.rough = 0.9;
+  } else if (id == M_PAPER){
+    vec3 q = p - NB_P; q.xz = rot2(q.xz, 0.24);
+    vec3 c = vec3(0.56, 0.53, 0.44) * (0.93 + 0.07 * vnoise(q.xz * 300.0));
+    float row = floor((q.z + 0.09) / 0.0075);
+    float dz = fract((q.z + 0.09) / 0.0075) * 0.0075;
+    float inRows = step(-0.088, q.z) * step(q.z, 0.092) * step(0.012, abs(q.x)) * step(abs(q.x), 0.142);
+    c = mix(c, vec3(0.38, 0.48, 0.58), smoothstep(0.0003, 0.0, abs(dz - 0.0072)) * inRows * 0.5);
+    // handwriting: the left page is full, the right page stops a third of the way down
+    float lineLen = (q.x < 0.0) ? 0.142 - 0.05 * hash11(row * 3.1) : (row > 16.0 ? 0.0 : 0.142 - 0.06 * hash11(row * 5.7));
+    float written = step(abs(q.x), lineLen) * inRows;
+    float glyph = step(0.55, vnoise(vec2(q.x * 520.0, row * 13.7))) * smoothstep(0.0024, 0.0012, abs(dz - 0.0045));
+    glyph = max(glyph, step(0.8, vnoise(vec2(q.x * 900.0, row * 5.1))) * smoothstep(0.0034, 0.002, abs(dz - 0.004)));
+    c = mix(c, vec3(0.06, 0.08, 0.17), glyph * written * 0.85);
+    if (q.y < 0.006 && (abs(q.x) > 0.148 || abs(q.z) > 0.1)) c *= 0.75 + 0.25 * sin(q.y * 4000.0);   // edges of the page block
+    m.alb = c; m.rough = 0.88;
+  } else if (id == M_PEN){
+    vec3 q = p - NB_P; q.xz = rot2(q.xz, 0.24);
+    float s = dot(q - vec3(0.035, 0.0134, -0.07), normalize(vec3(0.1, -0.0024, 0.125)));
+    m.alb = s > 0.115 ? vec3(0.62, 0.47, 0.20) : vec3(0.025, 0.035, 0.07);
+    m.metal = s > 0.115 || abs(s - 0.06) < 0.003 ? 1.0 : 0.0; m.rough = 0.18;
+  } else if (id == M_NBCOVER){
+    m.alb = vec3(0.035, 0.075, 0.06) * (0.85 + 0.3 * vnoise(p.xz * 200.0)); m.rough = 0.8;
+  } else if (id == M_RADIO){
+    vec3 q = p - RADIO_P - vec3(0.0, 0.057, 0.0);
+    if (q.z > 0.029){
+      if (q.x < 0.018 && q.x > -0.086 && abs(q.y) < 0.042){
+        vec2 g = fract(q.xy / 0.0042) - 0.5;
+        m.alb = mix(vec3(0.16, 0.12, 0.075), vec3(0.04, 0.03, 0.022), smoothstep(0.34, 0.24, length(g))); m.rough = 0.9;
+      } else if (q.x > 0.028 && q.x < 0.09 && q.y > -0.006 && q.y < 0.036){
+        // the dial window, lit from behind: scale ticks and a red needle
+        float tick = smoothstep(0.0005, 0.0, abs(fract(q.x / 0.004) - 0.5) * 0.004 - 0.00015) * step(abs(q.y - 0.022), 0.006);
+        float needle = smoothstep(0.0008, 0.0, abs(q.x - 0.061));
+        vec3 glow = vec3(1.0, 0.42, 0.10) * 0.9 * (1.0 - 0.7 * tick) * (0.85 + 0.15 * smoothstep(0.036, 0.0, abs(q.y - 0.015)));
+        m.alb = vec3(0.04); m.emis = mix(glow, vec3(0.5, 0.03, 0.02), needle); m.rough = 0.08;
+      } else { m.alb = vec3(0.34, 0.31, 0.24) * (0.9 + 0.1 * fbm(q.xy * 80.0)); m.rough = 0.35; }
+    } else { m.alb = vec3(0.10, 0.055, 0.03) * (0.8 + 0.4 * fbm(vec2(q.x * 30.0, q.y * 300.0))); m.rough = 0.3; }
   } else if (id == M_CURTAIN){
     vec2 cu = vec2(p.x * 1.0, p.y);
     vec3 c = vec3(0.56, 0.45, 0.25);
@@ -703,6 +1026,11 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
   // diffuse-ish ambient specular for everything else
   col += F_Schlick(f0, nv) * (uAmbL * 0.5 + uAmbS) / PI * ao * (1.0 - m.rough) * 0.6;
 
+  // 5a) thin leaves: the window shines through them (and, from the side, the lamp)
+  if (id == M_LEAF){
+    col += m.trans * windowRadiance(vec3(0.0, 0.15, -1.0)) * 0.9;
+    col += m.trans * uLampI * lampEmitFactor(normalize(p - BULB)) / max(d2, 0.05) * 0.06;
+  }
   // 5) curtain transmission: cold window light passing through the fabric where it hangs over the glass
   if (id == M_CURTAIN){
     float over = smoothstep(WIN_X1 + 0.01, WIN_X1 - 0.02, p.x) * smoothstep(WIN_Y0 - 0.02, WIN_Y0 + 0.03, p.y) * smoothstep(WIN_Y1 + 0.02, WIN_Y1 - 0.03, p.y);
@@ -711,6 +1039,45 @@ vec3 shade(vec3 p, vec3 n, vec3 rd, float id){
   }
 
   return col;
+}
+
+// ---- steam over the tea: a thin, rising, wandering plume (single scattering).
+// Lamp light (Henyey–Greenstein g = 0.5) and the window behind it (forward scattering g = 0.65) light the droplets;
+// optical depth stays ≲ 0.15 so it reads as breath, not smoke.
+float HG(float c, float g){ float g2 = g * g; return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * c, 1.5)); }
+vec4 steamVol(vec3 ro, vec3 rd, float tEnd){
+  vec3 c = vec3(MUG_X, DESK_TOP + MUG_H - 0.004, MUG_Z);
+  const float RMAX = 0.09, HMAX = 0.30;
+  vec2 oc = ro.xz - c.xz;
+  float a = dot(rd.xz, rd.xz), b = dot(oc, rd.xz), cc = dot(oc, oc) - RMAX * RMAX;
+  float disc = b * b - a * cc;
+  if (disc <= 0.0 || uSteam <= 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
+  float sq = sqrt(disc);
+  float t0 = max((-b - sq) / a, 0.0), t1 = min((-b + sq) / a, tEnd);
+  float ty0 = (c.y - ro.y) / rd.y, ty1 = (c.y + HMAX - ro.y) / rd.y;
+  t0 = max(t0, min(ty0, ty1)); t1 = min(t1, max(ty0, ty1));
+  if (t1 <= t0) return vec4(0.0, 0.0, 0.0, 1.0);
+  float dt = (t1 - t0) / 12.0, T = 1.0; vec3 S = vec3(0.0);
+  float jit = hash12(gl_FragCoord.xy + fract(uTime * 7.0) * 61.0);
+  vec3 Ewin = uSkyL * 1.1 + uCityL * 0.6;
+  for (int i = 0; i < 12; i++){
+    vec3 p = ro + rd * (t0 + (float(i) + jit) * dt);
+    float h = (p.y - c.y) / HMAX;
+    vec2 ctr = c.xz + vec2(0.03 * h * sin(h * 4.0 + uTime * 0.35) + 0.035 * h * h, 0.018 * h * cos(h * 5.0 - uTime * 0.27));
+    vec2 dd = p.xz - ctr;
+    float rr = length(dd) / (0.014 + 0.065 * h);
+    float ang = atan(dd.y, dd.x);
+    float f1 = vnoise(vec2(ang * 1.6 + h * 6.0 + 7.0, h * 9.0 - uTime * 0.7));
+    float f2 = vnoise(vec2(ang * 3.2 - h * 4.0, h * 21.0 - uTime * 1.3 + 3.0));
+    float wisp = smoothstep(0.42, 0.85, f1 * 0.65 + f2 * 0.45);
+    float sigma = 10.0 * uSteam * wisp * exp(-rr * rr * 1.6) * smoothstep(0.0, 0.07, h) * (1.0 - h) * (1.0 - h);
+    if (sigma < 1e-3) continue;
+    vec3 Ll = p - BULB; float ld2 = dot(Ll, Ll); vec3 ll = Ll * inversesqrt(ld2);
+    vec3 Lin = uLampI * lampEmitFactor(ll) / ld2 * HG(dot(ll, -rd), 0.5) + Ewin * HG(dot(vec3(0.0, 0.0, 1.0), -rd), 0.65) * 2.5 + (uAmbL + uAmbS) * 0.08;
+    S += T * sigma * dt * Lin;
+    T *= exp(-sigma * dt);
+  }
+  return vec4(S, T);
 }
 
 void main(){
@@ -728,11 +1095,13 @@ void main(){
     t += h.x * 0.96;
     if (t > tmax) break;
   }
-  if (!hit){ oCol = vec4(0.0, 0.0, 0.0, 1.0); oAux = vec4(tG * dot(rd, uCamFwd)); return; }
+  vec4 st = steamVol(ro, rd, hit ? t : tG);
+  // premultiplied: (room radiance, glass coverage) — steam adds light and veils whatever lies behind it
+  if (!hit){ oCol = vec4(st.rgb, st.a); oAux = vec4(tG * dot(rd, uCamFwd)); return; }
   vec3 p = ro + rd * t;
   vec3 n = calcNormal(p);
   vec3 col = shade(p, n, rd, h.y);
-  oCol = vec4(max(col, 0.0), 0.0);
+  oCol = vec4(max(col, 0.0) * st.a + st.rgb, 0.0);
   oAux = vec4(t * dot(rd, uCamFwd));
 }
 `;
@@ -741,12 +1110,32 @@ void main(){
 // OUTSIDE: procedural rainy street (background only; point lights are sprites)
 // --------------------------------------------------------------------------
 const GLSL_CITY = `
+uniform float uTime;
+uniform float uCity;            // per-visit seed of the skyline and the shop row
+uniform vec4 uBus;              // a passing bus: x, z of its near side, heading, intensity (0: none)
+#define TREE_Z (-4.8)
+float sdSegC(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+float sdBoxC(vec2 p, vec2 b){ vec2 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
 // opposite row: old 2-4 storey shophouses; far city: towers seen over their roofs
-float bldTop(float x){ float i = floor(x / 9.0); return 6.6 + 5.0 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
-float farTop(float x){ float i = floor(x / 26.0); return 16.0 + 50.0 * pow(hash11(i * 1.7 + 9.0), 1.6); }
+float bldTop(float x){ float i = floor(x / 9.0) + uCity; return 6.6 + 5.0 * hash11(i * 3.17 + 0.7) + (hash11(i * 7.1) > 0.72 ? 3.0 : 0.0); }
+float farTop(float x){ float i = floor(x / 26.0) + uCity * 1.37; return 16.0 + 50.0 * pow(hash11(i * 1.7 + 9.0), 1.6); }
+// 窗外人行道上的一棵梧桐，树冠伸进窗口左上角；当作 TREE_Z 处的竖直「卡片」，离焦按该深度的弥散圆处理
+float treeAlpha(vec2 pt, float w){
+  vec2 q = pt + vec2(0.10 * sin(uTime * 0.6 + pt.y * 0.8) + 0.05 * sin(uTime * 1.3 + pt.x), 0.03 * sin(uTime * 0.9 + pt.x * 0.7))
+                * smoothstep(GROUND_Y + 3.5, GROUND_Y + 7.0, pt.y);                       // the crown sways, the trunk does not
+  // crown reaching into the top-left of the window; the trunk stands just outside the view
+  vec2 c1 = vec2(-2.4, GROUND_Y + 6.5), c2 = vec2(-0.6, GROUND_Y + 6.95);
+  float e = min(length((q - c1) / vec2(1.9, 1.3)), length((q - c2) / vec2(1.3, 0.75)) + 0.08);
+  float d = e + (0.5 - fbm(q * 1.4 + 3.0)) * 0.8 + (0.5 - vnoise(q * 5.5)) * 0.25;    // leaf clusters, sky in the gaps
+  float crown = smoothstep(0.80 + w, 0.80 - w, d);
+  float tr = sdSegC(q, vec2(-3.1, GROUND_Y), vec2(-2.9, GROUND_Y + 4.9)) - 0.17 + 0.03 * (q.y - GROUND_Y) / 4.9;
+  float l1 = sdSegC(q, vec2(-2.92, GROUND_Y + 4.3), vec2(-0.7, GROUND_Y + 6.5)) - 0.07;
+  float l2 = sdSegC(q, vec2(-1.6, GROUND_Y + 5.4), vec2(-1.1, GROUND_Y + 6.4)) - 0.04;
+  return max(crown, smoothstep(w * 2.0, -w * 2.0, min(tr, min(l1, l2))));
+}
+float busMask(vec2 l, float w){ return smoothstep(w, -w, sdBoxC(l - vec2(0.0, 1.72), vec2(5.25, 1.12)) - 0.25); }
 `;
 const GLSL_OUTSIDE = GLSL_CITY + `
-uniform float uTime;
 uniform vec4 uStreetLamps[6];   // xyz, w = intensity
 uniform vec4 uCars[4];          // x, z(lane), heading(+-1), intensity
 vec3 skyCol(vec3 rd){
@@ -777,7 +1166,8 @@ vec3 windowLight(float id, vec2 cell){
 vec3 facade(vec3 p, vec2 bw){
   float fx = p.x, fy = p.y - GROUND_Y;
   float bi = floor(fx / 9.0);
-  float hb = hash11(bi * 3.17 + 0.3);
+  float bs = bi + uCity;                 // hash key of this block (the layout differs per visit)
+  float hb = hash11(bs * 3.17 + 0.3);
   vec3 wall = mix(vec3(0.011, 0.011, 0.012), vec3(0.022, 0.019, 0.017), hb);
   // light from the street lamps and shop windows below washes up the wet facade
   float glow = 0.0;
@@ -790,9 +1180,14 @@ vec3 facade(vec3 p, vec2 bw){
     float row = floor((fy - 3.6) / 3.0);
     float colI = floor(wx / 3.0);
     vec2 lc = vec2(fract(wx / 3.0) - 0.5, fract((fy - 3.6) / 3.0) - 0.48) * 3.0;
-    float id = hash12(vec2(bi * 5.0 + colI, row + 11.0));
+    float id = hash12(vec2(bs * 5.0 + colI, row + 11.0));
     vec2 hs = vec2(0.58 + 0.12 * hb, 0.68);
     float m = rectSoft(lc, hs, bw + 0.03);
+    // somebody comes home, somebody goes to bed: a few windows switch on and off over the minutes
+    if (fract(id * 53.1) < 0.2){
+      bool on = fract(uTime / (50.0 + 110.0 * fract(id * 7.7)) + id * 5.0) < 0.6;
+      id = on ? 0.396 * fract(id * 31.0) : 0.5 + 0.5 * id;     // (ids below 0.4 are lit; the value also picks the light's colour)
+    }
     vec3 wc = id < 0.4 ? windowLight(id, lc) : vec3(0.006, 0.008, 0.012) + skyCol(vec3(0.0, 0.25, -1.0)) * 0.25;
     // curtains / blinds inside lit windows: break up the flat rectangles
     if (id < 0.4) wc *= 0.7 + 0.3 * smoothstep(-0.4, 0.4, sin(lc.x * 2.2 + id * 40.0) + (fract(id * 9.0) - 0.5) * 2.0);
@@ -800,10 +1195,10 @@ vec3 facade(vec3 p, vec2 bw){
     c += (id < 0.4 ? wc : vec3(0.0)) * 0.06 * rectSoft(lc, hs, bw + 0.6);   // rain-scattered glow
   }
   // ground floor: shopfronts with signboards
-  float shop = hash11(bi * 1.93 + 4.0);
+  float shop = hash11(bs * 1.93 + 4.0);
   if (shop > 0.25){
     float si = floor(wx / 4.5);
-    float sh2 = hash11(bi * 7.7 + si * 3.1);
+    float sh2 = hash11(bs * 7.7 + si * 3.1);
     vec2 sc = vec2(fract(wx / 4.5) * 4.5 - 2.25, fy - 1.5);
     float m = rectSoft(sc, vec2(1.75, 1.15), bw + 0.03) * step(0.3, sh2);
     float shutter = step(0.55, fract(sh2 * 3.3)) * smoothstep(-0.1, 0.1, sc.y - (1.0 - 1.9 * fract(sh2 * 7.7)));
@@ -863,9 +1258,80 @@ vec3 aboveGround(vec3 ro, vec3 rd, float blur, out float dist){
   if (mb > 0.5) dist = tb;
   return c;
 }
+// people walking under umbrellas on the far pavement (silhouettes against the lit shops)
+uniform vec4 uPeds[5];          // x, z, umbrella kind, gait phase   (x > 900: nobody)
+vec4 pedestrians(vec3 ro, vec3 rd, float blur, float tLimit){
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < 5; i++){
+    vec4 pd = uPeds[i];
+    if (pd.x > 900.0) continue;
+    float t = (pd.y - ro.z) / rd.z;
+    if (t <= 0.0 || t > tLimit) continue;
+    vec2 l = vec2(ro.x + rd.x * t - pd.x, ro.y + rd.y * t - GROUND_Y);
+    if (abs(l.x) > 1.6 || l.y < -0.3 || l.y > 2.8) continue;
+    float w = blur * t + 0.015;
+    vec2 ub = vec2(l.x, l.y - 0.025 * abs(sin(pd.w)));
+    float umb = smoothstep(1.0 + w * 2.5, 1.0 - w * 2.5, length(vec2(ub.x / 0.52, (ub.y - 1.93) / 0.30))) * smoothstep(1.90 - w, 1.93 + w, ub.y);
+    float body = smoothstep(w, -w, sdSegC(ub, vec2(0.0, 0.85), vec2(0.0, 1.5)) - 0.2);
+    body = max(body, smoothstep(w, -w, length(ub - vec2(0.0, 1.66)) - 0.1));
+    float sw = 0.13 * sin(pd.w);
+    body = max(body, smoothstep(w, -w, min(sdSegC(l, vec2(0.06 + sw, 0.0), vec2(0.07, 0.86)), sdSegC(l, vec2(-0.06 - sw, 0.0), vec2(-0.07, 0.86))) - 0.065));
+    body = max(body, smoothstep(w, -w, sdSegC(ub, vec2(0.12, 1.2), vec2(0.0, 1.93)) - 0.012));
+    float glow = 0.0;
+    for (int k = 0; k < 4; k++){ float dx = pd.x - uStreetLamps[k].x; glow += exp(-dx * dx * 0.01); }
+    vec3 Lt = vec3(1.0, 0.62, 0.3) * (0.05 + 0.18 * glow) + vec3(0.04, 0.05, 0.06);
+    float kind = pd.z;
+    bool clear = kind > 1.5 && kind < 2.5;
+    vec3 uc = kind < 0.5 ? vec3(0.03) : kind < 1.5 ? vec3(0.55, 0.05, 0.04) : clear ? vec3(0.62, 0.62, 0.60) : kind < 3.5 ? vec3(0.06, 0.08, 0.20) : vec3(0.60, 0.42, 0.10);
+    vec3 umbC = uc * Lt * (0.7 + 0.5 * smoothstep(1.93, 2.2, ub.y));
+    if (clear) umbC += vec3(1.0, 0.85, 0.65) * 0.12;          // a clear plastic umbrella glows with the shop light behind it
+    float a = max(umb * (clear ? 0.6 : 1.0), body);
+    vec3 col = umb > body ? umbC : vec3(0.012, 0.012, 0.014) + Lt * 0.05;
+    acc.rgb += (1.0 - acc.a) * col * a;
+    acc.a += (1.0 - acc.a) * a;
+  }
+  return acc;
+}
+// an old bus now and then: lit windows with a few passengers, an amber destination sign
+vec4 busLayer(vec3 ro, vec3 rd, float blur){
+  if (uBus.w <= 0.0) return vec4(0.0);
+  float t = (uBus.y - ro.z) / rd.z;
+  if (t <= 0.0) return vec4(0.0);
+  vec2 l = vec2(ro.x + rd.x * t - uBus.x, ro.y + rd.y * t - GROUND_Y);
+  float w = blur * t + 0.02;
+  float m = busMask(l, w);
+  if (m <= 0.0) return vec4(0.0);
+  float wx = l.x * uBus.z;                                   // along the direction of travel
+  vec3 col = vec3(0.012, 0.03, 0.028) * (1.0 + 0.6 * smoothstep(1.2, 0.4, l.y));
+  col = mix(col, vec3(0.25, 0.04, 0.03), smoothstep(w, -w, abs(l.y - 1.2) - 0.05));     // the route-colour stripe
+  float win = smoothstep(w, -w, abs(l.y - 1.95) - 0.55) * smoothstep(w, -w, abs(wx + 0.4) - 4.4);
+  float cell = floor(wx / 1.15 + 0.5);
+  float pillar = smoothstep(0.07 + w, 0.07 - w, abs(fract(wx / 1.15 + 0.5) - 0.5) * 1.15);
+  vec2 rp = l - vec2(cell * 1.15 * uBus.z + 0.2 * (hash11(cell * 9.1) - 0.5), 1.62);
+  float rider = step(hash11(cell * 3.7 + 11.0), 0.3) * smoothstep(w, -w, min(length(rp - vec2(0.0, 0.18)) - 0.11, sdBoxC(rp + vec2(0.0, 0.12), vec2(0.2, 0.18)) - 0.05));
+  vec3 inside = vec3(1.0, 0.86, 0.62) * 0.42 * (0.7 + 0.3 * hash11(cell * 5.3)) * (1.0 - 0.3 * smoothstep(1.6, 2.4, l.y)) * (1.0 - 0.85 * rider);
+  col = mix(col, inside, win * (1.0 - pillar));
+  float sign = smoothstep(w, -w, sdBoxC(vec2(wx - 4.75, l.y - 2.7), vec2(0.42, 0.13)));
+  col = mix(col, vec3(1.0, 0.55, 0.12) * 1.3, sign);
+  float wheels = smoothstep(w, -w, min(length(vec2(wx - 3.3, l.y - 0.5)), length(vec2(wx + 3.3, l.y - 0.5))) - 0.48);
+  col = mix(col, vec3(0.006), wheels);
+  return vec4(col * uBus.w * m, m);
+}
+vec3 treeCol(vec2 pt){
+  // dark foliage against the dusk; only the undersides nearest the sodium lamp (just left of the view) catch its light
+  vec3 c = vec3(0.006, 0.009, 0.006);
+  float under = smoothstep(GROUND_Y + 7.4, GROUND_Y + 5.2, pt.y);
+  vec2 dl = pt - vec2(-4.6, GROUND_Y + 6.0);
+  float cluster = smoothstep(0.35, 0.75, vnoise(pt * 2.6 + 1.7));
+  c += vec3(0.75, 0.58, 0.20) * 0.022 * under * cluster / (1.0 + dot(dl, dl) * 0.15);
+  c += vec3(0.20, 0.24, 0.14) * 0.004 * under;
+  return c;
+}
+
 vec3 outside(vec3 ro, vec3 rd, float blur){
   float dist;
   vec3 c = aboveGround(ro, rd, blur, dist);
+  float tGround = 1e9;
   if (rd.y < -1e-3 && rd.z < -0.02){
     float tg = min((GROUND_Y - ro.y) / rd.y, 600.0);
     vec3 pg = ro + rd * tg;
@@ -887,6 +1353,9 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     float rdist;
     float rough = 0.04 + 0.03 * fbm3(pg.xz * 0.15);
     vec3 refl = aboveGround(pg, rr, blur + rough, rdist);
+    vec4 rp = pedestrians(pg, rr, blur + rough, 1e9); refl = refl * (1.0 - rp.a) + rp.rgb;
+    vec4 rbus = busLayer(pg, rr, blur + rough); refl = refl * (1.0 - rbus.a) + rbus.rgb;
+    tGround = tg;
     float fres = 0.02 + 0.98 * pow(1.0 - min(-rd.y * 1.0, 1.0), 5.0);
     float puddle = smoothstep(0.42, 0.62, fbm3(pg.xz * vec2(0.18, 0.5)));
     vec3 gc = base * (1.0 + E * 6.0) + refl * fres * mix(0.45, 0.95, puddle);
@@ -894,6 +1363,10 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     gc = mix(gc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.7, 1.0 - exp(-tg * 0.012));
     c = mix(gc, c, m);
   }
+  vec4 pe = pedestrians(ro, rd, blur, tGround); c = c * (1.0 - pe.a) + pe.rgb;
+  vec4 bu = busLayer(ro, rd, blur); c = c * (1.0 - bu.a) + bu.rgb;
+  float tt = (TREE_Z - ro.z) / rd.z;                          // the tree: nearest of all
+  if (tt > 0.0 && rd.z < -0.02){ vec2 pt = ro.xy + rd.xy * tt; c = mix(c, treeCol(pt), treeAlpha(pt, blur * tt * 0.5 + 0.015)); }
   return c;
 }
 `;
@@ -963,6 +1436,14 @@ void main(){
     float tb = (FACADE_Z - uEye.z) / dd.z;
     float yb = uEye.y + dd.y * tb, xb = uEye.x + dd.x * tb;
     vis *= smoothstep(-0.25, 0.25, yb - (GROUND_Y + bldTop(xb)));
+  }
+  {
+    vec3 dd = wp - uEye;
+    if (wp.z < TREE_Z && dd.z < 0.0){ vec2 pt = uEye.xy + dd.xy * ((TREE_Z - uEye.z) / dd.z); vis *= 1.0 - 0.92 * treeAlpha(pt, 0.06); }
+    if (uBus.w > 0.0 && wp.z < uBus.y - 0.3 && dd.z < 0.0){
+      vec2 pt = uEye.xy + dd.xy * ((uBus.y - uEye.z) / dd.z);
+      vis *= 1.0 - 0.95 * busMask(vec2(pt.x - uBus.x, pt.y - GROUND_Y), 0.1);
+    }
   }
   vec3 d = wp - uEye; float dist = length(d); vec3 dir = d / dist;
   vec2 c; float pxPerRad; vec2 aspect;
@@ -1494,7 +1975,7 @@ function drawFull() { gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES, 
 /* ============================================================================
    Outside world: street lamps, signs, cars (JS side, uploaded as sprites)
    ========================================================================== */
-const OUT = { lights: [], cars: [], nextCar: 6 + rnd() * 10, sprites: new Float32Array(12 * 240), count: 0 };
+const OUT = { lights: [], cars: [], peds: [], nextPed: 3, nextCar: 6 + rnd() * 10, sprites: new Float32Array(12 * 240), count: 0 };
 function buildOutside() {
   const GY = S.GROUND_Y, L = OUT.lights, F = S.FACADE_Z;
   const add = (o) => L.push(Object.assign({ core: 0.08, refl: 0, halo: 0.1, haloR: 0.03, kind: 0, flags: 0, ph: rnd() * 10 }, o));
@@ -1529,9 +2010,19 @@ function spawnCar() {
   const dir = rnd() < 0.5 ? 1 : -1;
   const lane = dir > 0 ? -21.5 - rnd() * 0.8 : -17.0 - rnd() * 0.8;   // far lanes: visible through the lower panes
   const near = rnd() < 0.3;
-  OUT.cars.push({ x: -dir * 75, z: near ? (dir > 0 ? -9.5 : -6) : lane, dir, v: 4.2 + rnd() * 2.6, I: 0.8 + rnd() * 0.4, age: 0 });
+  const bus = !near && rnd() < 0.2 && !OUT.cars.some(c => c.bus);
+  OUT.cars.push({ x: -dir * 75, z: near ? (dir > 0 ? -9.5 : -6) : lane, dir, v: bus ? 3.6 + rnd() : 4.2 + rnd() * 2.6, I: 0.8 + rnd() * 0.4, age: 0, bus });
+}
+// 雨里打伞走过对街的人
+function spawnPed(x) {
+  const dir = rnd() < 0.5 ? 1 : -1;
+  OUT.peds.push({ x: x !== undefined ? x : -dir * (26 + rnd() * 8), z: S.CURB_Z - 1.2 - rnd() * 1.8, dir, v: 0.85 + rnd() * 0.5, kind: Math.floor(rnd() * 5), ph: rnd() * 6 });
 }
 function updateOutside(dt, t) {
+  OUT.nextPed -= dt;
+  if (OUT.nextPed < 0 && OUT.peds.length < 5) { spawnPed(); OUT.nextPed = 5 + rnd() * 12; }
+  for (const p of OUT.peds) { p.x += p.dir * p.v * dt; p.ph += dt * p.v * 5.5; }
+  OUT.peds = OUT.peds.filter(p => Math.abs(p.x) < 36);
   OUT.nextCar -= dt;
   if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = 9 + rnd() * 24; }
   for (const c of OUT.cars) { c.x += c.dir * c.v * dt; c.age += dt; }
@@ -1576,10 +2067,11 @@ function buildSprites(t, eye) {
     // a headlamp lens still glows well off-axis (≈20% seen side-on); the beam itself is narrow (~facing³)
     const hE = 0.0032 * c.I * (0.2 + 0.8 * facing ** 3) * fade;
     const tE = 0.0008 * c.I * (0.45 + 0.55 * Math.max(0, -c.dir * toEye[0]) ** 2) * fade;
-    for (const dz of [-0.75, 0.75]) {
+    const half = c.bus ? 5.6 : 2.15, zs = c.bus ? [1.3] : [-0.75, 0.75];
+    for (const dz of zs) {
       if (n > 230) break;
-      emit([c.x + c.dir * 2.1, GY + 0.68, c.z + dz], head, hE, { core: 0.09, refl: 1, halo: 0.35, haloR: 0.04 });
-      emit([c.x - c.dir * 2.2, GY + 0.82, c.z + dz], tail, tE, { core: 0.06, refl: 1, halo: 0.25, haloR: 0.03 });
+      emit([c.x + c.dir * half, GY + 0.68, c.z + dz], head, hE * (c.bus ? 1.3 : 1), { core: 0.09, refl: 1, halo: 0.35, haloR: 0.04 });
+      emit([c.x - c.dir * half, GY + 0.82, c.z + dz], tail, tE, { core: 0.06, refl: 1, halo: 0.25, haloR: 0.03 });
     }
   }
   OUT.count = n;
@@ -1622,7 +2114,7 @@ function vnoiseJS(x, y) {
 }
 (function initSim() {
   const W = (S.WIN_X1 - S.WIN_X0) * 1000 / MAG, H = (S.WIN_Y1 - S.WIN_Y0) * 1000 / MAG;
-  Object.assign(SIM, { W, H, n: 0, MAX: 2600, rain: 0.55, events: [] });
+  Object.assign(SIM, { W, H, n: 0, MAX: 2600, rain: 0.55, rainBase: 0.55, clock: 0, events: [] });
   SIM.panes = S.PANES.map(p => [(p[0] - S.WIN_X0) * 1000 / MAG, (p[1] - S.WIN_Y0) * 1000 / MAG, (p[2] - S.WIN_X0) * 1000 / MAG, (p[3] - S.WIN_Y0) * 1000 / MAG]);
   SIM.paneArea = SIM.panes.map(p => (p[2] - p[0]) * (p[3] - p[1]));
   const M = SIM.MAX, F = () => new Float32Array(M);
@@ -1648,7 +2140,7 @@ function vnoiseJS(x, y) {
       // the fog line is ragged: its height wanders along the pane
       const yf = (y - p[1]) / (p[3] - p[1]) + 0.16 * (vnoiseJS(x / 14, 3.7) - 0.5) + 0.06 * (vnoiseJS(x / 4, 9.1) - 0.5);
       const edge = Math.min(x - p[0], p[2] - x, y - p[1], p[3] - y);
-      f0 = 0.08 + 0.8 * Math.pow(1 - smooth(0.0, 0.46, yf), 1.5) + 0.2 * Math.exp(-Math.max(edge, 0) / 5);
+      f0 = 0.06 + 0.56 * Math.pow(1 - smooth(0.0, 0.25, yf), 1.6) + 0.16 * Math.exp(-Math.max(edge, 0) / 5);
       // condensed droplets that grew heavy and ran down, leaving clear wavy lines in the fog
       const col = Math.floor(x / 13), cx = (col + 0.2 + 0.6 * hashI(col, 31)) * 13;
       if (hashI(col, 77) < 0.4) {
@@ -1745,7 +2237,10 @@ function rainImpact() {
 function dcos(i, x, y) { const k = gidx(x, y); return SIM.hy[i] * SIM.het[k] * (1 - 0.55 * SIM.Wt[k]); }
 
 function simStep(dt) {
-  const n0 = SIM.n;
+  // 雨不会一直一样大：在滑杆设定的雨势附近，以几分钟为周期缓慢地时大时小（声音随之起伏）
+  SIM.clock += dt;
+  const c = SIM.clock, swell = 0.5 + 0.22 * Math.sin(c / 37 + 1.3) + 0.17 * Math.sin(c / 83 + 4.1) + 0.11 * Math.sin(c / 151);
+  SIM.rain = clamp(SIM.rainBase * (0.62 + 0.76 * swell), 0, 1);
   // 1) rain arrivals (Poisson)
   const lam = (0.5 + 160 * Math.pow(SIM.rain, 1.25)) * dt;        // impacts per second over the whole window
   let k = 0; const L = Math.exp(-lam); let p = rnd();
@@ -1939,6 +2434,11 @@ function camRay(ndcX, ndcY) {
 /* ============================================================================
    Lighting state
    ========================================================================== */
+// 每次打开都略有不同：暖水瓶的漆色、挂历的画、钟停住的分钟、对街的天际线
+const VARY = { v: [rnd(), rnd(), rnd(), rnd()], city: Math.floor(rnd() * 97) };
+// 钟停在傍晚 18:3x–18:5x（「永远停在傍晚」）
+VARY.clock = (() => { const m = 32 + Math.floor(VARY.v[3] * 22), sec = Math.floor(rnd() * 60), h = 6 + m / 60;
+  return [h / 12 * 2 * Math.PI, (m + sec / 60) / 60 * 2 * Math.PI, sec / 60 * 2 * Math.PI, 0]; })();
 const LIGHT = { on: DBG.lamp ? 1 : 0, level: DBG.lamp ? 1 : 0, flick: 1, exposure: 1, expoAdapt: DBG.lamp ? 1 : 2.2 };
 function lightUniforms(t, dt) {
   // 白炽灯丝的热惯性：开灯 τ≈0.12s，关灯 τ≈0.35s（冷却更慢）；色温随灯丝亮度降低而变红。
@@ -2087,11 +2587,21 @@ function outsideUniforms(pr, t) {
   const cars = new Float32Array(16);
   OUT.cars.slice(0, 4).forEach((c, i) => cars.set([c.x, c.z, c.dir, c.I * smooth(0, 3, c.age)], i * 4));
   gl.uniform4fv(pr.u.uCars, cars);
+  const peds = new Float32Array(20).fill(999);
+  OUT.peds.slice(0, 5).forEach((p, i) => peds.set([p.x, p.z, p.kind, p.ph], i * 4));
+  if (pr.u.uPeds) gl.uniform4fv(pr.u.uPeds, peds);
+  cityUniforms(pr);
 }
 
-function drawSprites(target, mode, eye) {
+function cityUniforms(pr) {
+  const b = OUT.cars.find(c => c.bus);
+  U(pr, 'uBus', b ? [b.x, b.z + 1.25, b.dir, smooth(0, 3, b.age)] : [0, 0, 0, 0]);
+  U(pr, 'uCity', VARY.city);
+}
+function drawSprites(target, mode, eye, t) {
   const P = R.progs.sprite;
   gl.useProgram(P.p);
+  cityUniforms(P); U(P, 'uTime', t % 900);
   U(P, 'uMode', I(mode)); U(P, 'uRes', [target.w, target.h]); U(P, 'uEye', eye); camUniforms(P);
   U(P, 'uCoC', R.coc);
   gl.bindVertexArray(spriteVAO);
@@ -2119,7 +2629,7 @@ function render(t, dt, rt) {
   U(P.outside, 'uBlur', 2.4 * S.AZM / T.sharp.w); outsideUniforms(P.outside, t);
   drawFull();
   buildSprites(t, glassEye);
-  drawSprites(T.sharp, 0, glassEye);
+  drawSprites(T.sharp, 0, glassEye, t);
   gl.bindTexture(gl.TEXTURE_2D, T.sharp.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
 
   // 2) outside, defocused camera view
@@ -2131,7 +2641,7 @@ function render(t, dt, rt) {
   outsideUniforms(P.outside, t);
   drawFull();
   buildSprites(t, CAM.pos);
-  drawSprites(T.defocus, 1, CAM.pos);
+  drawSprites(T.defocus, 1, CAM.pos, t);
   gl.bindTexture(gl.TEXTURE_2D, T.defocus.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
 
   // 2b) drops → height field (MAX blend), with mips for the condensation blur
@@ -2159,7 +2669,8 @@ function render(t, dt, rt) {
   bindTarget(T.room);
   gl.useProgram(P.room.p);
   camUniforms(P.room); lightU(P.room, Lt);
-  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t);
+  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t % 900);
+  U(P.room, 'uClock', VARY.clock); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0);
   const hal = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
   const ji = (frame % 8) + 1;
   U(P.room, 'uJitter', DBG.shot && DBG.frames ? [0, 0] : [hal(ji, 2) - 0.5, hal(ji, 3) - 0.5]);
@@ -2358,7 +2869,7 @@ const UI = (() => {
   ui.addEventListener('pointermove', () => api.poke());
   canvas.addEventListener('pointerdown', () => panel.classList.remove('open'));
   if (IS_MOBILE) panel.querySelector('.hint').innerHTML = '轻触台灯开关；在玻璃上划过可擦去雾气；倾斜手机看看。';
-  rain.addEventListener('input', () => { SIM.rain = +rain.value; });
+  rain.addEventListener('input', () => { SIM.rainBase = +rain.value; });
   speed.addEventListener('input', () => { TIME.scale = +speed.value; });
   const setSnd = on => { snd.textContent = on ? '开' : '关'; snd.setAttribute('aria-pressed', on); AUDIO.setEnabled && AUDIO.setEnabled(on); };
   snd.addEventListener('click', () => setSnd(snd.getAttribute('aria-pressed') !== 'true'));
@@ -2570,11 +3081,11 @@ Object.assign(AUDIO, (() => {
         const dx = c.x, dz = c.z, d = Math.hypot(dx, dz, S.GROUND_Y - 1.2);
         const vr = c.dir * c.v * dx / d;                       // radial velocity (+ = receding)
         const dop = 343 / (343 + vr);
-        const L = 0.5 * c.I / (1 + (d / 11) ** 2) * smooth(0, 4, c.age) * Math.min(1, TIME.scale + 0.2);
+        const L = (c.bus ? 0.8 : 0.5) * c.I / (1 + (d / 11) ** 2) * smooth(0, 4, c.age) * Math.min(1, TIME.scale + 0.2);
         ch.g.gain.setTargetAtTime(L, now, 0.15);
         if (ch.pan) ch.pan.pan.setTargetAtTime(clamp(dx / (Math.abs(dx) + 12), -0.95, 0.95), now, 0.15);
         ch.s1.playbackRate.setTargetAtTime(dop * TIME.scale ** 0.2, now, 0.2);
-        ch.bp.frequency.setTargetAtTime(380 + 260 * dop, now, 0.2);
+        ch.bp.frequency.setTargetAtTime((380 + 260 * dop) * (c.bus ? 0.6 : 1), now, 0.2);
       }
     },
   };
@@ -2641,6 +3152,7 @@ function boot() {
   if (!initGL()) { fail('no webgl2'); return; }
   buildOutside();
   for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
+  for (let i = 0; i < 3; i++) spawnPed(-14 + i * 10 + rnd() * 6);
   initialScales();
   buildPrograms();                      // compile on the GPU (in parallel where supported) while the CPU prewarms the rain
   const total = Math.round((+(QS.get('warm') || 150)) * 30), t0 = performance.now();
