@@ -9,7 +9,15 @@
      dive      镜头扎进它所在的那颗雨滴；雨滴的圆从它身上张开，夏天从里面涌出来
    第二幕 · 盛夏午后
      summer    光在风里；光标就是风，按住不动风就停
-   调试：?phase=wander|window|daydrops|dive|summer &pt=秒   ?world=summer|woodcut（只看世界，不放主角）
+   转场 2→3 · 被抽走的颜色
+     updraft   一阵上升的风把它带走；镜头跟着它仰起来，望向那座最高的积云
+     cloud     钻进云里：一片白，越来越厚、越来越暗、越来越冷；开始下雪；颜色被一层层抽走，最后只剩一张纸
+   第三幕 · 雪夜·木刻
+     print     这张纸被印上去：先靛版，再墨版，最后朱版——世界一块版一块版地出现；它随着雪落下来
+     woodcut   它找到那盏黑着的灯笼，钻进去，灯亮了；你在黑处划一刀，它就沿着你的刀痕走
+     leave     最后它从灯笼里出来，自己刻出一条路，走到冰窟窿，沉进黑水里
+   调试：?phase=wander|window|daydrops|dive|summer|updraft|cloud|print|woodcut|leave &pt=秒
+         ?world=summer|woodcut（只看世界，不放主角）
    ========================================================================== */
 (() => {
 'use strict';
@@ -25,6 +33,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
+const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50;
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 const D = YL.director = {
@@ -54,7 +63,8 @@ const D = YL.director = {
       YL.cam = null;
       return;
     }
-    if (D.phase === 'summer') return;
+    if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
+    if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'leave') { D.inPrint(dt); return; }
     YL.hero.update(dt, realT);
     const L = YL.hero.routeLength(), Tw = L - 2.0;
     if (D.phase === 'wander' && D.t > L) D.go('window');
@@ -94,6 +104,52 @@ const D = YL.director = {
     YL.sharpMix = 0; YL.roomTarget = null; YL.roomVol = 0;
     D.world = 'summer'; D.placeHero = true;              // (placed on the first summer frame, once the world exists)
     setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(0, 0.05, 1), 400);
+  },
+  // ---- out of the summer: up into the cloud, and through it into the print
+  toPrint(dt) {
+    const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
+    if (D.phase === 'summer') { if (D.pt > T_SUMMER) D.go('updraft'); return; }
+    // the light is carried up toward the tower of cloud, further and further away; the eye follows it up
+    const T = summer.tower, dir = [Math.sin(T[0]) * Math.cos(T[1]), Math.sin(T[1]), -Math.cos(T[0]) * Math.cos(T[1])];
+    if (D.phase === 'updraft') {
+      const u = clamp(D.pt / T_UP, 0, 1);
+      summer.lift = ease(clamp(D.pt / (T_UP * 0.8), 0, 1));
+      summer.zoom = 0.35 * easeIn(u);
+      const dist = 2.4 * Math.exp(u * Math.log(30 / 2.4));
+      H.fly = V.add([0, 0.85, 0], V.mul(dir, dist));
+      if (u > 0.5 && !wood.ready) wood.init();                                   // cut the blocks while it's still bright
+      if (D.pt > T_UP) D.go('cloud');
+    } else {
+      const u = clamp(D.pt / T_CLOUD, 0, 1);
+      summer.lift = 1; summer.zoom = 0.35 + 0.6 * ease(clamp(u / 0.6, 0, 1));
+      H.fly = V.add([0, 0.85, 0], V.mul(dir, 30 + 40 * u));
+      summer.vol = 1 - ease(clamp((u - 0.2) / 0.7, 0, 1));
+      if (D.pt > T_CLOUD) {
+        D.go('print'); D.world = 'woodcut';
+        const hp = D.drainHero || [0, 0.5];
+        wood.show = [0, 0, 0]; wood.vol = 0;
+        wood.arrive(hp[0], hp[1], YL.canvasAspect());
+      }
+    }
+  },
+  // ---- in the print: the blocks go on one after another; later, the way out
+  inPrint(dt) {
+    const wood = YL.worlds.woodcut;
+    if (D.phase === 'print') {
+      const t = D.pt;
+      wood.show = [ease(clamp(t / 1.6, 0, 1)), ease(clamp((t - 1.3) / 1.6, 0, 1)), ease(clamp((t - 2.7) / 1.3, 0, 1))];
+      wood.vol = ease(clamp(t / 3, 0, 1));
+      if (D.pt > T_PRINT) { wood.show = [1, 1, 1]; D.go('woodcut'); }
+    } else if (D.phase === 'woodcut') {
+      wood.vol = 1;
+      // once the lantern is lit, a word on what the hand can do here (only once, and never in a screenshot)
+      if (!D.carveHint && wood.hero.mode === 'home' && D.pt > 3 && !YL.DBG.shot) {
+        D.carveHint = true;
+        const h = document.getElementById('hint');
+        if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
+      }
+      if (D.pt > T_WOOD && wood.hero.mode === 'home') { wood.leave(); D.go('leave'); }
+    }
   },
   placeLight() {
     const summer = YL.worlds.summer;
@@ -137,6 +193,64 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   iris = { p, w, h, A: YL.makeTarget(w, h, ['rgba8']), B: YL.makeTarget(w, h, ['rgba8']) };
   return iris;
 }
+// ---- inside the cloud: the summer drowned in white, then cold, then snow, the colour drained out of it, then paper
+const FS_DRAIN = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uTime, uFog, uCold, uSnow, uPaper; uniform vec3 uHero;
+out vec4 o;
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * vnoise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return s / 0.9375; }
+// one layer of falling flakes, drifting with the wind; near ones big and soft, far ones small; crisper as the world turns to paper
+float flakes(vec2 p, float cell, float rad, float speed, float dens, float blur, float seed){
+  p.y += uTime * speed; p.x += uTime * speed * 0.35 + 0.3 * cell * sin(uTime * 0.7 + p.y / cell * 0.4 + seed);
+  vec2 g = p / cell, i = floor(g), f = fract(g) - 0.5;
+  float h = hash12(i + seed);
+  if (h > dens) return 0.0;
+  vec2 c = vec2(hash12(i * 1.3 + seed), hash12(i * 2.1 + seed)) - 0.5;
+  float r = rad * (0.6 + 0.8 * h / dens);
+  float soft = mix(r * blur, r * 0.12, uPaper);
+  return smoothstep(r + soft, r - soft, length((f - c * 0.6) * cell)) * mix(0.75, 1.0, uPaper);
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes, q = gl_FragCoord.xy / uRes.y;
+  vec3 a = texture(uA, uv).rgb;
+  // rising through the cloud: two layers of it stream down past the eye, the near one faster, with more contrast;
+  // the rise slows as it gets cold
+  float rise = uTime * mix(0.55, 0.12, uCold);
+  float far = fbm(q * vec2(1.6, 2.2) + vec2(0.05 * uTime, rise * 0.45));
+  float near = fbm(q * vec2(3.0, 2.0) + vec2(-0.08 * uTime, rise * 1.3) + 7.0);
+  float fog = clamp(uFog * (0.45 + 0.8 * far + 0.5 * smoothstep(0.45, 0.8, near)), 0.0, 1.0);
+  vec3 bright = vec3(0.96, 0.97, 0.99), cold = vec3(0.50, 0.54, 0.62);
+  vec3 cloud = mix(bright, cold, uCold) * (0.86 + 0.22 * far) * (1.0 - 0.18 * uCold * smoothstep(0.5, 0.85, near));
+  vec2 d = uv - 0.5; cloud *= 1.0 - (0.10 + 0.35 * uCold) * dot(d, d) * 2.2;        // deeper in, darker round the edges
+  vec3 c = mix(a, cloud, fog);
+  // the colour goes: and it gets darker, colder
+  float l = dot(c, vec3(0.30, 0.55, 0.15));
+  c = mix(c, vec3(l) * vec3(0.90, 0.95, 1.06), uCold);
+  c *= 1.0 - 0.28 * uCold * (1.0 - uPaper);
+  // the light: the only warm thing left
+  vec2 hp = (uHero.xy * 0.5 + 0.5) * uRes;
+  float hd = length(gl_FragCoord.xy - hp) / uRes.y;
+  c += vec3(1.0, 0.60, 0.26) * uHero.z * (exp(-hd / 0.006) * 1.4 + exp(-hd / 0.035) * 0.30 * (1.0 - fog * 0.4)) * (1.0 - uPaper);
+  // snow begins
+  float s = flakes(q, 0.030, 0.0018, 0.07, 0.30, 0.6, 1.0);
+  s = max(s, flakes(q, 0.065, 0.0036, 0.13, 0.30, 0.8, 5.0));
+  s = max(s, flakes(q, 0.16, 0.0090, 0.30, 0.22, 1.6, 9.0));
+  c = mix(c, vec3(0.97, 0.97, 0.99), s * uSnow);
+  // and then there is only paper
+  c = mix(c, texture(uB, uv).rgb, uPaper);
+  o = vec4(c, 1.0);
+}`;
+let drainP = null;
+function drain() {
+  if (drainP) return drainP;
+  drainP = YL.makeProgram('drain', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_DRAIN);
+  YL.checkProgram(drainP);
+  return drainP;
+}
 // screen position (ndc) of a world point in the room's camera
 function project(p) {
   const C = YL.CAM, v = V.sub(p, C.pos), z = V.dot(v, C.fwd);
@@ -162,11 +276,37 @@ D.renderFrame = (dt, realT) => {
     YL.roomTarget = I.A;
     return D.irisFrame = { I, u }, false;     // the room renders into A; the composite happens in afterRoom()
   }
+  if (D.phase === 'cloud' && summer.ready) {
+    const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, aspect = YL.canvasAspect(), S = smooth;
+    const u = clamp(D.pt / T_CLOUD, 0, 1);
+    summer.update(dt, YL.DBG.still);
+    summer.render(I.B, aspect);
+    if (!wood.ready) wood.init();
+    wood.show = [0, 0, 0]; wood.hero.mode = 'off'; wood.vol = 0.6 * S(0.55, 1.0, u);
+    wood.update(dt); wood.render(I.A, aspect);
+    const hp = D.drainHero = summer.project(summer.hero.p, aspect);
+    const p = drain();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uTime', realT);
+    YL.U(p, 'uFog', S(0.0, 0.35, u)); YL.U(p, 'uCold', S(0.2, 0.62, u)); YL.U(p, 'uSnow', S(0.38, 0.7, u)); YL.U(p, 'uPaper', S(0.72, 1.0, u));
+    YL.U(p, 'uHero', [hp[0], hp[1], 1]);
+    YL.bindTex(p, 'uA', I.B.tex, 0); YL.bindTex(p, 'uB', I.A.tex, 1);
+    YL.drawFull();
+    return true;
+  }
   if (D.world === 'room') return false;
   const w = YL.worlds && YL.worlds[D.world];
   if (!w) return false;
   if (!w.ready) w.init();
   if (D.placeHero && D.world === 'summer') { D.placeHero = false; D.placeLight(); }
+  if (D.jump && D.world === 'woodcut') {
+    const { ph, pt } = D.jump; D.jump = null;
+    w.arrive(0.1, 0.6, YL.canvasAspect());
+    D.go(ph === 'leave' ? 'woodcut' : ph);
+    if (ph === 'print') { w.show = [0, 0, 0]; D.pt = pt; }
+    else { w.show = [1, 1, 1]; w.vol = 1; w.hero.mode = 'home'; w.lanLight = 1; w.lit = w.litBase.slice(); w.lightsOn = true; D.pt = ph === 'leave' ? T_WOOD + 1 : pt; }
+  }
   const P = YL.ptr;
   if (P && P !== lastPtr && w.pointer) w.pointer(P.nx, P.ny, P.speed);
   lastPtr = P;
@@ -203,7 +343,16 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    if (ph === 'summer') { D.irisCenter = [0.1, 0.1]; D.enterSummer(); }
+    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave'];
+    if (later.includes(ph)) {
+      D.irisCenter = [0.1, 0.1]; D.enterSummer();
+      if (ph === 'summer') D.pt = pt;
+      else if (ph === 'updraft' || ph === 'cloud') { D.go(ph); D.pt = pt; }
+      else {
+        // straight into the print (once the GL context exists: see renderFrame)
+        D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
+      }
+    }
     else { D.go(ph); D.pt = pt; }
   }
 }

@@ -33,6 +33,34 @@ uniform vec3 uView;          // the print point at the screen's centre (x, y), a
 vec2 printPos(vec2 frag){ vec2 uv = frag / uRes; return vec2((uv.x - 0.5) * uRes.x / uRes.y, uv.y - 0.5) * uView.z + uView.xy; }
 `;
 
+// (both shaders declare uPx and uBoil before this)
+const LINES = `
+// The key block's line work along the isolines of a field f (print units; g = |grad f|), spaced sp; a runs along the lines.
+// T is the tone wanted: 0 solid ink … 1 bare paper. Below 0.5 the lines are white cuts in the black; above, black lines left on the paper.
+// Each line is cut as separate strokes; a stroke swells in the middle and comes to a point where the knife went in and came out.
+float lines(float f, float g, float a, float sp, float T, float seed){
+  float u = f / sp;
+  u += (vnoise(vec2(a * 7.0 + seed, u * 0.37)) - 0.5) * 0.55 + (vnoise(vec2(a * 45.0 + uBoil * 11.0, u * 0.9)) - 0.5) * 0.07;
+  float k = floor(u);
+  float d = abs(fract(u) - 0.5) * 2.0;                    // 0 on a line's centre, 1 midway to the next
+  float hk = hash11(k * 0.737 + seed);
+  float s = a / (sp * (7.0 + 26.0 * hk)) + hk * 17.0;
+  float sid = floor(s), st = fract(s);
+  float r = hash12(vec2(sid, k + seed * 3.1));
+  float taper = sqrt(max(sin(PI * st), 0.0)) * (0.8 + 0.4 * hash12(vec2(sid * 1.3, k * 0.7 + seed)));
+  float aa = g * uPx / sp * 1.4 + 0.02;
+  float ink;
+  if (T < 0.5){
+    float hw = min(T * 1.75, 1.0) * taper * step(r, 0.45 + 1.2 * T);
+    ink = 1.0 - sat((hw - d) / aa + 0.5) * min(hw / aa, 1.0);
+  } else {
+    float hw = min((1.0 - T) * 1.75, 1.0) * taper * step(r, 1.55 - 1.1 * T);
+    ink = sat((hw - d) / aa + 0.5) * min(hw / aa, 1.0);
+  }
+  return mix(ink, 1.0 - T, smoothstep(0.3, 0.6, aa));     // too fine to cut at this size: just the tone
+}
+`;
+
 /* ---------------------------------------------------------------- the blocks */
 const FS_SCENE = HEAD + `
 uniform float uPx;           // one pixel, in print units
@@ -63,31 +91,7 @@ float sdTrap(vec2 p, float r1, float r2, float he){
 // a knife's edge is never a perfect curve
 float rough(vec2 p){ return (vnoise(p * 300.0) - 0.5) * 0.0010 + (vnoise(p * 70.0) - 0.5) * 0.0012; }
 
-// The key block's line work along the isolines of a field f (print units; g = |grad f|), spaced sp; a runs along the lines.
-// T is the tone wanted: 0 solid ink … 1 bare paper. Below 0.5 the lines are white cuts in the black; above, black lines left on the paper.
-// Each line is cut as separate strokes; a stroke swells in the middle and comes to a point where the knife went in and came out.
-float lines(float f, float g, float a, float sp, float T, float seed){
-  float u = f / sp;
-  u += (vnoise(vec2(a * 7.0 + seed, u * 0.37)) - 0.5) * 0.55 + (vnoise(vec2(a * 45.0 + uBoil * 11.0, u * 0.9)) - 0.5) * 0.07;
-  float k = floor(u);
-  float d = abs(fract(u) - 0.5) * 2.0;                    // 0 on a line's centre, 1 midway to the next
-  float hk = hash11(k * 0.737 + seed);
-  float s = a / (sp * (7.0 + 26.0 * hk)) + hk * 17.0;
-  float sid = floor(s), st = fract(s);
-  float r = hash12(vec2(sid, k + seed * 3.1));
-  float taper = sqrt(max(sin(PI * st), 0.0)) * (0.8 + 0.4 * hash12(vec2(sid * 1.3, k * 0.7 + seed)));
-  float aa = g * uPx / sp * 1.4 + 0.02;
-  float ink;
-  if (T < 0.5){
-    float hw = min(T * 1.75, 1.0) * taper * step(r, 0.45 + 1.2 * T);
-    ink = 1.0 - sat((hw - d) / aa + 0.5) * min(hw / aa, 1.0);
-  } else {
-    float hw = min((1.0 - T) * 1.75, 1.0) * taper * step(r, 1.55 - 1.1 * T);
-    ink = sat((hw - d) / aa + 0.5) * min(hw / aa, 1.0);
-  }
-  return mix(ink, 1.0 - T, smoothstep(0.3, 0.6, aa));     // too fine to cut at this size: just the tone
-}
-
+` + LINES + `
 // ---- the land's shapes
 // summits: x, y, left flank steepness, right flank steepness
 const vec4 PEAKS[5] = vec4[5](vec4(0.30, 0.700, 0.62, 0.55), vec4(0.63, 0.680, 0.60, 0.70), vec4(1.03, 0.800, 0.50, 0.66), vec4(1.40, 0.720, 0.62, 0.55), vec4(1.76, 0.690, 0.6, 0.6));
@@ -601,7 +605,7 @@ void main(){
       float wy = rr.x * sqrt(1.0 - yy * yy);
       float mer = q.x / wy;                                               // -1 … 1 across the bulge
       float rib = fill((abs(fract(mer * 2.5 + 0.5) - 0.5) / 2.5) * wy - 0.00055);
-      float shade = lines(q.x, 1.0, q.y, 0.0020, 1.0 - 0.45 * smoothstep(0.35, 1.0, mer), 121.0) * step(0.3, mer);
+      float shade = lines(q.x, 1.0, q.y, 0.0020, mix(0.50, 1.0 - 0.45 * smoothstep(0.35, 1.0, mer), sat(uLan.z)), 121.0) * mix(1.0, step(0.3, mer), sat(uLan.z));
       float glow = smoothstep(0.62, 0.0, length(q / rr)) * uLan.z;           // the flame burns the lines away at its heart
       float K = max(rib * 0.9, shade) * (1.0 - glow);
       K = max(K, fill(abs(dL) - 0.0007));
@@ -631,16 +635,36 @@ void main(){
 /* ---------------------------------------------------------------- the printing */
 const FS_PRINT = HEAD + `
 uniform sampler2D uInk;
+uniform sampler2D uCarve;    // what the knife has taken out of the blocks (print space, 1.6 × 1)
 uniform vec2 uRegB, uRegR;   // where the indigo and vermilion blocks landed, relative to the key block (uv)
-uniform float uBoil;
+uniform float uBoil, uPx, uTime;
 uniform sampler2D uSeal;
 uniform vec4 uSealBox;       // the seal's place on screen (uv): x0, y0, size x, size y
 uniform float uFade;
+uniform vec3 uShow;          // how far each block has been printed yet (indigo, key, vermilion): the world arriving
+uniform vec4 uHero;          // 一粒光 here: a little flame. x, y, size, strength
+uniform vec4 uTrail[16];     // where it has just been: x, y, age (s)
+uniform vec4 uPuff[12];      // snow shaken off the lantern: x, y, radius
 out vec4 o;
 const vec3 PAPER = vec3(0.935, 0.905, 0.835);
 const vec3 AI    = vec3(0.150, 0.250, 0.450);
 const vec3 SUMI  = vec3(0.070, 0.064, 0.074);
 const vec3 SHU   = vec3(0.860, 0.300, 0.165);
+float fill(float d){ return sat(0.5 - d / uPx); }
+` + LINES + `
+// a flame: a round body drawn up into a tip that leans and flickers (q in units of the body's radius)
+float flame(vec2 q, float t){
+  vec2 tip = vec2(0.30 * sin(t * 7.0) + 0.15 * sin(t * 11.3), 2.6 + 0.25 * sin(t * 9.1));
+  float h = clamp(dot(q, tip) / dot(tip, tip), 0.0, 1.0);
+  return min(length(q) - 1.0, length(q - tip * h) - (1.0 - h) * 0.98);
+}
+// the baren works across the sheet from the left in short zigzags; a block shows where it has passed
+float shown(vec2 uv, float prog, float seed){
+  if (prog >= 1.0) return 1.0;
+  if (prog <= 0.0) return 0.0;
+  float e = uv.x * 0.80 + 0.10 + 0.08 * (vnoise(uv * vec2(3.0, 9.0) + seed) - 0.5) + 0.018 * sin(uv.y * 47.0 + seed * 3.0);
+  return smoothstep(e - 0.025, e + 0.025, prog * 1.15 - 0.05);
+}
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 P = printPos(gl_FragCoord.xy);
@@ -651,6 +675,48 @@ void main(){
   vec2 e = 1.6 / uRes;
   float Bb = 0.25 * (texture(uInk, uv + uRegB + vec2(e.x, 0.0)).g + texture(uInk, uv + uRegB - vec2(e.x, 0.0)).g + texture(uInk, uv + uRegB + vec2(0.0, e.y)).g + texture(uInk, uv + uRegB - vec2(0.0, e.y)).g);
   B = sat(B + 0.5 * max(B - Bb, 0.0));
+  // the knife: what has been carved out of the blocks prints as bare paper
+  vec2 cu = P / vec2(1.6, 1.0);
+  if (cu.x > 0.0 && cu.x < 1.0 && cu.y > 0.0 && cu.y < 1.0){
+    float cut = smoothstep(0.38, 0.62, texture(uCarve, cu).r + (vnoise(P * 650.0) - 0.5) * 0.30);
+    K *= 1.0 - cut; B *= 1.0 - 0.92 * cut;
+  }
+  // the world arriving: each block printed in turn, the baren sweeping across
+  B *= shown(uv, uShow.x, 1.0); K *= shown(uv, uShow.y, 2.0); R *= shown(uv, uShow.z, 3.0);
+  // where the flame has just passed, the cut is still warm
+  for (int i = 0; i < 15; i++){
+    vec4 a = uTrail[i], b = uTrail[i + 1];
+    if (a.z < 0.0 || b.z < 0.0) break;
+    vec2 pa = P - a.xy, ba = b.xy - a.xy;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-9), 0.0, 1.0);
+    float d = length(pa - ba * h);
+    float age = mix(a.z, b.z, h);
+    R = max(R, fill(d - 0.0018 * exp(-age / 0.5)) * exp(-age / 0.45) * 0.85);
+  }
+  // the flame, and its light cut into whatever is behind it
+  if (uHero.w > 0.0){
+    vec2 hq = P - uHero.xy; float hr = length(hq);
+    if (hr < 0.10){
+      float la = atan(hq.x, -hq.y);
+      float T = 0.46 * uHero.w * exp(-max(hr - uHero.z * 1.4, 0.0) / 0.016);
+      float ray = lines(la, 1.0 / max(hr, 1e-3), hr, 2.0 * PI / 36.0, min(T, 0.49), 7.0);
+      K *= ray; B *= mix(1.0, ray, 0.9);
+      float fo = flame(hq / uHero.z, uTime) * uHero.z;
+      float fi = flame((hq + vec2(0.0, uHero.z * 0.30)) / (uHero.z * 0.55), uTime * 1.3 + 2.0) * uHero.z * 0.55;
+      float mo = fill(fo) * sat(uHero.w * 3.0), mi = fill(fi) * sat(uHero.w * 3.0);
+      K = mix(K, 0.0, mo); B = mix(B, 0.0, mo); R = mix(R, 1.0, mo);
+      R = mix(R, 0.0, mi);                                                       // its white-hot heart is bare paper
+      K = max(K, fill(abs(fo) - uPx * 0.55) * 0.9 * step(0.25, vnoise(vec2(atan(hq.y, hq.x) * 3.0, uTime * 2.0))) * sat(uHero.w * 3.0));
+    }
+  }
+  // snow shaken off the lantern: white flecks
+  for (int i = 0; i < 12; i++){
+    vec4 f = uPuff[i];
+    if (f.z <= 0.0) continue;
+    float dd = length(P - f.xy) - f.z, m = fill(dd);
+    K *= 1.0 - m; B *= 1.0 - 0.85 * m; R *= 1.0 - m;
+    K = max(K, fill(abs(dd) - uPx * 0.6) * smoothstep(0.2 * f.z, -0.6 * f.z, P.y - f.y));   // its shadowed underside, so it shows on the light too
+  }
   // the paper: warm, with long fibres and a soft cloudiness in its sizing
   float fib = vnoise(vec2(P.x * 900.0 + 40.0 * vnoise(P * 9.0), P.y * 140.0)) * 0.6 + vnoise(vec2(P.x * 130.0, P.y * 1100.0 + 30.0 * vnoise(P * 7.0))) * 0.4;
   vec3 paper = PAPER * (0.975 + 0.035 * fib + 0.025 * (fbm3(P * 14.0) - 0.5));
@@ -668,14 +734,35 @@ void main(){
   c *= pow(AI / PAPER, vec3(sat(Bt)));
   c *= mix(vec3(1.0), SHU / PAPER, sat(R * (0.95 - 0.06 * tooth)));
   c *= mix(vec3(1.0), SUMI / PAPER, sat(K * take));
-  // the seal, red, its edges worn
+  // the seal, red, its edges worn (stamped last, once the print is done)
   vec2 sq = (uv - uSealBox.xy) / uSealBox.zw;
   if (sq.x > 0.0 && sq.x < 1.0 && sq.y > 0.0 && sq.y < 1.0){
     float s = texture(uSeal, vec2(sq.x, 1.0 - sq.y)).r;
     s *= step(0.18, vnoise(sq * 38.0) + 0.3 * vnoise(sq * 9.0));
-    c = mix(c, c * SHU / PAPER, s * 0.95);
+    c = mix(c, c * SHU / PAPER, s * 0.95 * step(0.999, uShow.z));
   }
   o = vec4(c * uFade, 1.0);
+}`;
+
+// the knife: one cut, a capsule whose width changes along it, drawn into the carve mask (print space)
+const VS_STAMP = `#version 300 es
+uniform vec4 uSeg; uniform vec2 uRad;
+out vec2 vP;
+void main(){
+  vec2 a = uSeg.xy, b = uSeg.zw; float r = max(uRad.x, uRad.y) + 0.004;
+  vec2 c = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+  vP = mix(min(a, b) - r, max(a, b) + r, c);
+  gl_Position = vec4(vP / vec2(1.6, 1.0) * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const FS_STAMP = `#version 300 es
+precision highp float;
+in vec2 vP; uniform vec4 uSeg; uniform vec2 uRad; uniform float uPxM;
+out vec4 o;
+void main(){
+  vec2 a = uSeg.xy, b = uSeg.zw, pa = vP - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-10), 0.0, 1.0);
+  float d = length(pa - ba * h) - mix(uRad.x, uRad.y, h);
+  o = vec4(clamp(0.5 - d / uPxM, 0.0, 1.0), 0.0, 0.0, 1.0);
 }`;
 
 const VS = `#version 300 es
@@ -745,14 +832,40 @@ function makeSeal() {
   return c;
 }
 
-const FPS = 8;            // the print's own frame rate: the world is re-printed eight times a second
+const FPS = 8;                          // the print's own frame rate: the world is re-printed eight times a second
+const CARVE_W = 1536, CARVE_H = 960;    // the knife's mask, over the whole 1.6 × 1 sheet
+const HOLE = [0.950, 0.285];
+// a smooth path through some points (Catmull-Rom), as a polyline
+function curve(pts, per = 10) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, pts.length - 1)];
+    for (let k = 0; k < per; k++) {
+      const t = k / per, t2 = t * t, t3 = t2 * t;
+      out.push([0, 1].map(j => 0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3)));
+    }
+  }
+  out.push(pts[pts.length - 1].slice());
+  return out;
+}
+function pathLength(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return L; }
+function pointAt(pts, s) {
+  for (let i = 1; i < pts.length; i++) {
+    const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (s <= l || i === pts.length - 1) { const u = Math.min(s / Math.max(l, 1e-9), 1); return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * u, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * u]; }
+    s -= l;
+  }
+  return pts[pts.length - 1].slice();
+}
+
 W.woodcut = {
-  ready: false, t: 0, fade: 1, vol: 1,
+  ready: false, t: 0, fade: 1, vol: 1, show: [1, 1, 1], lanLight: 1,
   init() {
     if (this.ready) return;
     const gl = YL.gl;
     this.pScene = YL.makeProgram('woodcut-scene', VS, FS_SCENE); YL.checkProgram(this.pScene);
     this.pPrint = YL.makeProgram('woodcut-print', VS, FS_PRINT); YL.checkProgram(this.pPrint);
+    this.pStamp = YL.makeProgram('woodcut-stamp', VS_STAMP, FS_STAMP); YL.checkProgram(this.pStamp);
     const rnd = YL.rnd;
     this.tree = makeTree(rnd);
     let x0 = 9, y0 = 9, x1 = -9, y1 = -9;
@@ -770,6 +883,8 @@ W.woodcut = {
       [1.200, 0.434, 0.058, 0.044, 0.034, 0, 1, 1],
       [0.830, 0.428, 0.074, 0.050, 0.040, 0, 3, 3],
     ];
+    this.houses = H;
+    this.litBase = H.map(h => h[6]); this.lit = this.litBase.slice();
     this.hA = new Float32Array(32); this.hB = new Float32Array(32);
     H.forEach((h, i) => { this.hA.set(h.slice(0, 4), i * 4); this.hB.set(h.slice(4), i * 4); });
     const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -777,8 +892,21 @@ W.woodcut = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.seal = tex;
+    this.carve = YL.makeTarget(CARVE_W, CARVE_H, ['rgba8']);
+    this.clearCarve();
+    this.trail = []; this.puff = []; this.queue = []; this.stroke = null;
     this.t = +(YL.QS.get('wt') || 0);
+    // debug: &wh=x,y shows the flame out of its lantern at that point of the print
+    const wh = YL.QS.get('wh');
+    if (wh) { this.hero.mode = 'fall'; this.hero.p = wh.split(',').map(Number); this.lanLight = 0.25; }
+    // debug: &shiver=s shows the lantern s seconds after it has shaken the snow off
+    if (YL.QS.get('shiver')) { this.shiver(); for (let k = 0, n = Math.round(+YL.QS.get('shiver') * 60); k < n; k++) for (const f of this.puff) { f.v[1] -= 0.10 / 60; f.p[0] += f.v[0] / 60; f.p[1] += f.v[1] / 60; } }
     this.ready = true;
+  },
+  clearCarve() {
+    const gl = YL.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.carve.fb); gl.viewport(0, 0, CARVE_W, CARVE_H);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
   },
   // two ink buffers: one on show, the next printing drawn into the other a strip at a time
   targets(w, h) {
@@ -795,12 +923,166 @@ W.woodcut = {
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
     return [0.80 - 0.06 * narrow + pan, 0.5, s];
   },
-  // where the lantern hangs at a given moment
-  lantern(t) {
-    const sway = 0.05 * Math.sin(t * 0.9) + 0.02 * Math.sin(t * 2.3 + 1);
-    const piv = [0.618, 0.553], cord = 0.075;
-    return [piv[0] + Math.sin(sway) * cord, piv[1] - Math.cos(sway) * cord, this.lanLight ?? 1, sway];
+  toPrint(nx, ny, aspect) {
+    const v = this.view(aspect, (this.shown > 0 ? this.shown : 0) / FPS);
+    return [nx * 0.5 * aspect * v[2] + v[0], ny * 0.5 * v[2] + v[1]];
   },
+  // where the lantern hangs at a given moment (a knock sets it swinging)
+  lantern(t) {
+    let sway = 0.05 * Math.sin(t * 0.9) + 0.02 * Math.sin(t * 2.3 + 1);
+    if (this.kickT !== undefined && t > this.kickT) sway += 0.16 * Math.sin((t - this.kickT) * 5.5) * Math.exp(-(t - this.kickT) * 1.3);
+    const piv = [0.618, 0.553], cord = 0.075;
+    return [piv[0] + Math.sin(sway) * cord, piv[1] - Math.cos(sway) * cord, this.lanLight, sway];
+  },
+
+  /* ---------------------------------------------------------------- 一粒光 in the print
+     A little flame. It is drawn when the paper is printed — every screen frame — not cut into the blocks, so it moves
+     smoothly while the world around it re-prints eight times a second: it is not from here.
+       fall   it comes down with the snow, finds the dark lantern
+       enter  goes in; the lantern lights, its light cut out of the night; one by one the windows answer
+       home   the lantern's light is its light. Snow piles on the cap; now and then it shivers and shakes it off
+       out    when you carve a line, it leaves the lantern, runs along your cut, and comes back
+       leave  at the end it carves its own way down to the hole in the ice, and sinks into the black water        */
+  hero: { mode: 'home', p: [0.618, 0.47], v: [0, 0], size: 0.0090, k: 0, path: null, s: 0, leg: '', snow: 0, lastTrail: 0 },
+  arrive(nx, ny, aspect) {
+    const H = this.hero;
+    H.mode = 'fall'; H.p = this.toPrint(nx, ny, aspect); H.v = [0, -0.02]; H.k = 0; H.snow = 0;
+    this.lanLight = 0; this.lit = this.litBase.map((v, i) => i === 6 ? 1 : 0); this.lightsOn = false;
+    this.queue = []; this.trail = []; this.clearCarve();
+  },
+  steer(target, speed, dt, turn = 4) {
+    const H = this.hero, dx = target[0] - H.p[0], dy = target[1] - H.p[1], d = Math.hypot(dx, dy);
+    const sp = Math.min(speed, d * 3 + 0.01);
+    H.v[0] += (dx / Math.max(d, 1e-6) * sp - H.v[0]) * Math.min(1, dt * turn);
+    H.v[1] += (dy / Math.max(d, 1e-6) * sp - H.v[1]) * Math.min(1, dt * turn);
+    H.p[0] += H.v[0] * dt; H.p[1] += H.v[1] * dt;
+    return d;
+  },
+  heroUpdate(dt) {
+    const H = this.hero, L = this.lantern(this.t), core = [L[0], L[1] - 0.003];
+    const breath = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in every world
+    let moving = false;
+    if (H.mode === 'fall') {
+      // drifting down like the snow, but it knows where it's going
+      const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085, dt, 1.2);
+      moving = true;
+      if (d < 0.016) { H.mode = 'enter'; H.k = 0; }
+    } else if (H.mode === 'enter') {
+      H.k = Math.min(1, H.k + dt / 0.9);
+      H.p[0] += (core[0] - H.p[0]) * Math.min(1, dt * 6); H.p[1] += (core[1] - H.p[1]) * Math.min(1, dt * 6);
+      this.lanLight = Math.max(this.lanLight, YL.smooth(0.35, 1, H.k) * (1 + 0.45 * Math.sin(Math.PI * YL.smooth(0.35, 1, H.k))));
+      if (H.k >= 1) {
+        H.mode = 'home'; H.snow = 0;
+        this.motif();
+        if (!this.lightsOn) { this.lightsOn = true; this.winT = 0.6; }
+      }
+    } else if (H.mode === 'home') {
+      H.p = core.slice();
+      // snow settles on the lantern's cap; the light dims a little under it, then the lantern shivers and shakes it off
+      H.snow += dt / 13;
+      this.lanLight += (breath * (1 - 0.22 * Math.min(H.snow, 1)) - this.lanLight) * Math.min(1, dt * 3);
+      if (H.snow >= 1) this.shiver();
+      if (this.queue.length) { H.mode = 'out'; H.path = this.queue.shift(); H.leg = 'to'; H.v = [0, 0]; }
+    } else if (H.mode === 'out') {
+      this.lanLight += (0.25 - this.lanLight) * Math.min(1, dt * 4);                    // the lantern keeps only an ember
+      moving = true;
+      if (H.leg === 'to') { if (this.steer(H.path[0], 0.55, dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
+      else if (H.leg === 'along') {
+        H.s += 0.30 * dt;
+        H.p = pointAt(H.path, H.s); H.v = [0, 0];
+        if (H.s >= H.pathL) { H.leg = 'back'; if (this.queue.length) { H.path = this.queue.shift(); H.leg = 'to'; } }
+      } else if (this.steer(core, 0.55, dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
+    } else if (H.mode === 'leave') {
+      this.lanLight += (0.12 - this.lanLight) * Math.min(1, dt * 2);
+      moving = true;
+      const s0 = H.s;
+      H.s += 0.095 * dt;
+      H.p = pointAt(H.path, H.s);
+      // it is the knife now: its way down is cut into the print behind it
+      const a = pointAt(H.path, Math.max(s0 - 0.004, 0));
+      const taper = Math.min(1, H.s / 0.03) * Math.min(1, (H.pathL - H.s) / 0.05 + 0.25);
+      this.carveSeg(a, H.p, 0.0021 * taper, 0.0021 * taper);
+      if (H.s >= H.pathL) { H.mode = 'sink'; H.k = 0; }
+    } else if (H.mode === 'sink') {
+      H.k = Math.min(1, H.k + dt / 1.6);
+      H.p[0] += (HOLE[0] - H.p[0]) * Math.min(1, dt * 3); H.p[1] += (HOLE[1] - 0.004 - H.p[1]) * Math.min(1, dt * 3);
+      if (H.k >= 1) { H.mode = 'gone'; this.gone = true; }
+    }
+    // where it has just been stays warm a moment
+    const now = this.t;
+    if (moving && now - H.lastTrail > 0.035) { this.trail.push([H.p[0], H.p[1], now]); H.lastTrail = now; if (this.trail.length > 16) this.trail.shift(); }
+    this.trail = this.trail.filter(p => now - p[2] < 1.6);
+    // the windows answer the lantern, nearest first
+    if (this.lightsOn && this.winT !== undefined) {
+      this.winT -= dt;
+      if (this.winT <= 0) {
+        const order = this.houses.map((h, i) => [Math.abs(h[0] - L[0]), i]).sort((a, b) => a[0] - b[0]);
+        const next = order.find(([, i]) => this.lit[i] !== this.litBase[i]);
+        if (next) { this.lit[next[1]] = this.litBase[next[1]]; this.winT = 0.7 + Math.random() * 0.6; } else this.winT = undefined;
+      }
+    }
+    // the shaken-off snow
+    for (const f of this.puff) { f.v[1] -= 0.10 * dt; f.p[0] += f.v[0] * dt; f.p[1] += f.v[1] * dt; f.life -= dt; }
+    this.puff = this.puff.filter(f => f.life > 0);
+  },
+  shiver() {
+    const H = this.hero, L = this.lantern(this.t);
+    H.snow = 0; this.kickT = this.t; this.lanLight = 1.25;
+    for (let i = 0; i < 12; i++) {
+      const a = Math.PI * (0.15 + 0.7 * Math.random());
+      const sp = 0.04 + 0.07 * Math.random();
+      this.puff.push({ p: [L[0] + (Math.random() - 0.5) * 0.016, L[1] + 0.036], v: [Math.cos(a) * sp, Math.sin(a) * sp], r: 0.0026 + 0.0034 * Math.random(), life: 1.1 + 0.7 * Math.random() });
+    }
+    this.puffSound();
+  },
+  // the end of this world: it leaves the lantern and cuts its way down across the ice to the hole
+  leave() {
+    const H = this.hero, L = this.lantern(this.t);
+    const pts = [[L[0], L[1] - 0.003], [L[0] + 0.02, L[1] - 0.07], [0.70, 0.355], [0.80, 0.318], [0.88, 0.322], [HOLE[0] - 0.02, HOLE[1] + 0.022], [HOLE[0], HOLE[1] + 0.004]];
+    H.path = curve(pts, 14); H.pathL = pathLength(H.path); H.s = 0; H.mode = 'leave'; this.queue = [];
+  },
+
+  /* ---------------------------------------------------------------- the knife
+     Press and draw: the line is cut out of the blocks (both the black and the indigo), so it prints as bare paper.
+     You can only carve light into the dark — on the white snow there is nothing to take away.
+     A slow hand cuts wide, a quick one narrow; the cut starts thin where the knife goes in and tapers out where it lifts. */
+  carveSeg(a, b, r0, r1) {
+    const gl = YL.gl, pS = this.pStamp;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.carve.fb); gl.viewport(0, 0, CARVE_W, CARVE_H);
+    gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(pS.p);
+    YL.U(pS, 'uSeg', [a[0], a[1], b[0], b[1]]); YL.U(pS, 'uRad', [r0, r1]); YL.U(pS, 'uPxM', 1.6 / CARVE_W);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND);
+  },
+  pointer(nx, ny, speed) {
+    if (!YL.ptrDown || !this.ready || this.show[1] < 1) return;
+    const aspect = YL.canvasAspect(), p = this.toPrint(nx, ny, aspect);
+    const S = this.stroke;
+    if (!S) { this.stroke = { pts: [p], r: 0, len: 0 }; return; }
+    const last = S.pts[S.pts.length - 1], d = Math.hypot(p[0] - last[0], p[1] - last[1]);
+    if (d < 0.002) return;
+    const v = speed * 0.5 * this.view(aspect, 0)[2];                         // print units per second
+    const r = Math.max(0.0014, Math.min(0.0042, 0.0042 / (1 + 0.9 * v))) * Math.min(1, (S.len + d) / 0.02);
+    this.carveSeg(last, p, S.r, r);
+    S.r = r; S.len += d; S.pts.push(p);
+    this.carving = Math.min(1.5, v);
+  },
+  endStroke() {
+    const S = this.stroke; this.stroke = null; this.carving = 0;
+    if (!S || S.pts.length < 2) return;
+    // the knife lifts out: a short tail, narrowing to nothing
+    const n = S.pts.length, a = S.pts[n - 1], b = S.pts[Math.max(n - 3, 0)];
+    const dx = a[0] - b[0], dy = a[1] - b[1], l = Math.hypot(dx, dy) || 1;
+    const tail = [a[0] + dx / l * 0.012, a[1] + dy / l * 0.012];
+    this.carveSeg(a, tail, S.r, 0);
+    S.pts.push(tail);
+    if (S.len > 0.04 && this.queue.length < 2 && ['home', 'out', 'enter'].includes(this.hero.mode)) {
+      const pts = S.pts; this.queue.push(pts); pts.L = pathLength(pts);
+    }
+  },
+
+  /* ---------------------------------------------------------------- sound */
   buildAudio(b) {
     const { ctx, out, noiseBuffer, loop } = b;
     const bus = ctx.createGain(); bus.gain.value = 0; bus.connect(out);
@@ -813,7 +1095,13 @@ W.woodcut = {
     const wl = ctx.createBiquadFilter(); wl.type = 'lowpass'; wl.frequency.value = 320; wl.Q.value = 0.3;
     const wg = ctx.createGain(); wg.gain.value = 0;
     loop(pink, 0.8, wl); wl.connect(wg); wg.connect(bus);
-    this.snd = { ctx, bus, wet, wl, wg, nextBell: 6 + Math.random() * 6, nextSlide: 14 + Math.random() * 10 };
+    // the knife in the wood: a dry scratch that follows your hand
+    const white = noiseBuffer(3.3, 'white');
+    const kb = ctx.createBiquadFilter(); kb.type = 'bandpass'; kb.frequency.value = 2600; kb.Q.value = 0.9;
+    const kh = ctx.createBiquadFilter(); kh.type = 'highpass'; kh.frequency.value = 900;
+    const kg = ctx.createGain(); kg.gain.value = 0;
+    loop(white, 1.0, kb); kb.connect(kh); kh.connect(kg); kg.connect(bus);
+    this.snd = { ctx, bus, wet, wl, wg, kb, kg, nextBell: 6 + Math.random() * 6, nextSlide: 14 + Math.random() * 10 };
   },
   // a temple bell far off across the valley: a low hum, its partials beating slowly, a very long tail
   bell() {
@@ -829,16 +1117,46 @@ W.woodcut = {
       }
     });
   },
+  noiseBuf() {
+    const ctx = this.snd.ctx;
+    return this.noise || (this.noise = (() => { const L = ctx.sampleRate * 2, b = ctx.createBuffer(1, L, ctx.sampleRate), d = b.getChannelData(0); for (let i = 0; i < L; i++) d[i] = Math.random() * 2 - 1; return b; })());
+  },
   // snow sliding off a roof somewhere: a soft hush and a muffled thump
   slide() {
     const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.02;
-    const n = ctx.createBufferSource(); n.buffer = this.noise || (this.noise = (() => { const L = ctx.sampleRate * 2, b = ctx.createBuffer(1, L, ctx.sampleRate), d = b.getChannelData(0); for (let i = 0; i < L; i++) d[i] = Math.random() * 2 - 1; return b; })());
+    const n = ctx.createBufferSource(); n.buffer = this.noiseBuf();
     const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(1400, t0); f.frequency.exponentialRampToValueAtTime(180, t0 + 1.4);
     const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.03, t0 + 0.5); g.gain.linearRampToValueAtTime(0.05, t0 + 1.1); g.gain.exponentialRampToValueAtTime(1e-4, t0 + 1.7);
     const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
     n.connect(f); f.connect(g); if (p) { p.pan.value = Math.random() * 1.4 - 0.7; g.connect(p); p.connect(S.bus); } else g.connect(S.bus);
     g.connect(S.wet);
     n.start(t0); n.stop(t0 + 1.8);
+  },
+  puffSound() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.01;
+    const n = ctx.createBufferSource(); n.buffer = this.noiseBuf();
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 3800; f.Q.value = 0.6;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.035, t0 + 0.02); g.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.35);
+    n.connect(f); f.connect(g); g.connect(S.bus); g.connect(S.wet);
+    n.start(t0, Math.random()); n.stop(t0 + 0.4);
+  },
+  // 一粒光的动机，这里是木头的声音：三声敲在木琴的音板上，短而温暖
+  motif(rate = 1, gain = 0.07) {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.03;
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    const g = ctx.createGain(); g.gain.value = gain;
+    if (p) { p.pan.value = (this.hero.p[0] - 0.8) * 1.2; g.connect(p); p.connect(S.bus); } else g.connect(S.bus);
+    g.connect(S.wet);
+    [880, 1108.7, 1318.5].forEach((f, i) => {
+      const t = t0 + i * 0.17;
+      [[1, 0.9, 0.55], [3.93, 0.25, 0.07], [9.2, 0.06, 0.02]].forEach(([r, a, dec]) => {
+        const o = ctx.createOscillator(); o.frequency.value = f * rate * r;
+        const e = ctx.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(a, t + 0.003); e.gain.exponentialRampToValueAtTime(1e-4, t + dec);
+        o.connect(e); e.connect(g); o.start(t); o.stop(t + dec + 0.05);
+      });
+    });
   },
   sound(dt) {
     if (!this.snd) { const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (b) this.buildAudio(b); else return; }
@@ -847,11 +1165,19 @@ W.woodcut = {
     const br = 0.5 + 0.5 * Math.sin(this.t * 0.21) * Math.sin(this.t * 0.083 + 1);
     S.wg.gain.setTargetAtTime(0.03 + 0.05 * br, now, 1.0);
     S.wl.frequency.setTargetAtTime(220 + 260 * br, now, 1.0);
+    const k = this.carving || 0;
+    S.kg.gain.setTargetAtTime(0.05 * Math.min(1, k) * (0.7 + 0.3 * Math.random()), now, 0.025);
+    S.kb.frequency.setTargetAtTime(2000 + 1400 * Math.min(1, k), now, 0.05);
+    this.carving = (this.carving || 0) * Math.exp(-dt * 12);
     if ((S.nextBell -= dt) <= 0) { this.bell(); S.nextBell = 24 + Math.random() * 14; }
     if ((S.nextSlide -= dt) <= 0) { this.slide(); S.nextSlide = 18 + Math.random() * 20; }
   },
   update(dt) {
     this.t += dt;
+    if (this.stroke && !YL.ptrDown) this.endStroke();
+    if (this.hero.path && !this.hero.pathL) this.hero.pathL = this.hero.path.L || pathLength(this.hero.path);
+    if (this.hero.mode === 'out' && this.hero.path && this.hero.path.L) this.hero.pathL = this.hero.path.L;
+    this.heroUpdate(dt);
     this.sound(dt);
   },
   // draw rows [y0, y1) of one printing (frame number f) into ink buffer k
@@ -864,6 +1190,7 @@ W.woodcut = {
     gl.useProgram(pS.p);
     U(pS, 'uRes', [w, h]); U(pS, 'uView', view); U(pS, 'uPx', view[2] / h); U(pS, 'uBoil', f % 4); U(pS, 'uTime', tq);
     gl.uniform4fv(pS.u.uBr, this.trBuf); gl.uniform4fv(pS.u.uBrR, this.trR); gl.uniform1i(pS.u.uBrN, this.tree.length); U(pS, 'uTreeBox', this.treeBox);
+    this.lit.forEach((v, i) => { this.hB[i * 4 + 2] = v; });
     gl.uniform4fv(pS.u.uHA, this.hA); gl.uniform4fv(pS.u.uHB, this.hB);
     U(pS, 'uLan', this.lantern(tq));
     YL.drawFull();
@@ -892,20 +1219,31 @@ W.woodcut = {
       this.printRows(1 - this.front, this.next.f, aspect, this.next.row, Math.min(h, this.next.row + rows));
       this.next.row += rows;
     }
-    // printing the three blocks onto the paper, each a little off register
-    const tq = this.t;
+    // printing the three blocks onto the paper, each a little off register; the flame, the knife's cuts, on top
     const view = this.view(aspect, this.shown / FPS);
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     const pP = this.pPrint;
     gl.useProgram(pP.p);
-    U(pP, 'uRes', [w, h]); U(pP, 'uView', view); U(pP, 'uBoil', this.shown % 4); U(pP, 'uFade', 1);
+    U(pP, 'uRes', [w, h]); U(pP, 'uView', view); U(pP, 'uBoil', this.shown % 4); U(pP, 'uFade', this.fade); U(pP, 'uPx', view[2] / h); U(pP, 'uTime', this.t);
     const j = (k) => 0.00025 * (((this.shown * 7 + k * 13) % 5) / 2 - 1);       // each printing lands a hair differently
     const reg = (dx, dy) => [(dx + j(1)) / (view[2] * w / h), (dy + j(2)) / view[2]];
     U(pP, 'uRegB', reg(0.0014, -0.0010)); U(pP, 'uRegR', reg(-0.0011, 0.0013));
     const sz = Math.min(0.075 * h, 0.09 * w);
     U(pP, 'uSealBox', [1 - (sz + 0.03 * h) / w, 0.035, sz / w, sz / h]);
+    U(pP, 'uShow', this.show);
+    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
+    const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
+    U(pP, 'uHero', [H.p[0], H.p[1], H.size * br * (H.mode === 'sink' ? 1 - 0.7 * H.k : 1), vis]);
+    const tr = new Float32Array(64).fill(-1);
+    this.trail.forEach((p, i) => tr.set([p[0], p[1], this.t - p[2], 0], i * 4));
+    if (vis > 0 && this.trail.length) tr.set([H.p[0], H.p[1], 0, 0], this.trail.length * 4 < 64 ? this.trail.length * 4 : 60);
+    gl.uniform4fv(pP.u.uTrail, tr);
+    const pf = new Float32Array(48);
+    this.puff.forEach((f, i) => { if (i < 12) pf.set([f.p[0], f.p[1], f.r * Math.min(1, f.life * 2), 0], i * 4); });
+    gl.uniform4fv(pP.u.uPuff, pf);
     YL.bindTex(pP, 'uInk', this.inks[this.front].tex, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.seal); gl.uniform1i(pP.u.uSeal, 1);
+    YL.bindTex(pP, 'uCarve', this.carve.tex, 2);
     YL.drawFull();
   },
 };

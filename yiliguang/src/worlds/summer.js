@@ -18,6 +18,7 @@
 const YL = window.YL;
 const W = (YL.worlds = YL.worlds || {});
 
+const TOWER = [-0.30, 0.36];        // the great cumulus: azimuth, and the elevation the light flies up into
 const SUN = (() => { const az = -0.75, el = 0.62; return [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)]; })();
 
 const HEAD = `#version 300 es
@@ -415,6 +416,7 @@ function makeGrass(rnd, n) {
 }
 
 W.summer = {
+  tower: TOWER,
   ready: false, t: 0, gust: 0, strokes: [], fade: 1,
   init() {
     if (this.ready) return;
@@ -510,6 +512,8 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   heroUpdate(dt) {
     const H = this.hero; if (!H.on) return;
     const t = this.t, calm = this.calm || 0;
+    // carried off by an updraft (the way out of this world): it just goes where the air takes it
+    if (H.fly) { for (let i = 0; i < 3; i++) H.p[i] += (H.fly[i] - H.p[i]) * Math.min(1, dt * 1.4); H.v = [0, 0, 0]; H.bob = 0; return; }
     for (const s of this.strokes) {
       const dx = H.p[0] - s.x, dz = H.p[2] - s.z, r2 = dx * dx + dz * dz, l = Math.sqrt(r2) + 1e-3;
       const f = s.s * Math.exp(-r2 / 2) * Math.exp(-s.age * 1.2) * 2.4 * dt;
@@ -536,11 +540,14 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   },
   camera(aspect, t, still) {
     // eye 1.1 m above the field, looking a little up so the sky has most of the frame; a slow drift
-    const yaw = (aspect < 0.9 ? -0.12 : 0) + (still ? 0 : 0.02 * Math.sin(t * 0.13)) + (YL.ptrPar ? YL.ptrPar[0] * 0.04 : 0);
-    const pitch = 0.20 + (still ? 0 : 0.008 * Math.sin(t * 0.11)) + (YL.ptrPar ? YL.ptrPar[1] * 0.02 : 0);
+    let yaw = (aspect < 0.9 ? -0.12 : 0) + (still ? 0 : 0.02 * Math.sin(t * 0.13)) + (YL.ptrPar ? YL.ptrPar[0] * 0.04 : 0);
+    let pitch = 0.20 + (still ? 0 : 0.008 * Math.sin(t * 0.11)) + (YL.ptrPar ? YL.ptrPar[1] * 0.02 : 0);
+    // following the light up into the great cloud (TOWER: its azimuth and the height it rises to), then into it
+    const lift = this.lift || 0, zoom = this.zoom || 0;
+    yaw += (TOWER[0] - yaw) * lift; pitch += (TOWER[1] - 0.06 - pitch) * lift;
     const fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
     const right = YL.V.norm(YL.V.cross(fwd, [0, 1, 0])), up = YL.V.cross(right, fwd);
-    const vfov = aspect < 0.9 ? 68 : 52, ty = Math.tan(vfov * Math.PI / 360);
+    const vfov = (aspect < 0.9 ? 68 : 52) * (1 - zoom) + 9 * zoom, ty = Math.tan(vfov * Math.PI / 360);
     return { eye: [0, 0.85, 0], fwd, right, up, tan: [ty * aspect, ty] };
   },
   // the summer sky and field as the room's window would see them, for the drops' inverted images
@@ -559,6 +566,10 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.bindVertexArray(null);
   },
   // where a point on the screen is, at a given distance in this world (to hand the light over at the same spot)
+  project(p, aspect) {
+    const cam = this.camera(aspect, this.t, YL.DBG.still), V = YL.V, v = V.sub(p, cam.eye), z = V.dot(v, cam.fwd);
+    return [V.dot(v, cam.right) / (z * cam.tan[0]), V.dot(v, cam.up) / (z * cam.tan[1])];
+  },
   unproject(nx, ny, dist, aspect) {
     const cam = this.camera(aspect, this.t, YL.DBG.still), V = YL.V;
     const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, nx * cam.tan[0]), V.mul(cam.up, ny * cam.tan[1]))));
@@ -598,7 +609,8 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
       gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
       U(this.pHero, 'uRes', [w, h]); U(this.pHero, 'uEye', cam.eye); U(this.pHero, 'uFwd', cam.fwd); U(this.pHero, 'uRight', cam.right); U(this.pHero, 'uUp', cam.up); U(this.pHero, 'uTan', cam.tan);
       const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in the room
-      U(this.pHero, 'uHP', hp); U(this.pHero, 'uHR', 0.018); U(this.pHero, 'uTime', this.t); U(this.pHero, 'uBreath', br); U(this.pHero, 'uOn', 1);
+      const far = Math.hypot(hp[0] - cam.eye[0], hp[1] - cam.eye[1], hp[2] - cam.eye[2]);      // carried far off, it shrinks more slowly than it should, so the eye can follow it
+      U(this.pHero, 'uHP', hp); U(this.pHero, 'uHR', 0.018 * Math.pow(Math.max(1, far / 2.4), 0.7)); U(this.pHero, 'uTime', this.t); U(this.pHero, 'uBreath', br); U(this.pHero, 'uOn', 1);
       gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.disable(gl.BLEND); gl.depthMask(true);
     }
