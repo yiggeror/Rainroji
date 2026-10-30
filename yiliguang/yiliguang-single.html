@@ -102,7 +102,8 @@
 const YL = window.YL = window.YL || {};          // 《一粒光》: shared with director.js, hero.js and the other worlds
 const QS = new URLSearchParams(location.search);
 const DBG = {
-  shot: QS.has('shot'),                 // screenshot mode: no fade, preserve buffer
+  shot: QS.has('shot') || QS.has('rec'),   // screenshot mode: no fade, preserve buffer
+  rec: QS.has('rec') ? +(QS.get('fps') || 24) : 0,   // recording a film: fixed steps of 1/fps s, sound rendered offline in step
   seed: +(QS.get('seed') || 0) || ((Math.random() * 1e9) | 0),
   lamp: QS.get('lamp') !== '0',
   still: QS.has('still'),               // freeze handheld drift
@@ -4435,7 +4436,7 @@ function pickWindowOut(ro, rd) {
 }
 function onDown(e) {
   AUDIO.unlock && AUDIO.unlock();
-  YL.ptrDown = true; { const [nx, ny] = toNdc(e); YL.ptr = { nx, ny, t: performance.now() / 1000, speed: 0 }; }
+  YL.ptrDown = true; { const [nx, ny] = toNdc(e); YL.ptr = { nx, ny, t: YL.now(), speed: 0 }; }
   requestGyro();
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
@@ -4454,7 +4455,7 @@ function onDown(e) {
 function onMove(e) {
   UI.poke();
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
-  const now = performance.now() / 1000, P0 = YL.ptr;     // where the pointer is, and how fast it moves (for the little light)
+  const now = YL.now(), P0 = YL.ptr;     // where the pointer is, and how fast it moves (for the little light)
   YL.ptr = { nx, ny, t: now, speed: P0 ? Math.hypot(nx - P0.nx, ny - P0.ny) / Math.max(now - P0.t, 1e-3) : 0 };
   if (!PTR.down) {
     if (e.pointerType === 'mouse') {
@@ -4577,6 +4578,8 @@ Object.assign(AUDIO, (() => {
   let bedGain, bedLP, patGain, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0, birdT = 2;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
+  // (recording: the offline context is suspended between frames, which is when the film schedules its sounds)
+  const live = () => ready && (DBG.rec || ctx.state === 'running');
   function noiseBuffer(sec, kind) {
     const sr = ctx.sampleRate, n = Math.floor(sr * sec), buf = ctx.createBuffer(2, n, sr);
     for (let ch = 0; ch < 2; ch++) {
@@ -4738,6 +4741,7 @@ Object.assign(AUDIO, (() => {
     unlock() {
       if (!enabled) return;
       try {
+        if (!ctx && DBG.rec) { ctx = new OfflineAudioContext(2, Math.ceil(48000 * AUDIO.recDur), 48000); build(); film.gain.value = 1; return; }
         if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; ctx = new AC(); build(); }
         if (ctx.state === 'suspended') ctx.resume();
         master.gain.cancelScheduledValues(ctx.currentTime);
@@ -4752,12 +4756,13 @@ Object.assign(AUDIO, (() => {
     },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     // other worlds play into the film bus (and may borrow the noise generator)
-    bus() { return ready && ctx.state === 'running' ? { ctx, out: film, noiseBuffer, loop } : null; },
+    bus() { return live() ? { ctx, out: film, noiseBuffer, loop } : null; },
+    recCtx() { return ctx; },
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
     click(on) { if (ready) oneShot(clickBuf, 0.5 * (1 - 0.92 * VIEW.mix), -0.45, on ? 1.0 : 0.88, 0.4, VIEW.mix > 0.5 ? 1500 : 0); },
     // 一粒光的动机：三个音（A–C♯–E 的上行），每个世界换一种音色；这里是房间里的版本：柔和的钢片琴
     motif(pan = 0, gain = 0.06, rate = 1) {
-      if (!ready || ctx.state !== 'running') return;
+      if (!live()) return;
       const t0 = ctx.currentTime + 0.02, notes = [880, 1108.7, 1318.5];
       const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       const g = ctx.createGain(); g.gain.value = 1;
@@ -4776,7 +4781,7 @@ Object.assign(AUDIO, (() => {
     // 雷声：闪电通道有几公里长，各段的声音先后到达，所以是一串此起彼伏的滚动；近雷先有一声撕裂的「咔」。
     // 空气吸收高频，越远越闷（低通截止 ∝ 1/距离）；隔着玻璃再削一点高频。延迟 = 距离 / 343 m/s。
     thunder(dist) {
-      if (!ready || ctx.state !== 'running') return;
+      if (!live()) return;
       const sr = ctx.sampleRate, dur = 4 + 3 * rand() + dist * 0.4, n = Math.floor(sr * dur), buf = ctx.createBuffer(2, n, sr);
       const peaks = [];
       for (let i = 0, np = 4 + Math.floor(rand() * 5); i < np; i++)
@@ -4807,7 +4812,7 @@ Object.assign(AUDIO, (() => {
       oneShot(rubBuf[(rand() * rubBuf.length) | 0], clamp(dist * 9, 0.02, 0.25), 0, 0.9 + rand() * 0.2, 0.2, 1800);
     },
     update(dt, wdt) {
-      if (!ready || ctx.state !== 'running') { SIM.events.length = 0; return; }
+      if (!live()) { SIM.events.length = 0; return; }
       const now = ctx.currentTime, I = SIM.rain;
       roomVol.gain.setTargetAtTime(YL.roomVol ?? 1, now, 0.5);
       // slow gusts: random walk retargeted every couple of seconds
@@ -4893,6 +4898,9 @@ function loop(now) {
   const t = now / 1000;
   const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t))) * FAST;      // (&fast=k: run k times faster, for testing the whole film)
   lastT = t;
+  tick(dt);
+}
+function tick(dt) {
   realT += dt;
   const wdt = dt * TIME.scale;                 // world time (rain, street) follows the time-flow slider
   simT += wdt;
@@ -4911,6 +4919,7 @@ function loop(now) {
   AUDIO.update && AUDIO.update(dt, wdt);
   frame++;
   if (DBG.shot) gl.finish();                     // screenshots: count frames the GPU has actually finished
+  if (DBG.rec) return;
   window.__frames = frame;
   if (frame === 2) {
     const v = document.getElementById('veil'); v.classList.add('gone'); if (DBG.shot) v.style.display = 'none';
@@ -4924,6 +4933,50 @@ function start() {
   requestAnimationFrame(loop);
 }
 function stop() { running = false; }
+/* 录制（?rec&fps=24&dur=秒）：不跟真实时间走，每帧固定 1/fps 秒。声音在一个离线音频上下文里渲染，
+   它在每一帧的边界停下：先推进整部片子一帧、画出来、交给录制程序（tools/rec.mjs）存下，声音才往前渲染这一帧。
+   所以环境声和画面严格对齐，和机器快慢无关。 */
+AUDIO.recDur = +(QS.get('dur') || 60);
+async function recRun() {
+  const F = DBG.rec, N = Math.round(AUDIO.recDur * F);
+  document.getElementById('veil').style.display = 'none';
+  AUDIO.unlock();
+  const ctx = AUDIO.recCtx();
+  let k = 0;
+  const frameOut = async () => {
+    try { tick(1 / F); gl.finish(); if (window.__recFrame) await window.__recFrame(k); }
+    catch (e) { console.error('rec frame ' + k + ': ' + e.message); }
+    k++;
+  };
+  await frameOut();
+  const step = async () => {
+    await frameOut();
+    if (k < N && !(YL.director && YL.director.filmDone)) ctx.suspend(k / F).then(step);
+    else window.__recFrames = k;
+    ctx.resume();
+  };
+  if (k < N) ctx.suspend(k / F).then(step);
+  const buf = await ctx.startRendering();
+  // 16-bit stereo WAV, handed over in pieces
+  const n = buf.length, L = buf.getChannelData(0), Rc = buf.getChannelData(1);
+  const wav = new DataView(new ArrayBuffer(44 + n * 4));
+  const str = (o, x) => { for (let i = 0; i < x.length; i++) wav.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, 'RIFF'); wav.setUint32(4, 36 + n * 4, true); str(8, 'WAVEfmt '); wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 2, true);
+  wav.setUint32(24, 48000, true); wav.setUint32(28, 48000 * 4, true); wav.setUint16(32, 4, true); wav.setUint16(34, 16, true); str(36, 'data'); wav.setUint32(40, n * 4, true);
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    peak = Math.max(peak, Math.abs(L[i]), Math.abs(Rc[i]));
+    wav.setInt16(44 + i * 4, clamp(L[i], -1, 1) * 32767, true); wav.setInt16(46 + i * 4, clamp(Rc[i], -1, 1) * 32767, true);
+  }
+  console.log('rec audio', n, 'samples, peak', peak.toFixed(3));
+  const bytes = new Uint8Array(wav.buffer), CH = 1 << 21;
+  for (let o = 0, i = 0; o < bytes.length; o += CH, i++) {
+    let bin = ''; const sub = bytes.subarray(o, Math.min(bytes.length, o + CH));
+    for (let j = 0; j < sub.length; j += 8192) bin += String.fromCharCode.apply(null, sub.subarray(j, j + 8192));
+    if (window.__recAudio) await window.__recAudio(i, Math.ceil(bytes.length / CH), btoa(bin));
+  }
+  window.__done = true;
+}
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stop(); AUDIO.suspend(); } else { start(); AUDIO.resume(); } });
 
 // initial render scales from the pixel count; adaptQuality() refines them from measured frame times
@@ -4958,7 +5011,7 @@ function boot() {
     if (done < total) { setTimeout(slice, 0); return; }
     SIM.events.length = 0;
     console.log('prewarm', (performance.now() - t0).toFixed(0) + 'ms', JSON.stringify(simStats()));
-    whenProgramsReady(() => { resize(); start(); });
+    whenProgramsReady(() => { resize(); if (DBG.rec) recRun(); else start(); });
   };
   slice();
 }
@@ -4971,6 +5024,7 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 // 《一粒光》: what the director, the hero and the other worlds need from the host
 Object.assign(YL, { QS, DBG, S, V, CAM, LIGHT, HERO, WORLD, SIM, AUDIO, R, clamp, lerp, smooth, bb, mulc, camRay, pickGlass, drift, rnd: mulberry32(DBG.seed + 1),
+  now: () => (DBG.rec || QS.has('film')) ? realT : performance.now() / 1000,   // the pointer's clock (the film's own time when it plays itself)
   framing, canvasAspect: () => canvas.clientWidth / Math.max(1, canvas.clientHeight), makeProgram, checkProgram, makeTarget, bindTarget, bindTex, drawFull, U, I });
 Object.defineProperty(YL, 'gl', { get: () => gl });          // (a live getter: gl is created at boot)
 setTimeout(boot, 30);
@@ -5029,7 +5083,7 @@ const H = YL.hero = {
     // curiosity and fright: the pointer's line of sight
     const P = YL.ptr, CAM = YL.CAM;
     let leanT = [0, 0, 0];
-    if (P && performance.now() / 1000 - P.t < 1.5 && !YL.DBG.shot) {
+    if (P && YL.now() - P.t < 1.5 && !YL.DBG.shot) {
       const rd = YL.camRay(P.nx, P.ny), oc = V.sub(p, CAM.pos), tc = V.dot(oc, rd);
       const q = V.add(CAM.pos, V.mul(rd, tc)), d = V.sub(q, p), dl = Math.hypot(...d);
       if (P.speed > 3.5 && dl < 0.3) H.scare = 1;                         // flung past it: it flinches
@@ -5581,7 +5635,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   update(dt, still) {
     this.t += dt;
     // pressing and holding still stops the wind
-    const P = YL.ptr, now = performance.now() / 1000;
+    const P = YL.ptr, now = YL.now();
     const holding = YL.ptrDown && P && now - P.t > 0.5;
     this.calm = (this.calm || 0) + ((holding ? 1 : 0) - (this.calm || 0)) * (1 - Math.exp(-dt / 1.2));
     this.heroUpdate(dt);
@@ -6516,6 +6570,7 @@ function makeSeal() {
   return c;
 }
 
+YL.makeSeal = makeSeal;                 // (the ink painting stamps the same seal)
 const FPS = 8;                          // the print's own frame rate: the world is re-printed eight times a second
 const CARVE_W = 1536, CARVE_H = 960;    // the knife's mask, over the whole 1.6 × 1 sheet
 const HOLE = [0.950, 0.285];
@@ -6608,7 +6663,15 @@ W.woodcut = {
     const s = Math.min(1, 1.6 / aspect), still = YL.DBG.still;
     const pan = still ? 0 : 0.016 * Math.sin(t * 0.05);
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
-    return [0.80 - 0.06 * narrow + pan, 0.5, s];
+    const v = [0.80 - 0.06 * narrow + pan, 0.5, s];
+    // the way out: the eye goes into the lantern until its lit paper is all there is
+    const z = this.zoomIn || 0;
+    if (z > 0) {
+      const L = this.lantern(t), e = z * z * (3 - 2 * z), k = Math.pow(z, 1.6);
+      v[0] += (L[0] - v[0]) * e; v[1] += (L[1] - 0.004 - v[1]) * e;
+      v[2] = s * Math.exp(Math.log(0.011 / s) * k);
+    }
+    return v;
   },
   toPrint(nx, ny, aspect) {
     const v = this.view(aspect, (this.shown > 0 ? this.shown : 0) / FPS);
@@ -6651,7 +6714,7 @@ W.woodcut = {
     let moving = false;
     if (H.mode === 'fall') {
       // drifting down like the snow, but it knows where it's going
-      const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085, dt, 1.2);
+      const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085 * (this.pace || 1), dt, 1.2);
       moving = true;
       if (d < 0.016) { H.mode = 'enter'; H.k = 0; }
     } else if (H.mode === 'enter') {
@@ -6673,20 +6736,20 @@ W.woodcut = {
     } else if (H.mode === 'out') {
       this.lanLight += (0.25 - this.lanLight) * Math.min(1, dt * 4);                    // the lantern keeps only an ember
       moving = true;
-      if (H.leg === 'to') { if (this.steer(H.path[0], 0.55, dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
+      if (H.leg === 'to') { if (this.steer(H.path[0], 0.55 * (this.pace || 1), dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
       else if (H.leg === 'along') {
         const s0 = H.s;
-        H.s += (H.path.carve ? 0.16 : 0.30) * dt;
+        H.s += (H.path.carve ? 0.16 : 0.30) * dt * (this.pace || 1);
         H.p = pointAt(H.path, H.s); H.v = [0, 0];
         // a path of its own (the moon): it is the knife, and cuts as it goes
         if (H.path.carve) { const a = pointAt(H.path, Math.max(s0 - 0.003, 0)); this.carveSeg(a, H.p, H.path.carve, H.path.carve); }
         if (H.s >= H.pathL) { H.leg = 'back'; if (this.queue.length) { H.path = this.queue.shift(); H.leg = 'to'; } }
-      } else if (this.steer(core, 0.55, dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
+      } else if (this.steer(core, 0.55 * (this.pace || 1), dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
     } else if (H.mode === 'leave') {
       this.lanLight += (0.12 - this.lanLight) * Math.min(1, dt * 2);
       moving = true;
       const s0 = H.s;
-      H.s += 0.095 * dt;
+      H.s += 0.095 * dt * (this.pace || 1);
       H.p = pointAt(H.path, H.s);
       // it is the knife now: its way down is cut into the print behind it
       const a = pointAt(H.path, Math.max(s0 - 0.004, 0));
@@ -6968,6 +7031,510 @@ W.woodcut = {
 
 </script>
 <script>
+/* ---- src/worlds/shadow.js ---- */
+/* ============================================================================
+   世界五 · 走马灯·皮影
+   ----------------------------------------------------------------------------
+   木刻里那盏灯笼的里面：一只走马灯。圆筒形的纸幕，里面点着一根蜡烛，烛火的热气推着上面的纸轮转，
+   纸轮上挂着一圈皮影——骑马的人、跃起的鲤鱼、浪、一条渔船——它们的影子在纸幕上奔跑。
+   · 光就是那根烛火。一切影子都是它投出来的：从烛火的位置，把每一片皮影投到纸幕上（逐像素求交，不是贴图）。
+     离纸近的影子清楚；烛火有大小，离纸远的发虚、放大。烛火一晃，所有影子跟着变形、奔跑。
+   · 皮影是染色的半透明牛皮：红、绿、琥珀透出自己的颜色，刻掉的地方透出白光，皮的边是黑的。
+     它们是关节连着的：马腿在肩和胯上用铆钉连着，跑起来一前一后地摆；鲤鱼的尾巴另是一片。
+   · 纸幕：灯光下透亮的纸，有纤维、有接缝；竹骨的影子；上下是红漆的木框。灯笼外面是夜。
+   渲染：一个全屏着色器，直接出最终颜色。
+   ========================================================================== */
+(() => {
+'use strict';
+const YL = window.YL;
+const W = (YL.worlds = YL.worlds || {});
+
+/* ---------------------------------------------------------------- the puppets, drawn once into an atlas
+   Colours are what the hide lets through: white = cut away (all the light), the dyed hide its own colour, black almost
+   nothing. 4×2 cells of 512 px; the paths are written in 1000-unit cell coordinates (y down). */
+const PUPPETS = (() => {
+  const C = {
+    red: '#d8301c', deep: '#9c1a12', green: '#2f8a4a', teal: '#1f6f78', sea: '#123e46', amber: '#f0a020', yellow: '#f6d24a',
+    skin: '#f3c79a', hide: '#c89a5a', ink: '#141010', edge: '#2a1408', blue: '#2a5aa8',
+  };
+  // cells: name → [col, row] on the 4×2 grid
+  const CELLS = { horse: [0, 0], fleg: [1, 0], hleg: [2, 0], rider: [3, 0], carp: [0, 1], tail: [1, 1], boat: [2, 1], waves: [3, 1] };
+  function cell(ctx, name, fn) {
+    const [cx, cy] = CELLS[name];
+    ctx.save(); ctx.translate(cx * 512, cy * 512); ctx.scale(0.512, 0.512);
+    ctx.beginPath(); ctx.rect(0, 0, 1000, 1000); ctx.clip();          // nothing spills into the next cell
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    fn(ctx);
+    ctx.restore();
+  }
+  const P = (d) => new Path2D(d);
+  // a dyed piece of hide: filled, then edged dark (the edge of the leather is thick)
+  // a dyed piece of hide: filled, a fine line carved just inside its edge (the way the carvers finish every piece),
+  // then edged dark (the cut edge of the leather is thick)
+  function piece(ctx, d, col, edge = 7, inner = true) {
+    const p = P(d); ctx.fillStyle = col; ctx.fill(p);
+    if (inner) { ctx.save(); ctx.clip(p); ctx.strokeStyle = '#fff'; ctx.lineWidth = edge * 3.4; ctx.stroke(p); ctx.strokeStyle = col; ctx.lineWidth = edge * 2.2; ctx.stroke(p); ctx.restore(); }
+    ctx.strokeStyle = C.edge; ctx.lineWidth = edge; ctx.stroke(p); return p;
+  }
+  // a rivet: where a jointed piece is pinned to the next
+  function rivet(ctx, x, y) { ctx.fillStyle = C.edge; ctx.beginPath(); ctx.arc(x, y, 12, 0, 6.28); ctx.fill(); hole(ctx, x, y, 7); ctx.fillStyle = C.edge; ctx.beginPath(); ctx.arc(x, y, 3, 0, 6.28); ctx.fill(); }
+  // a carved line: the knife takes the hide away and the light comes through
+  function cut(ctx, d, w = 5) { ctx.strokeStyle = '#fff'; ctx.lineWidth = w; ctx.stroke(P(d)); }
+  function hole(ctx, x, y, r) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill(); }
+  // a carver's spiral (the whorls cut into the shoulder and the haunch)
+  function whorl(ctx, x, y, r, turns, dir = 1, w = 5) {
+    ctx.beginPath();
+    for (let i = 0; i <= 60; i++) { const u = i / 60, a = dir * u * turns * 6.2832, rr = r * (1 - u * 0.85); ctx[i ? 'lineTo' : 'moveTo'](x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = w; ctx.stroke();
+  }
+  function draw(ctx) {
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 2048, 1024);
+    // ---- the horse: an arched neck, a small fine head, a deep chest, a round haunch; red hide carved with whorls
+    cell(ctx, 'horse', c => {
+      // tail first (behind)
+      piece(c, 'M250 300 C205 290 168 318 150 362 C132 404 112 442 70 474 C126 466 158 436 178 402 C194 372 214 348 246 338 Z', C.ink, 5);
+      cut(c, 'M226 318 C190 340 170 380 150 430', 4); cut(c, 'M236 330 C206 352 190 384 172 414', 3);
+      const body = 'M255 292 C330 255 460 262 560 262 C615 262 645 245 672 212 C705 168 742 128 785 108 L792 76 L807 103 C822 104 838 112 852 126 C882 156 912 190 938 214 C952 228 946 250 926 254 C906 258 888 252 870 242 C852 232 838 236 826 252 C800 290 784 330 762 372 C744 408 708 430 664 434 C570 444 430 446 340 432 C296 426 262 408 244 380 C228 352 232 316 255 292 Z';
+      piece(c, body, C.red, 8);
+      // the mane: dark locks along the crest
+      piece(c, 'M668 220 C684 196 698 168 728 140 C746 124 764 112 786 108 C774 124 770 132 760 146 C772 142 778 140 790 138 C770 156 760 170 752 184 C762 182 770 182 778 184 C752 200 738 214 722 230 C730 232 736 236 742 240 C716 250 696 248 680 240 Z', C.ink, 5);
+      // the face: a blaze cut down the nose, the eye, the nostril, the bridle
+      cut(c, 'M842 140 C870 168 900 196 926 226', 6);
+      hole(c, 862, 166, 11); c.fillStyle = C.ink; c.beginPath(); c.arc(864, 167, 5, 0, 6.28); c.fill();
+      hole(c, 922, 238, 5);
+      cut(c, 'M820 150 C832 190 846 220 872 244', 4); cut(c, 'M818 196 C850 206 880 216 914 232', 4);
+      // whorls on the shoulder and the haunch, and a row of little crescents along the belly
+      whorl(c, 700, 330, 46, 1.7, 1, 6); whorl(c, 330, 340, 52, 1.7, -1, 6);
+      for (let i = 0; i < 7; i++) { const x = 400 + i * 38; cut(c, `M${x} 420 C${x + 8} 410 ${x + 22} 410 ${x + 30} 420`, 5); }
+      // the saddle cloth: green, bordered in yellow, a lattice cut through it; the saddle on top, a tassel hanging
+      piece(c, 'M432 270 C472 262 560 262 604 268 L612 386 C560 398 482 398 428 388 Z', C.green, 6);
+      c.strokeStyle = C.yellow; c.lineWidth = 12; c.stroke(P('M444 284 C480 278 556 278 592 282 L598 374 C556 382 486 382 442 376 Z'));
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { const x = 470 + i * 34, y = 302 + j * 26; c.fillStyle = '#fff'; c.beginPath(); c.moveTo(x, y - 9); c.lineTo(x + 9, y); c.lineTo(x, y + 9); c.lineTo(x - 9, y); c.closePath(); c.fill(); }
+      piece(c, 'M470 268 C470 236 500 226 520 238 C540 228 576 232 584 262 Z', C.amber, 5);
+      piece(c, 'M616 300 C626 330 624 360 630 392 C620 398 610 396 604 390 C606 360 604 330 606 304 Z', C.amber, 4);
+      cut(c, 'M612 316 L616 380', 3);
+    });
+    // ---- a foreleg: pivot at the shoulder (0,0) = cell (500,120); hoof down
+    cell(ctx, 'fleg', c => {
+      c.translate(500, 120);
+      piece(c, 'M-32 0 C-30 60 -24 110 -16 150 C-13 196 -13 236 -12 262 C-16 278 -24 292 -28 302 L24 302 C20 288 15 274 13 262 C15 234 17 196 19 150 C27 110 33 60 31 0 Z', C.red, 7);
+      piece(c, 'M-28 302 L24 302 C26 316 26 326 22 334 L-30 334 C-34 324 -32 312 -28 302 Z', C.ink, 4);
+      cut(c, 'M-10 40 C-6 76 -4 110 -2 140', 4); hole(c, 0, 158, 7); rivet(c, 0, 14);
+      for (let i = 0; i < 3; i++) cut(c, `M-14 ${200 + i * 18} L12 ${196 + i * 18}`, 3);
+    });
+    // ---- a hind leg: pivot at the hip; the hock bent back
+    cell(ctx, 'hleg', c => {
+      c.translate(500, 100);
+      piece(c, 'M-44 0 C-48 54 -36 112 -16 150 C-6 172 4 188 10 204 C6 228 2 250 0 264 C-4 280 -10 294 -14 304 L34 304 C30 290 26 276 24 264 C26 236 30 210 38 194 C46 166 54 118 46 0 Z', C.red, 7);
+      piece(c, 'M-14 304 L34 304 C36 318 36 328 32 336 L-16 336 C-20 326 -18 314 -14 304 Z', C.ink, 4);
+      cut(c, 'M-16 46 C-14 90 -4 130 10 170', 4); hole(c, 20, 196, 7); rivet(c, 0, 16);
+      for (let i = 0; i < 3; i++) cut(c, `M-2 ${232 + i * 18} L22 ${228 + i * 18}`, 3);
+    });
+    // ---- the rider: seat at (500, 620); robe red with a yellow belt, a black boot, a helmet with two long pheasant plumes,
+    //      a whip raised
+    cell(ctx, 'rider', c => {
+      c.translate(500, 620);
+      // the plumes (翎子): two long curving feathers sweeping back over his shoulders
+      piece(c, 'M-6 -232 C-60 -300 -140 -360 -250 -380 C-150 -340 -84 -290 -24 -222 Z', C.amber, 4);
+      piece(c, 'M4 -236 C-30 -320 -96 -420 -200 -470 C-110 -400 -56 -320 -10 -230 Z', C.amber, 4);
+      for (let i = 0; i < 9; i++) { const u = i / 9; cut(c, `M${-40 - u * 170} ${-268 - u * 90} l${-8 + u * 4} ${-10}`, 3); }
+      // the leg over the horse's flank
+      piece(c, 'M-24 -10 C12 2 58 10 84 18 C92 60 90 100 86 132 L60 134 C58 100 56 66 52 42 C20 36 -8 28 -30 22 Z', C.red, 6);
+      piece(c, 'M60 134 L86 132 C96 140 116 146 124 154 L58 158 Z', C.ink, 4);
+      // the robe and torso
+      piece(c, 'M-46 6 C-56 -50 -50 -112 -30 -150 C-14 -164 18 -164 32 -150 C50 -110 54 -50 44 6 Z', C.red, 7);
+      c.fillStyle = C.yellow; c.fillRect(-48, -64, 96, 16); c.strokeStyle = C.edge; c.lineWidth = 4; c.strokeRect(-48, -64, 96, 16);
+      for (let i = 0; i < 4; i++) whorl(c, -20 + (i % 2) * 34, -128 + Math.floor(i / 2) * 40, 14, 1.4, 1, 3);
+      cut(c, 'M-36 -8 C-20 -2 20 -2 36 -8', 4);
+      // the head: a pale face carved with a brow, an eye, a nose line; the helmet over it
+      piece(c, 'M-18 -160 C-28 -176 -28 -206 -14 -218 C0 -228 22 -222 28 -206 C34 -192 32 -170 20 -160 Z', C.skin, 5);
+      cut(c, 'M4 -198 C12 -202 20 -200 26 -196', 3); cut(c, 'M10 -190 C14 -188 20 -188 24 -190', 3); cut(c, 'M28 -190 L32 -178 L26 -174', 3);
+      piece(c, 'M-28 -206 C-30 -236 -10 -252 12 -248 C30 -244 38 -228 34 -210 C10 -216 -8 -214 -28 -206 Z', C.ink, 4);
+      hole(c, 6, -236, 5);
+      // the arm and the raised whip
+      piece(c, 'M14 -142 C40 -136 66 -118 82 -96 L70 -86 C56 -104 36 -118 10 -124 Z', C.red, 5);
+      c.strokeStyle = C.ink; c.lineWidth = 7; c.stroke(P('M80 -92 C110 -140 150 -190 210 -230'));
+      c.lineWidth = 3; c.stroke(P('M210 -230 C240 -250 250 -220 236 -196 C226 -180 240 -160 256 -158'));
+    });
+    // ---- the carp: facing right; red-orange, carved with rows of scales, yellow fins; the tail is its own piece
+    cell(ctx, 'carp', c => {
+      c.translate(0, 200);
+      piece(c, 'M380 212 C420 150 500 110 600 112 C560 140 540 170 548 204 Z', C.amber, 5);                  // dorsal fin
+      for (let i = 0; i < 5; i++) cut(c, `M${440 + i * 26} ${196 - i * 8} L${470 + i * 26} ${150 - i * 6}`, 3);
+      piece(c, 'M560 380 C580 430 620 460 660 466 C650 430 640 404 620 380 Z', C.amber, 4);                    // pelvic fin
+      piece(c, 'M840 300 C830 250 780 214 700 200 C560 176 380 200 250 262 C216 278 190 288 168 294 L168 312 C190 318 216 326 250 342 C380 402 560 422 700 402 C780 390 830 350 840 300 Z', C.red, 8);
+      // scales: rows of little arcs, cut
+      for (let j = -3; j <= 3; j++) for (let i = 0; i < 10; i++) {
+        const x = 300 + i * 46 + (j & 1) * 23, y = 302 + j * 30;
+        const top = 300 - 120 * Math.sin(Math.min(1, (x - 200) / 520) * 2.6) * 0.75, inside = Math.abs(y - 302) < (x < 640 ? 18 + (x - 250) * 0.27 : 95 - (x - 640) * 0.5);
+        if (x > 270 && x < 680 && inside) cut(c, `M${x} ${y - 14} C${x + 16} ${y - 12} ${x + 18} ${y + 12} ${x} ${y + 14}`, 4);
+      }
+      // the head: a gill line, an eye ringed, the barbels
+      cut(c, 'M708 222 C690 260 690 340 712 384', 6);
+      hole(c, 776, 266, 16); c.fillStyle = C.ink; c.beginPath(); c.arc(779, 266, 8, 0, 6.28); c.fill();
+      c.strokeStyle = C.edge; c.lineWidth = 4; c.stroke(P('M832 316 C856 340 866 372 852 404')); c.stroke(P('M826 322 C842 352 838 380 820 400'));
+      piece(c, 'M700 330 C740 350 760 380 750 410 C730 390 712 366 690 352 Z', C.amber, 4);                   // pectoral fin
+    });
+    // ---- the carp's tail: pivot at its root (0,0) = cell (500, 500); it spreads to the left
+    cell(ctx, 'tail', c => {
+      c.translate(560, 500);
+      piece(c, 'M0 -16 C-50 -64 -110 -130 -190 -150 C-160 -80 -150 -30 -168 0 C-150 30 -160 80 -190 150 C-110 130 -50 64 0 16 Z', C.amber, 6);
+      for (let i = -3; i <= 3; i++) cut(c, `M-14 ${i * 4} C-70 ${i * 22} -120 ${i * 36} -160 ${i * 44}`, 3);
+    });
+    // ---- the fishing boat: a sampan, bow and stern swept up, a woven arched canopy amidships; an old fisherman in a
+    //      broad conical hat and a straw cape sits in the bow, his rod out over the water
+    cell(ctx, 'boat', c => {
+      c.translate(0, 60);
+      c.strokeStyle = C.ink; c.lineWidth = 6; c.stroke(P('M842 452 C880 380 930 300 996 250'));                        // the rod
+      c.lineWidth = 2.5; c.stroke(P('M996 250 C994 330 992 420 990 560'));                                         // the line
+      // the canopy: woven matting over a bamboo arch
+      piece(c, 'M330 500 C326 420 380 360 470 352 C560 346 630 396 640 500 Z', C.amber, 7);
+      c.save(); c.clip(P('M330 500 C326 420 380 360 470 352 C560 346 630 396 640 500 Z'));
+      for (let i = -8; i < 12; i++) { cut(c, `M${330 + i * 34} 500 L${430 + i * 34} 350`, 4); cut(c, `M${330 + i * 34} 350 L${430 + i * 34} 500`, 4); }
+      c.restore(); c.strokeStyle = C.edge; c.lineWidth = 7; c.stroke(P('M330 500 C326 420 380 360 470 352 C560 346 630 396 640 500 Z'));
+      piece(c, 'M352 500 C350 430 400 380 470 374 C546 368 606 410 616 500 L600 500 C592 420 540 390 470 396 C410 400 370 440 368 500 Z', C.deep, 4, false);
+      // the fisherman: straw cape, conical hat
+      piece(c, 'M736 500 C726 466 730 430 748 404 C770 392 812 392 832 404 C850 430 856 468 846 500 Z', C.green, 6);
+      for (let i = 0; i < 7; i++) cut(c, `M${750 + i * 13} ${414 + (i % 2) * 6} L${744 + i * 14} 494`, 3);
+      piece(c, 'M770 400 C770 380 806 376 812 394 C814 404 806 410 792 410 C780 410 770 408 770 400 Z', C.skin, 4);
+      piece(c, 'M690 404 C730 372 772 350 792 340 C812 350 856 372 900 404 C840 396 750 396 690 404 Z', C.hide, 6);
+      cut(c, 'M730 392 C770 372 812 372 860 392', 3); cut(c, 'M760 380 C780 368 806 368 828 380', 3);
+      piece(c, 'M826 430 C846 438 858 448 848 458 C838 452 826 446 818 440 Z', C.skin, 3);
+      // the hull, its planking carved, bow and stern swept up
+      piece(c, 'M150 420 C200 470 290 496 400 500 L700 500 C800 496 880 462 940 396 C930 476 860 548 740 562 L360 562 C250 552 180 500 150 420 Z', C.hide, 8);
+      for (let i = 0; i < 3; i++) cut(c, `M${190 + i * 24} ${470 + i * 20} C${350} ${516 + i * 16} ${700} ${516 + i * 16} ${890 - i * 34} ${452 + i * 26}`, 4);
+      for (let i = 0; i < 6; i++) hole(c, 300 + i * 90, 546, 6);
+    });
+    // ---- waves: a band of curling crests, blue-green, each curl carved
+    cell(ctx, 'waves', c => {
+      c.translate(0, 560);
+      // (the band runs on into the next piece at both ends: only the crest gets the edge and the carved line, not the sides)
+      let crest = 'M-10 120 ';
+      for (let i = 0; i < 4; i++) { const x = i * 250; crest += `C${x + 60} 120 ${x + 90} 40 ${x + 150} 30 C${x + 200} 22 ${x + 236} 52 ${x + 224} 84 C${x + 214} 108 ${x + 186} 104 ${x + 180} 84 C${x + 200} 120 ${x + 230} 120 ${x + 250} 120 `; }
+      crest += 'L1010 120';
+      const body = P(crest + ' L1010 460 L-10 460 Z');
+      c.fillStyle = C.sea; c.fill(body);
+      c.save(); c.clip(body); c.strokeStyle = '#fff'; c.lineWidth = 24; c.stroke(P(crest)); c.strokeStyle = C.sea; c.lineWidth = 15; c.stroke(P(crest)); c.restore();
+      c.strokeStyle = C.edge; c.lineWidth = 7; c.stroke(P(crest));
+      for (let i = 0; i < 4; i++) { const x = i * 250; whorl(c, x + 190, 72, 26, 1.3, 1, 5); for (let k = 0; k < 3; k++) cut(c, `M${x + 40 + k * 30} ${170 + k * 40} C${x + 90 + k * 30} ${150 + k * 40} ${x + 140 + k * 30} ${150 + k * 40} ${x + 190 + k * 30} ${170 + k * 40}`, 4); }
+    });
+  }
+  return { draw, CELLS };
+})();
+
+/* ---------------------------------------------------------------- the lantern, lit from inside */
+const NP = 40;                                   // most pieces of hide on the wheel at once
+const FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
+uniform float uTime, uExp, uFade, uDbg;
+uniform sampler2D uAtlas;
+uniform vec3 uF;             // the flame
+uniform vec4 uFI;            // its colour × brightness, its radius
+uniform vec4 uP0[${NP}];     // each piece: ring angle, ring radius, where its pivot is on the hide's plane (u, v; m)
+uniform vec4 uP1[${NP}];     //             its turn, metres per atlas pixel, its pivot in the atlas (px)
+uniform int uN;
+uniform vec4 uRod[8];        // the wires that hold the figures: ring angle, radius, u, height of the top
+uniform int uNR;
+out vec4 o;
+const float R = 0.30, H = 0.24;                  // the paper drum: radius, half its height
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+// the ray against the drum's side (x² + z² = r²): nearest entry
+vec2 cyl(vec3 ro, vec3 rd, float r){
+  float a = dot(rd.xz, rd.xz), b = dot(ro.xz, rd.xz), c = dot(ro.xz, ro.xz) - r * r, h = b * b - a * c;
+  if (h < 0.0) return vec2(-1.0);
+  h = sqrt(h); return vec2((-b - h) / a, (-b + h) / a);
+}
+// what reaches the paper at S from the flame: through every piece of hide in the way, and past the bamboo ribs
+vec3 through(vec3 S, float blur){
+  vec3 F = uF, D = S - F;
+  float dS = length(D);
+  vec3 T = vec3(1.0);
+  for (int i = 0; i < ${NP}; i++){
+    if (i >= uN) break;
+    vec4 a = uP0[i], b = uP1[i];
+    vec3 n = vec3(cos(a.x), 0.0, sin(a.x)), t = vec3(sin(a.x), 0.0, -cos(a.x));
+    float dn = dot(n, D); if (dn <= 1e-4) continue;
+    float s = (a.y - dot(n, F)) / dn;
+    if (s <= 0.0 || s >= 1.0) continue;
+    vec3 X = F + D * s;
+    vec2 q = vec2(dot(X, t), X.y) - a.zw;
+    float c = cos(b.x), sn = sin(b.x);
+    q = vec2(c * q.x + sn * q.y, -sn * q.x + c * q.y) / b.y;              // into the piece's own pixels
+    vec2 px = b.zw + vec2(q.x, -q.y);
+    vec2 cellO = floor(b.zw / 512.0) * 512.0;
+    if (px.x < cellO.x + 1.0 || px.y < cellO.y + 1.0 || px.x > cellO.x + 511.0 || px.y > cellO.y + 511.0) continue;
+    // the flame has a size: the further the hide is from the paper, the softer its shadow
+    float pen = (uFI.w * (1.0 - s) / s + blur) / b.y;                       // penumbra, in atlas pixels
+    vec3 tr = textureLod(uAtlas, px / vec2(2048.0, 1024.0), log2(max(pen, 1.0))).rgb;
+    tr = pow(tr, vec3(2.2));
+    // dyed hide is not even: it is thicker here, thinner there
+    float hide = 1.0 - step(0.9, min(tr.r, min(tr.g, tr.b)));
+    tr *= 1.0 - hide * (0.25 * vnoise(px * 0.08) + 0.15 * vnoise(px * 0.5));
+    T *= tr;
+  }
+  // the wires that hold the figures out on the wheel
+  for (int i = 0; i < 8; i++){
+    if (i >= uNR) break;
+    vec4 a = uRod[i];
+    vec3 n = vec3(cos(a.x), 0.0, sin(a.x)), t = vec3(sin(a.x), 0.0, -cos(a.x));
+    float dn = dot(n, D); if (dn <= 1e-4) continue;
+    float s = (a.y - dot(n, F)) / dn; if (s <= 0.0 || s >= 1.0) continue;
+    vec3 X = F + D * s;
+    float w = 0.0011 + uFI.w * (1.0 - s) / s;
+    T *= 1.0 - 0.85 * smoothstep(w, w * 0.4, abs(dot(X, t) - a.z)) * step(X.y, a.w) * step(-0.20, X.y);
+  }
+  // the bamboo ribs, just inside the paper: sixteen upright, and a hoop near the top and the bottom
+  vec2 rr = cyl(F, normalize(D), 0.290);
+  vec3 Xr = F + normalize(D) * rr.y;
+  float ang = atan(Xr.z, Xr.x), cell = 6.28318 / 8.0;
+  float da = abs(fract(ang / cell + 0.5 + 0.0625) - 0.5) * cell * 0.290;
+  float pw = uFI.w * 0.010 / 0.29;
+  T *= 1.0 - 0.75 * smoothstep(0.0018 + pw, 0.0018 - pw * 0.5, da);
+  T *= 1.0 - 0.80 * smoothstep(0.0025 + pw, 0.0025 - pw * 0.5, abs(abs(Xr.y) - 0.222));
+  return T;
+}
+void main(){
+  vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec3 rd = normalize(uFwd + uRight * ndc.x * uTan.x + uUp * ndc.y * uTan.y), ro = uEye;
+  vec3 col = vec3(0.0);
+  vec2 hc = cyl(ro, rd, R);
+  float tF = hc.x;
+  vec3 S = ro + rd * tF;
+  vec3 flameC = uFI.rgb;
+  if (tF > 0.0 && abs(S.y) < H){
+    vec3 N = vec3(S.x, 0.0, S.z) / R;
+    float th = atan(S.z, S.x);
+    vec2 pq = vec2(th * R, S.y);                                               // the paper, flattened (m)
+    // the light arriving at the inside of the paper, and how much of it comes through
+    vec3 L = uF - S; float d2 = dot(L, L);
+    float cosI = max(dot(-N, normalize(L)), 0.0);
+    vec3 E = flameC / d2 * (0.35 + 0.65 * cosI);
+    float fib = 0.82 + 0.10 * vnoise(pq * vec2(90.0, 30.0)) + 0.08 * vnoise(pq * 420.0) + 0.06 * (vnoise(pq * vec2(1400.0, 300.0)) - 0.5);
+    // where two sheets overlap at a rib, the paper is double
+    float cellA = 6.28318 / 8.0, sa = abs(fract(th / cellA + 0.5 + 0.0625) - 0.5) * cellA * R;
+    float seam = smoothstep(0.0062, 0.0056, sa + 0.0006 * vnoise(vec2(S.y * 300.0, th)));
+    float tau = fib * (1.0 - 0.22 * seam);
+    vec3 paper = vec3(1.0, 0.90, 0.72);
+    vec3 thr = through(S, 0.0);
+    col = E * thr * tau * paper * 0.032;
+    // through this paper, faintly, the far side of the drum: its own shadows, running the other way
+    vec3 S2 = ro + rd * hc.y;
+    vec3 L2 = uF - S2;
+    if (abs(S2.y) < H) col += flameC / dot(L2, L2) * through(S2, 0.004) * paper * 0.032 * 0.22 * fib;
+    // the flame seen straight through the paper: a soft hot glow where it sits
+    vec3 toF = normalize(uF - ro);
+    float g = max(dot(rd, toF), 0.0);
+    col += flameC * thr * (0.10 * exp(-(1.0 - g) * 5000.0) + 0.020 * exp(-(1.0 - g) * 350.0)) * tau;
+    // the paper's edge darkens where it turns away (the light inside comes through it slantwise, through more paper)
+    col *= 0.55 + 0.45 * pow(max(dot(N, -rd), 0.0), 0.6);
+  } else {
+    // the red lacquered frame above and below the paper, and beyond it the night
+    vec2 hf = cyl(ro, rd, R + 0.012);
+    vec3 P = ro + rd * hf.x;
+    if (hf.x > 0.0 && abs(P.y) < H + 0.040 && abs(P.y) > H - 0.004){
+      vec3 N = vec3(P.x, 0.0, P.z) / (R + 0.012);
+      float lit = exp(-(abs(P.y) - H) / 0.012);                               // the paper's glow on the wood next to it
+      float band = smoothstep(0.003, 0.0, abs(abs(P.y) - H - 0.020)) * 0.5;     // a gilt line round it
+      vec3 lac = vec3(0.30, 0.035, 0.02) * (0.6 + 0.4 * vnoise(vec2(atan(P.z, P.x) * 40.0, P.y * 200.0)));
+      col = flameC * (lac * (0.004 + 0.03 * lit) + vec3(0.9, 0.6, 0.2) * band * 0.012) * pow(max(dot(N, -rd), 0.0), 0.7);
+    } else {
+      // the night round it, warmed a little by the lantern
+      vec3 c0 = vec3(0.0, uF.y, 0.0) - ro; float tc = max(dot(c0, rd), 0.0);
+      float dd = length(ro + rd * tc - vec3(0.0, clamp((ro + rd * tc).y, -H, H), 0.0)) - R;
+      col = flameC * (0.012 * exp(-max(dd, 0.0) / 0.05) + 0.006 * exp(-max(dd, 0.0) / 0.25)) + vec3(0.0015, 0.0012, 0.0011);
+    }
+  }
+  if (uDbg > 0.0 && tF > 0.0 && abs(S.y) < H) col = through(S, 0.0) * 0.6;
+  vec3 c = aces(col * uExp);
+  c = pow(c, vec3(1.0 / 2.2));
+  vec2 uv = gl_FragCoord.xy / uRes - 0.5;
+  c *= 1.0 - 0.35 * dot(uv, uv) * 1.6;
+  c += (hash12(gl_FragCoord.xy + fract(uTime * 7.13) * 917.0) - 0.5) * 0.02;
+  o = vec4(max(c, 0.0) * uFade, 1.0);
+}`;
+const VS_FULL = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+/* ---------------------------------------------------------------- the figures on the wheel
+   Ring angles turn with the wheel; positions on the hide's plane are in metres (u along the ring, v up). */
+const S_PX = 3.3e-4;                             // metres per atlas pixel: a horse about 15 cm long
+const RING = 0.255;
+const cellPx = (name, x, y) => { const c = PUPPETS.CELLS[name]; return [c[0] * 512 + x * 0.512, c[1] * 512 + y * 0.512]; };
+function rot(p, a) { const c = Math.cos(a), s = Math.sin(a); return [c * p[0] - s * p[1], s * p[0] + c * p[1]]; }
+
+W.shadow = {
+  ready: false, t: 0, fade: 1, vol: 1, light: 1,
+  init() {
+    if (this.ready) return;
+    const gl = YL.gl;
+    this.p = YL.makeProgram('shadow', VS_FULL, FS); YL.checkProgram(this.p);
+    // the hide, cut and dyed
+    const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 1024;
+    PUPPETS.draw(cv.getContext('2d'));
+    this.atlas = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.empty = gl.createVertexArray();
+    if (!this.inited) this.t = +(YL.QS.get('wt') || 0);
+    this.inited = true;
+    this.ready = true;
+  },
+  hero: { on: false, sway: [0, 0], v: [0, 0], aim: null },
+  // the wheel: one turn in about 24 s; the figures run left to right across the front
+  wheel(t) { return Math.PI / 2 - 0.62 + t * 0.26; },
+  // every piece of hide this frame: [ring angle, radius, pivot u, v] [turn, m/px, atlas px x, y]
+  pieces(t) {
+    const out = [], rods = [], w = this.wheel(t);
+    const put = (phi, u, v, cell, cx, cy, turn = 0, k = 1, r = RING) => out.push([phi, r, u, v, turn, S_PX * k, ...cellPx(cell, cx, cy)]);
+    // a horseman at the gallop: legs swinging on their rivets, the body rocking, the rider rising and falling
+    const horse = (phi, ph, k) => {
+      const g = t * 9.0 + ph, rock = 0.05 * Math.sin(g), bob = 0.004 * Math.sin(2 * g + 0.5);
+      const at = (x, y) => { const p = rot([(x - 500) * 0.512 * S_PX * k, -(y - 300) * 0.512 * S_PX * k], rock); return [p[0], p[1] - 0.005 + bob]; };
+      let p = at(330, 380); put(phi, p[0], p[1], 'hleg', 500, 100, rock + 0.45 * Math.sin(g + 2.4), k); put(phi, p[0] + 0.004, p[1], 'hleg', 500, 100, rock + 0.45 * Math.sin(g + 1.6), k);
+      p = at(700, 390); put(phi, p[0], p[1], 'fleg', 500, 120, rock + 0.55 * Math.sin(g + 0.4), k); put(phi, p[0] - 0.004, p[1], 'fleg', 500, 120, rock + 0.55 * Math.sin(g - 0.6), k);
+      p = at(500, 300); put(phi, p[0], p[1], 'horse', 500, 300, rock, k);
+      p = at(520, 282); put(phi, p[0], p[1] + 0.002 * Math.sin(2 * g + 1.5), 'rider', 500, 620, rock * 0.5 - 0.04 * Math.sin(g), k * 1.45);
+      rods.push([phi, RING + 0.004, 0, -0.03]);
+    };
+    // a carp leaping out of the waves and back, flexing its tail
+    const carp = (phi, ph, k, flip = 1) => {
+      const L = ((t + ph) % 6.0) / 6.0, arc = Math.sin(Math.PI * L), up = -0.075 + 0.13 * arc, tilt = 0.6 * Math.cos(Math.PI * L) * flip;
+      const at = (x, y) => { const p = rot([(x - 500) * 0.512 * S_PX * k, -(y - 500) * 0.512 * S_PX * k], tilt); return [p[0] + 0.05 * (L - 0.5), p[1] + up]; };
+      let p = at(168, 503); put(phi, p[0], p[1], 'tail', 560, 500, tilt + 0.35 * Math.sin(t * 7 + ph), k);
+      p = at(500, 500); put(phi, p[0], p[1], 'carp', 500, 500, tilt, k);
+    };
+    horse(w, 0, 1);
+    horse(w - 0.72, 2.1, 0.94);
+    carp(w - 1.95, 0, 0.9);
+    // the boat, rocking on the swell
+    const bt = t * 1.3;
+    put(w - 2.55, 0, -0.085 + 0.006 * Math.sin(bt), 'boat', 500, 500, 0.06 * Math.sin(bt + 0.7), 1.25);
+    carp(w - 3.15, 2.7, 0.8);
+    // the sea: a band of waves right round the wheel (eight pieces, end to end), heaving a little; and further in, on a
+    // smaller wheel turning the other way, a second, bigger swell whose shadow is larger and softer
+    // (each piece is flat, so it must reach the tangent's length, not the arc's, to meet the next one)
+    const kw = 2 * RING * Math.tan(Math.PI / 8) / (512 * S_PX);
+    for (let i = 0; i < 8; i++) put(w - i * Math.PI / 4, 0, -0.140 + 0.004 * Math.sin(t * 1.3 + i * 2), 'waves', 500, 500, 0, kw);
+    const w2 = Math.PI / 2 - t * 0.11, r2 = 0.165, kw2 = 2 * r2 * Math.tan(Math.PI / 6) / (512 * S_PX);
+    for (let i = 0; i < 6; i++) put(w2 - i * Math.PI / 3, 0, -0.118 + 0.005 * Math.sin(t * 0.9 + i), 'waves', 500, 500, 0, kw2, r2);
+    for (const ph of [w - 1.95, w - 2.55, w - 3.15]) rods.push([ph, RING + 0.004, 0, -0.16]);
+    return { out, rods };
+  },
+  camera(aspect, t, still) {
+    const V = YL.V;
+    // (pull: 0 = right up against the paper, by the flame; 1 = the whole lantern)
+    const u = this.pull ?? 1, e = u * u * (3 - 2 * u), f = this.flame(t).p;
+    const eye = [(still ? 0 : 0.010 * Math.sin(t * 0.21)) * e + f[0] * (1 - e), -0.01 + (still ? 0 : 0.006 * Math.sin(t * 0.17)) * e + (f[1] + 0.01) * (1 - e), 0.40 + 0.72 * e];
+    const at = [f[0] * (1 - e), -0.012 * e + f[1] * (1 - e), 0];
+    const fwd = V.norm(V.sub(at, eye)), right = V.norm(V.cross(fwd, [0, 1, 0])), up = V.cross(right, fwd);
+    const vfov = (aspect < 0.9 ? 52 : 36) * (this.zoom ?? 1), ty = Math.tan(vfov * Math.PI / 360);
+    return { eye, fwd, right, up, tan: [ty * aspect, ty] };
+  },
+  // the flame: it leans with the draught, flickers, and (when 一粒光 is in it) answers your hand
+  flame(t) {
+    const H = this.hero;
+    const sx = 0.004 * Math.sin(t * 1.7) + 0.002 * Math.sin(t * 4.3 + 1) + H.sway[0], sy = 0.002 * Math.sin(t * 2.3);
+    const br = 1 + 0.07 * Math.sin(t * 2.1) + 0.03 * Math.sin(t * 5.3) + 0.05 * Math.sin(t * 13.0) * Math.sin(t * 3.1);   // the breathing every world shares, and a candle's flicker
+    const sink = this.sink || 0;
+    return { p: [sx * (1 - sink), -0.075 + sy + H.sway[1] - 0.15 * sink, 0.004 * Math.sin(t * 1.1)], k: br * this.light, r: 0.007 * (1 - 0.7 * sink) };
+  },
+  pointer(nx, ny, speed) {
+    this.hero.aim = [Math.max(-1, Math.min(1, nx)), Math.max(-1, Math.min(1, ny))];
+    if (speed > 1.5) this.gust = Math.min(1, (this.gust || 0) + 0.3);
+  },
+  update(dt) {
+    this.t += dt;
+    const H = this.hero, tgt = H.aim ? [H.aim[0] * 0.03, H.aim[1] * 0.012] : [0, 0];
+    this.gust = Math.max(0, (this.gust || 0) - dt * 0.8);
+    for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.sway[i]) * 14 * dt; H.v[i] *= Math.exp(-dt * 4); H.sway[i] += H.v[i] * dt; }
+    this.sound(dt);
+  },
+  render(target, aspect) {
+    const gl = YL.gl, U = YL.U, p = this.p;
+    const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(p.p);
+    const cam = this.cam = this.camera(aspect, this.t, YL.DBG.still);
+    const f = this.flame(this.t), { out, rods } = this.pieces(this.t);
+    U(p, 'uRes', [w, h]); U(p, 'uEye', cam.eye); U(p, 'uFwd', cam.fwd); U(p, 'uRight', cam.right); U(p, 'uUp', cam.up); U(p, 'uTan', cam.tan);
+    U(p, 'uTime', this.t); U(p, 'uDbg', YL.QS.has('sdbg') ? 1 : 0); U(p, 'uExp', 1.0); U(p, 'uFade', this.fade);
+    U(p, 'uF', f.p); U(p, 'uFI', [...YL.mulc(YL.bb(1850), 0.9 * f.k), f.r * (1 + (this.gust || 0))]);
+    const a0 = new Float32Array(NP * 4), a1 = new Float32Array(NP * 4), ar = new Float32Array(32);
+    out.slice(0, NP).forEach((q, i) => { a0.set(q.slice(0, 4), i * 4); a1.set(q.slice(4, 8), i * 4); });
+    rods.slice(0, 8).forEach((q, i) => ar.set(q, i * 4));
+    gl.uniform4fv(p.u.uP0, a0); gl.uniform4fv(p.u.uP1, a1); gl.uniform1i(p.u.uN, Math.min(out.length, NP));
+    gl.uniform4fv(p.u.uRod, ar); gl.uniform1i(p.u.uNR, Math.min(rods.length, 8));
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.atlas); gl.uniform1i(p.u.uAtlas, 0);
+    gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
+  },
+  /* ---- sound: the paper wheel turning (a dry, soft rustle in time with it), the candle's small crackle, and far off
+     a bowed string and a gong, the way a shadow play begins */
+  buildAudio(b) {
+    const { ctx, out, noiseBuffer, loop } = b;
+    const bus = ctx.createGain(); bus.gain.value = 0; bus.connect(out);
+    const pink = noiseBuffer(6.1, 'pink');
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 0.8;
+    const rg = ctx.createGain(); rg.gain.value = 0;
+    loop(pink, 1.0, bp); bp.connect(rg); rg.connect(bus);
+    this.snd = { ctx, bus, rg, next: 0.5, nextTone: 1.2 };
+  },
+  crackle() {
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.01, sr = ctx.sampleRate;
+    const n = Math.floor(sr * 0.03), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sr * 0.003));
+    const s = ctx.createBufferSource(); s.buffer = b;
+    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1800;
+    const g = ctx.createGain(); g.gain.value = 0.05 + 0.06 * Math.random();
+    s.connect(f); f.connect(g); g.connect(S.bus); s.start(t0);
+  },
+  // an erhu-like phrase: a bowed tone sliding between notes of the pentatonic scale, then a soft gong
+  phrase() {
+    const S = this.snd, ctx = S.ctx; let t = ctx.currentTime + 0.05;
+    const notes = [392, 440, 523.25, 587.33, 659.25], seq = [2, 3, 1, 2, 0];
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    const vib = ctx.createOscillator(); vib.frequency.value = 5.2; const vg = ctx.createGain(); vg.gain.value = 5; vib.connect(vg); vg.connect(o.frequency);
+    const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 1100; f1.Q.value = 1.4;
+    const f2 = ctx.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = 2600;
+    const g = ctx.createGain(); g.gain.value = 0;
+    o.connect(f1); f1.connect(f2); f2.connect(g); g.connect(S.bus);
+    o.frequency.setValueAtTime(notes[seq[0]], t);
+    let tt = t;
+    seq.forEach((k, i) => { const d = i === seq.length - 1 ? 1.8 : 0.55 + 0.25 * (i % 2); o.frequency.setTargetAtTime(notes[k], tt, 0.05); g.gain.setTargetAtTime(0.035, tt, 0.08); g.gain.setTargetAtTime(0.022, tt + d * 0.6, 0.1); tt += d; });
+    g.gain.setTargetAtTime(0, tt, 0.4);
+    o.start(t); vib.start(t); o.stop(tt + 2); vib.stop(tt + 2);
+    // the gong, far off
+    const gt = tt - 0.6;
+    [[110, 1], [167, 0.6], [231, 0.35], [298, 0.2]].forEach(([fq, a]) => {
+      const go = ctx.createOscillator(); go.frequency.setValueAtTime(fq * 1.02, gt); go.frequency.exponentialRampToValueAtTime(fq, gt + 1.5);
+      const gg = ctx.createGain(); gg.gain.setValueAtTime(0, gt); gg.gain.linearRampToValueAtTime(0.035 * a, gt + 0.02); gg.gain.setTargetAtTime(0, gt + 0.05, 1.6);
+      go.connect(gg); gg.connect(S.bus); go.start(gt); go.stop(gt + 7);
+    });
+  },
+  sound(dt) {
+    if (!this.snd) { const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (b) this.buildAudio(b); else return; }
+    const S = this.snd, now = S.ctx.currentTime;
+    S.bus.gain.setTargetAtTime(this.fade * (this.vol ?? 1), now, 0.5);
+    S.rg.gain.setTargetAtTime(0.025 * (0.6 + 0.4 * Math.sin(this.t * 6.3) * Math.sin(this.t * 1.1)), now, 0.1);
+    if ((S.next -= dt) <= 0) { this.crackle(); S.next = Math.random() < 0.4 ? 0.08 + Math.random() * 0.2 : 0.8 + Math.random() * 2.5; }
+    if ((S.nextTone -= dt) <= 0) { this.phrase(); S.nextTone = 14 + Math.random() * 6; }
+  },
+};
+})();
+
+</script>
+<script>
 /* ---- src/worlds/deepsea.js ---- */
 /* ============================================================================
    世界四 · 深海
@@ -7025,7 +7592,8 @@ uniform vec4 uJU[3];         //            up axis, pulse (0 relaxed … 1 contr
 uniform vec4 uJK[3];         //            kind (0 moon jelly, 1 comb jelly, 2 Atolla), phase, alarm, -
 uniform vec4 uSurf;          // the surface far above: its height (world y), how bright, how much the water is tea, -
 uniform vec4 uWh;            // the whale: its eye (world), on/off
-uniform vec4 uWhF;           //            which way it swims (unit), the fin's stroke
+uniform vec4 uWhF;           //            which way it swims (unit), its blink
+uniform vec4 uWhG;           //            where its eye looks (in its own frame)
 out vec4 o;
 ` + COMMON + `
 // ---- the light scattered toward the eye along [0, T]: equi-angular samples about the closest approach
@@ -7206,124 +7774,295 @@ vec3 atollaGlow(int k, vec3 ro, vec3 rd){
   return g * (0.6 + 0.4 * sin(uTime * 1.7 + KK.y));
 }
 
-/* ---- the whale: a humpback going by at the edge of the light. Local frame at its eye: x forward, y up, z out of
-   its right side (toward us). Only a stretch of it is ever in view: the head and eye, the long white flipper, the flank. */
+/* ---- the whale: a humpback sliding by a hand's breadth behind the light. Never the whole animal: only the skin
+   round its eye fills the picture. The skin is not noise but a drawn relief, a height (m) over its own surface —
+   x along the body (forward), y up, eye at the origin — lit by our light from close by, so every fold casts a shadow:
+     the almond of the eye, its lids, the folds that follow them and run out toward the corners, the fine creases
+     fanning from the back corner; the line of the mouth below, the lower lip standing proud of it with its row of
+     knobs (each with one bristle); crowns of barnacles on the chin; the pale rakes of an orca's teeth, long healed.
+   The eye: a wet dark ball behind the lids, which turns to look at the light. */
 float smin(float a, float b, float k){ float h = sat(0.5 + 0.5 * (b - a) / k); return mix(b, a, h) - k * h * (1.0 - h); }
-float bodyR(float x){
-  // the head narrows to the snout ahead of the eye; the body swells behind it and tapers away to the tail
-  float f = sqrt(max(1.0 - pow((x + 3.0) / 5.8, 2.0), 0.0));
-  float b = 1.0 - 0.75 * pow(sat((-x - 3.0) / 8.0), 1.4);
-  return 2.0 * (x > -3.0 ? f : b);
+float smax(float a, float b, float k){ return -smin(-a, -b, k); }
+float sq(float x){ return x * x; }
+const float EYE_A = 0.042;                       // half the length of the eye's opening
+float gOpen = 1.0;                               // how open the lids are (a blink closes them)
+const vec3 BALL = vec3(0.0, 0.0, -0.041);        // the eyeball's centre, under the skin
+const float BALL_R = 0.050;
+// the mouth: the lower lip's edge, coming back from the snout and rising to its corner just below and behind the eye
+const vec2 MOUTH = vec2(-0.035, -0.112);
+float lipY(float x){ float u = x - MOUTH.x; return MOUTH.y - 0.060 * u - 0.30 * u * u; }
+// a crease: a sharp valley, steep on the side the skin rolls over from (wa), easing out on the other (wb)
+float crease(float d, float wa, float wb){ return -exp(-sqrt(d * d + 2e-7) / (d < 0.0 ? wa : wb)); }
+// the opening between the lids: the intersection of two arcs, the back corner drawn to a point, the front rounder.
+// open: 1 wide … 0 shut (the upper lid comes down to the lower). < 0 inside.
+float eyeOpen(vec2 p, float open){
+  p.y -= 0.004 * p.x / EYE_A;                    // the back corner sits a little lower
+  const float hu = 0.0175, hl = 0.0105;
+  float ru = (EYE_A * EYE_A + hu * hu) / (2.0 * hu), rl = (EYE_A * EYE_A + hl * hl) / (2.0 * hl);
+  float du = length(p - vec2(0.0, hu - ru)) - ru, dl = length(p - vec2(0.0, rl - hl)) - rl;
+  float k = mix(0.0015, 0.007, smoothstep(-EYE_A, EYE_A, p.x));
+  float d = smax(du, dl, k);
+  // the upper lid's edge, lowered for a blink
+  float yu = hu - ru + sqrt(max(ru * ru - p.x * p.x, 0.0)), yl = rl - hl - sqrt(max(rl * rl - p.x * p.x, 0.0));
+  return max(d, (p.y - mix(yl, yu, open)) * 0.9);
 }
-vec3 finLocal(vec3 p, float stroke, out float s){
-  // the flipper: from behind the eye, swept back, down and out toward us; it beats slowly
-  vec3 root = vec3(-1.25, -0.75, 0.95);
-  vec3 ax = normalize(vec3(-0.66, -0.50 + 0.25 * stroke, 0.24));
-  vec3 ch = normalize(cross(ax, vec3(0.0, 0.0, 1.0)));      // chord: leading edge forward-ish
-  vec3 th = cross(ax, ch);
-  vec3 q = p - root;
-  s = dot(q, ax);
-  return vec3(dot(q, ch), dot(q, th), s);
+float ballH(vec2 p){ vec2 q = p - BALL.xy; float r2 = BALL_R * BALL_R - dot(q, q); return r2 > 0.0 ? BALL.z + sqrt(r2) : -1.0; }
+// the skin's angle round the eye, 0 straight ahead (+x), PI/2 up, PI behind
+float eyeAng(vec2 p){ return atan(p.y * 1.6, p.x); }
+// a fold drawn as an arch over (dir +1) or under (dir -1) the eye: x0 ± L, its ends at height y1, its crown at y0.
+// Each fold is a roll of skin overhanging the next one in toward the eye: steep on its outer side, easing inward.
+float arch(vec2 p, float x0, float L, float y1, float y0, float A, float seed, inout float cav){
+  float u = (p.x - x0) / L;
+  if (abs(u) > 1.0) return 0.0;
+  float yk = y1 + (y0 - y1) * (1.0 - u * u) + 0.0016 * sin(u * 5.0 + seed) + 0.0008 * sin(u * 13.0 + seed * 2.0);
+  float slope = -2.0 * (y0 - y1) * u / L;
+  float dk = (p.y - yk) * sign(y0 - y1) / sqrt(1.0 + slope * slope);
+  float env = pow(1.0 - u * u, 0.6) * (0.55 + 0.45 * vnoise(vec2(u * 4.0, seed * 5.0)));
+  cav += env * exp(-abs(dk) / 0.0016) * A / 0.004;
+  return A * env * crease(dk, 0.0040, 0.0013);
 }
-float whaleSDF(vec3 p, float stroke, out float part){
-  float x = p.x;
-  float r = bodyR(x);
-  vec2 yz = vec2((p.y + 0.10 * x * 0.1) / 0.86, p.z);
-  float body = (length(yz) - r) * 0.82;
-  if (x > 2.8) body = length(p - vec3(2.8, -0.15, 0.0)) - 0.02;
-  // the eye sits in a shallow socket; around it, folds of skin
-  vec3 ep = p - vec3(0.0, -0.22, bodyR(0.0) * 0.98);
-  float sock = length(ep * vec3(0.85, 1.7, 1.0)) - 0.085;
-  body = max(body, -sock * 0.6 - 0.012);
-  float eye = length(ep - vec3(0.0, 0.0, -0.012)) - 0.044;
-  // the flipper
-  float s;
-  vec3 f = finLocal(p, stroke, s);
-  float L = 3.9;
-  float u = sat(s / L);
-  float chord = mix(0.42, 0.10, u) * (1.0 - 0.6 * pow(u, 4.0)) + 0.035 * sin(s * 11.0) * step(0.0, f.x);   // scalloped leading edge
-  float thick = mix(0.10, 0.03, u);
-  float fin = (length(vec2(f.x / chord, f.y / thick)) - 1.0) * min(chord, thick) * 0.8;
-  fin = max(fin, max(-s, s - L));
-  float d = body;
-  part = 0.0;
-  if (eye < d){ d = eye; part = 2.0; }
-  return d;
+// a bump of rounded flesh
+float knob(vec2 p, vec2 c, vec2 r, float h){ float q = length((p - c) / r); return q < 1.0 ? h * sq(1.0 - q * q) : 0.0; }
+// an acorn barnacle (Coronula): a ribbed crown sunk deep in the skin, its plates uneven, a ragged opening in its top
+// with the grey plug inside; mat.x gets its shell, mat.y the dark of its opening
+float barnacle(vec2 p, vec2 c, float r, float seed, inout vec4 mat){
+  vec2 q = p - c; float dd = length(q);
+  if (dd > r * 1.5) return 0.0;
+  float th = atan(q.y, q.x);
+  float jag = vnoise(vec2(th * 2.0 + seed * 10.0, seed));
+  float rr = dd / r * (1.0 + 0.05 * sin(6.0 * th + seed * 6.0) + 0.10 * (jag - 0.5));
+  float wall = smoothstep(1.0, 0.60, rr);
+  float rim = 0.30 + 0.10 * (vnoise(vec2(th * 3.0, seed * 3.0)) - 0.5);
+  float top = smoothstep(rim + 0.07, rim - 0.03, rr);
+  float ribs = (0.5 + 0.5 * cos(18.0 * th + seed + 4.0 * vnoise(vec2(th * 3.0, seed)))) * smoothstep(1.0, 0.8, rr) * smoothstep(rim, 0.70, rr);
+  float h = r * (0.40 + 0.25 * jag) * (wall * (1.0 + 0.05 * ribs) - 0.30 * top);
+  h += r * 0.30 * exp(-sq((rr - 1.04) / 0.20));                       // sunk in: the skin heaped up round its foot
+  mat.x = max(mat.x, smoothstep(1.0, 0.86, rr) * (1.0 - top) * (0.75 + 0.25 * ribs) * (0.45 + 0.55 * jag));
+  vec2 sl = mat2(cos(seed), sin(seed), -sin(seed), cos(seed)) * q / r;
+  mat.y = max(mat.y, top * (0.25 + 0.75 * smoothstep(0.05, 0.015, abs(sl.y)) * step(abs(sl.x), 0.22)));
+  return h;
 }
-vec3 whaleN(vec3 p, float stroke){
-  float pp; vec2 e = vec2(0.004, 0.0);
-  return normalize(vec3(whaleSDF(p + e.xyy, stroke, pp) - whaleSDF(p - e.xyy, stroke, pp), whaleSDF(p + e.yxy, stroke, pp) - whaleSDF(p - e.yxy, stroke, pp), whaleSDF(p + e.yyx, stroke, pp) - whaleSDF(p - e.yyx, stroke, pp)));
+// the relief. fine: also the smallest creases (for shading; the shape and the shadows don't need them)
+// mat: barnacle shell, barnacle top, crease darkness, pale (scars); lice: the little crabs among the barnacles
+float whaleH(vec2 p, bool fine, out vec4 mat, out float lice){
+  mat = vec4(0.0); lice = 0.0;
+  float h = 0.0;
+  // the head curves away above and toward the snout
+  h -= sq(p.x + 0.05) / (2.0 * 2.6) + sq(p.y - 0.06) / (2.0 * 0.85);
+  // ---- the mouth. The lower lip is a broad rounded rim standing out of the line; the upper jaw tucks in behind it
+  float ym = lipY(p.x) + 0.0025 * sin(p.x * 37.0 + 1.0) + 0.0010 * sin(p.x * 107.0);
+  float dy = p.y - ym;
+  float lipOn = smoothstep(MOUTH.x - 0.005, MOUTH.x + 0.05, p.x);
+  float lipT = 0.015 * (0.8 + 0.4 * vnoise(vec2(p.x * 11.0, 3.0)));
+  h += lipOn * lipT * smoothstep(0.003, -0.007, dy) * (1.0 - 0.45 * smoothstep(-0.012, -0.05, dy));
+  h += lipOn * 0.010 * crease(dy - 0.0025, 0.0016, 0.0050);
+  // small creases across the lip's edge
+  float lcr = smoothstep(0.65, 1.0, sin(p.x * 240.0 + 9.0 * vnoise(p * 18.0))) * smoothstep(0.35, 0.7, vnoise(vec2(p.x * 30.0, 4.0)));
+  h -= lipOn * 0.0007 * lcr * smoothstep(0.001, -0.004, dy) * smoothstep(-0.028, -0.010, dy);
+  mat.z += lipOn * (exp(-abs(dy - 0.0025) / 0.0030) + 0.4 * lcr * smoothstep(0.001, -0.004, dy) * smoothstep(-0.028, -0.010, dy));
+  // behind its corner the mouth runs on as a fold that fades into the cheek; the corner itself a deep dimple
+  float tail = smoothstep(MOUTH.x + 0.01, MOUTH.x - 0.02, p.x) * smoothstep(MOUTH.x - 0.17, MOUTH.x - 0.03, p.x);
+  float ty = MOUTH.y + 0.20 * (p.x - MOUTH.x) - 0.7 * sq(p.x - MOUTH.x);
+  h += tail * 0.006 * crease(p.y - ty, 0.0020, 0.0050);
+  mat.z += tail * 0.7 * exp(-abs(p.y - ty) / 0.003);
+  float cm = length((p - MOUTH) * vec2(1.0, 1.4));
+  h -= 0.007 * exp(-sq(cm / 0.011));
+  // the knobs along the lower jaw, each with a bristle in a pit on its top
+  if (dy < 0.0 && dy > -0.075 && p.x > MOUTH.x) for (int k = 0; k < 6; k++){
+    float fk = float(k), hk = hash12(vec2(fk, 41.0));
+    float x = MOUTH.x + 0.07 + fk * 0.070 + 0.014 * (hk - 0.5);
+    vec2 c = vec2(x, lipY(x) - 0.040 - 0.012 * hash12(vec2(fk, 5.0)));
+    float r = 0.015 * (0.85 + 0.3 * hk);
+    h += knob(p, c, vec2(r * 1.15, r), 0.0075 * (0.8 + 0.4 * hk));
+    float pit = length(p - c - vec2(0.002, 0.003));
+    h -= 0.0020 * exp(-sq(pit / 0.0016));
+    mat.z += smoothstep(0.0020, 0.0006, pit);
+  }
+  // ---- the eye: a broad mound of thick flesh with the opening in it
+  float d = eyeOpen(p, gOpen);
+  float ang = eyeAng(p), r = length(p * vec2(0.75, 1.15));
+  if (r < 0.22){
+    h += 0.012 * exp(-sq((p.x + 0.01) / 0.10) - sq((p.y + 0.004) / 0.065));
+    // the lids' rims: the upper a fat roll, the lower thinner
+    float up = smoothstep(-0.2, 0.4, sin(ang));
+    h += mix(0.0030, 0.0050, up) * (0.7 + 0.6 * vnoise(vec2(ang * 3.0, 11.0))) * exp(-sq((d - 0.005) / mix(0.0045, 0.0070, up)));
+    // into the opening the skin turns under (the eyeball, below, fills it)
+    h -= 0.05 * smoothstep(0.0005, -0.004, d);
+    // folds that follow the lids, longer and flatter the further out, running on past the back corner; one forks
+    float cav = 0.0;
+    h += arch(p, -0.004, 0.058, -0.004, 0.029, 0.0036, 1.0, cav);
+    h += arch(p, -0.013, 0.078, -0.007, 0.043, 0.0030, 2.0, cav);
+    h += arch(p, -0.030, 0.085, -0.012, 0.058, 0.0022, 3.0, cav);
+    h += arch(p, -0.070, 0.050, -0.020, 0.040, 0.0016, 5.0, cav);
+    h += arch(p, 0.002, 0.055, -0.006, -0.020, 0.0024, 6.0, cav);
+    h += arch(p, -0.010, 0.074, -0.008, -0.034, 0.0018, 7.0, cav);
+    h += arch(p, -0.040, 0.060, -0.014, -0.047, 0.0012, 8.0, cav);
+    // creases running out from the eye across the folds, so the skin round it is puckered into soft cells
+    float rr = length(vec2(p.x, p.y * 1.6));
+    if (fine) for (int j = 0; j < 18; j++){
+      float fj = float(j), hj = hash12(vec2(fj, 77.0));
+      float d0 = 0.006 + 0.018 * hash12(vec2(fj, 3.0)), d1 = d0 + 0.010 + 0.026 * hash12(vec2(fj, 9.0));
+      if (d > d0 && d < d1){
+        float sj = (d - d0) / (d1 - d0);
+        float aa = ang - ((fj + 0.6 * hj) / 18.0 * 6.2832 - 3.14159) - 0.12 * sin(d * 70.0 + fj * 2.0);
+        aa = mod(aa + 3.14159, 6.2832) - 3.14159;
+        float w = pow(sin(sj * 3.14159), 1.2) * (0.5 + 0.5 * hj) * (1.0 - 0.7 * smoothstep(0.2, 0.8, sin(ang)));
+        float dist = aa * rr / 1.3;
+        h += 0.0013 * w * crease(dist, 0.0020, 0.0020);
+        cav += 0.3 * w * exp(-abs(dist) / 0.0018);
+      }
+    }
+    mat.z += cav + smoothstep(0.004, -0.0005, d) * 0.8;
+  }
+  // fine creases fanning out of the back corner, and a few from the front one
+  vec2 q = p - vec2(-EYE_A - 0.003, -0.004);
+  if (fine && q.x < 0.0 && dot(q, q) < 0.09 * 0.09){
+    float a = atan(q.y, -q.x), rq = length(q);
+    for (int k = 0; k < 7; k++){
+      float fk = float(k), hk = hash12(vec2(fk, 13.0));
+      float ak = (fk - 3.0) * 0.19 + 0.08 * (hk - 0.5) + 0.25 * rq;      // they curve a little as they go
+      float along = rq / (0.030 + 0.045 * hk);
+      if (along < 1.0){
+        float w = sin(along * 3.14159) * (1.0 - along * 0.4) * smoothstep(1.35, 1.0, abs(a));
+        float dist = (a - ak) * rq;
+        h += 0.0013 * w * crease(dist, 0.0010, 0.0018);
+        mat.z += 0.4 * w * exp(-abs(dist) / 0.0013);
+      }
+    }
+  }
+  q = p - vec2(EYE_A + 0.004, 0.002);
+  if (fine && q.x > 0.0 && dot(q, q) < 0.05 * 0.05){
+    float a = atan(q.y, q.x), rq = length(q);
+    for (int k = 0; k < 3; k++){
+      float fk = float(k);
+      float along = rq / (0.022 + 0.01 * fk);
+      if (along < 1.0) h += 0.0009 * sin(along * 3.14159) * crease((a - (fk - 1.0) * 0.45 - 0.15) * rq, 0.001, 0.0016);
+    }
+  }
+  // ---- barnacles: a crowd of them on the chin, one riding a knob, a pair alone behind the mouth
+  if (p.y < -0.12){
+    h += barnacle(p, vec2(0.215, -0.220), 0.025, 1.0, mat);
+    h += barnacle(p, vec2(0.251, -0.193), 0.018, 2.0, mat);
+    h += barnacle(p, vec2(0.181, -0.244), 0.020, 3.0, mat);
+    h += barnacle(p, vec2(0.252, -0.238), 0.013, 4.0, mat);
+    h += barnacle(p, vec2(0.282, -0.216), 0.010, 5.0, mat);
+    h += barnacle(p, vec2(0.236, -0.166), 0.007, 6.0, mat);
+    h += barnacle(p, vec2(0.172, -0.166), 0.010, 7.0, mat);
+    h += barnacle(p, vec2(-0.168, -0.176), 0.012, 8.0, mat);
+    h += barnacle(p, vec2(-0.150, -0.188), 0.008, 9.0, mat);
+  }
+  // ---- the skin itself: broad slow swells; and (fine) patches of shallow creases that mostly run along the body
+  h += 0.0022 * (vnoise(p * 7.0) - 0.5) + 0.0009 * (vnoise(p * 19.0 + 3.0) - 0.5);
+  if (fine){
+    vec2 w = p + 0.012 * vec2(vnoise(p * 11.0), vnoise(p * 11.0 + 9.0));
+    float ph = w.y * 210.0 + 7.0 * vnoise(w * 5.0);
+    float li = floor(ph);
+    float seg = smoothstep(0.35, 0.70, vnoise(vec2(w.x * 6.0, li * 1.7))) * smoothstep(0.45, 0.70, vnoise(p * 3.5 + 20.0));
+    float cr = 0.00018 * seg * crease((fract(ph) - 0.5) / 210.0, 0.0006, 0.0011);
+    // near the eye the fine creases follow the lids
+    float near = smoothstep(0.10, 0.05, r); float rr = length(vec2(p.x, p.y * 1.6));
+    float ph2 = ang * 45.0 + 4.0 * vnoise(vec2(d * 120.0, 1.0));
+    float seg2 = smoothstep(0.45, 0.75, vnoise(vec2(d * 160.0, floor(ph2) * 2.3)));
+    float cr2 = 0.00022 * seg2 * crease((fract(ph2) - 0.5) * rr / 45.0, 0.0008, 0.0008) * smoothstep(0.004, 0.012, d);
+    h += mix(cr, cr2, near);
+    h += 0.00005 * (vnoise(p * 600.0) + vnoise(p * 1300.0 + 7.0) - 1.0);
+  }
+  return h;
 }
-float cell(vec2 p){   // distance to the nearest of a scatter of points (for barnacles)
-  vec2 i = floor(p), f = fract(p); float m = 1.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++){ vec2 g = vec2(x, y); vec2 o2 = vec2(hash12(i + g), hash12(i + g + 17.0)); m = min(m, length(g + o2 - f)); }
-  return m;
-}
+float whaleSurf(vec2 p){ vec4 m; float l; return max(whaleH(p, false, m, l), ballH(p)); }
 // returns the whale's colour (carried to the eye) and its distance, or T unchanged
 vec3 whale(vec3 ro, vec3 rd, inout float T){
   if (uWh.w <= 0.0) return vec3(0.0);
+  gOpen = 1.0 - uWhF.w;
   vec3 F = uWhF.xyz, Up = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up)); Up = cross(Z, F);
-  // local frame: x along F, y up, z toward its right side
   vec3 rl = ro - uWh.xyz;
   vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
-  // bound: a fat capsule round the body's axis
-  vec3 A = vec3(3.0, 0.0, 0.0), B = vec3(-12.0, 0.0, 0.0);
-  vec3 ba = B - A, oa = o - A;
-  float baba = dot(ba, ba), bard = dot(ba, d), baoa = dot(ba, oa), rdoa = dot(d, oa), oaoa = dot(oa, oa);
-  float a = baba - bard * bard, b = baba * rdoa - baoa * bard, c = baba * oaoa - baoa * baoa - 6.0 * 6.0 * baba;
-  float h = b * b - a * c;
-  if (h < 0.0) return vec3(0.0);
-  float t = max((-b - sqrt(h)) / a, 0.0), tEnd = min((-b + sqrt(h)) / a, T);
-  float stroke = uWhF.w, part = 0.0;
-  bool hit = false;
-  for (int i = 0; i < 90; i++){
+  // the skin lies within a thin shell under the plane z = 0.03 (and nowhere is deeper than ~0.2 in view)
+  if (d.z >= -0.02) return vec3(0.0);
+  float t = max((0.035 - o.z) / d.z, 0.0), tEnd = min((-0.45 - o.z) / d.z, T);
+  if (t > tEnd) return vec3(0.0);
+  float tp = t; bool hit = false;
+  for (int i = 0; i < 48; i++){
     vec3 p = o + d * t;
-    float dd = whaleSDF(p, stroke, part);
-    if (dd < 0.0015 * t){ hit = true; break; }
-    t += dd * 0.75;
+    float f = p.z - whaleSurf(p.xy);
+    if (f < 0.0){ hit = true; break; }
+    tp = t;
+    t += max(f * 0.55, 0.0004);
     if (t > tEnd) break;
   }
   if (!hit) return vec3(0.0);
+  for (int i = 0; i < 6; i++){ float tm = 0.5 * (tp + t); vec3 p = o + d * tm; if (p.z - whaleSurf(p.xy) < 0.0) t = tm; else tp = tm; }
   vec3 p = o + d * t;
-  vec3 n = whaleN(p, stroke);
-  // the skin's surface: fine wrinkles running round the body (across its length), pores, and folds round the eye
-  float er = length((p - vec3(0.0, -0.22, bodyR(0.0) * 0.98)).xy * vec2(0.8, 1.9));    // the folds lie long and low, like lids
-  float wr = sin(p.x * 70.0 + 6.0 * vnoise(p.yz * 6.0)) * 0.5 + 0.5;
-  float fold = sin(er * 80.0 + 1.5) * smoothstep(0.36, 0.10, er) * smoothstep(0.06, 0.09, er);
-  vec2 bump = vec2((vnoise(p.xy * 90.0) - 0.5) * 0.14 + (vnoise(p.xy * 23.0) - 0.5) * 0.10 + fold * 0.10, (vnoise(p.yx * 85.0) - 0.5) * 0.14 + fold * 0.55 + (vnoise(p.yx * 19.0 + 4.0) - 0.5) * 0.10);
-  n = normalize(n + vec3(bump.x, bump.y, 0.0) * (part == 2.0 ? 0.0 : 1.0));
-  // colour: dark slate above, paler below, with crisp-edged pale patches; scars; barnacles round the chin; the throat's grooves
-  float under = smoothstep(-0.2, -0.9, p.y / max(bodyR(p.x), 0.3));
-  float mott = vnoise(p.xy * 1.6 + p.z) * 0.6 + vnoise(p.xz * 4.0 + 3.0) * 0.4;
-  float patch_ = smoothstep(0.60, 0.63, mott) * under;                      // the pale patches are on its belly
-  vec3 alb = mix(vec3(0.085, 0.088, 0.095), vec3(0.34, 0.34, 0.33), patch_);
-  alb *= 0.80 + 0.35 * vnoise(p.xy * 6.0 + p.z) + 0.15 * (vnoise(p.xy * 40.0) - 0.5);
-  alb *= 1.0 - 0.45 * smoothstep(0.22, 0.05, er);                          // the skin darkens round the eye
-  float groove = smoothstep(0.75, 1.0, sin(atan(p.y, p.z) * 70.0)) * under * step(p.x, 1.5);
-  alb *= 1.0 - 0.45 * groove;
-  // old scars: a few thin wandering pale lines, here and there
-  vec2 sc = p.xy * vec2(2.2, 3.0) + p.z * 0.5;
-  float scar = smoothstep(0.006, 0.0, abs(vnoise(sc * 1.7 + 7.0) - 0.5)) * smoothstep(0.70, 0.80, vnoise(p.xy * 0.9 + 11.0));
-  alb = mix(alb, vec3(0.45, 0.45, 0.43), scar * 0.85);
-  float barn = smoothstep(0.30, 0.18, cell(p.xy * 9.0 + p.z * 3.0)) * smoothstep(0.55, 0.85, vnoise(p.xy * 2.2)) * step(0.6, p.x) * smoothstep(-0.1, -0.5, p.y);
-  alb = mix(alb, vec3(0.50, 0.48, 0.44) * (0.7 + 0.3 * vnoise(p.xy * 60.0)), barn);
-  if (part == 1.0){
-    // the flipper: white beneath, dark-mottled on top, its scalloped edge pale
-    float sfin; vec3 fl = finLocal(p, stroke, sfin);
-    float top = step(0.0, fl.y);
-    alb = mix(vec3(0.55, 0.56, 0.55), vec3(0.08, 0.085, 0.09), top * smoothstep(0.3, 0.6, vnoise(fl.xz * 3.0)));
-    alb *= 0.85 + 0.25 * vnoise(fl.xz * 14.0);
+  vec4 mat; float lice;
+  float hs = whaleH(p.xy, true, mat, lice), hb = ballH(p.xy);
+  bool isEye = hb > hs;
+  // the normal, from the relief's slope
+  vec2 e = vec2(0.0007, 0.0);
+  vec4 m_; float l_;
+  vec3 n;
+  if (isEye){ n = normalize(vec3(p.xy, hb) - BALL); }
+  else {
+    float hx = whaleH(p.xy + e.xy, true, m_, l_) - whaleH(p.xy - e.xy, true, m_, l_);
+    float hy = whaleH(p.xy + e.yx, true, m_, l_) - whaleH(p.xy - e.yx, true, m_, l_);
+    n = normalize(vec3(-hx, -hy, 2.0 * e.x));
   }
-  float spec = 0.25;
-  if (part == 2.0){ alb = vec3(0.030, 0.018, 0.012); spec = 1.6; }           // a wet, dark brown eye
-  // world point, light
   vec3 xw = ro + rd * t;
-  vec3 E = lightAt(xw), Ld = normalize(uL - xw);
-  vec3 nw = normalize(F * n.x + Up * n.y + Z * n.z);
-  float diff = max(dot(nw, Ld), 0.0);
-  vec3 hv = normalize(Ld - rd);
-  float sp = pow(max(dot(nw, hv), 0.0), part == 2.0 ? 300.0 : 40.0) * spec * (0.04 + 0.96 * pow(1.0 - max(dot(nw, -rd), 0.0), 5.0) + 0.06);
-  vec3 col = E * (alb * (diff * 0.9 + 0.1) + sp);
+  vec3 Lw = uL - xw;
+  vec3 Ll = vec3(dot(Lw, F), dot(Lw, Up), dot(Lw, Z)), Ld = normalize(Ll);
+  float distL = length(Ll);
+  // shadow: walk toward the light over the relief
+  float sh = 1.0, s = 0.0015;
+  for (int i = 0; i < 18; i++){
+    vec3 q = p + Ld * s;
+    float f = q.z - whaleSurf(q.xy);
+    sh = min(sh, 0.5 + 0.5 * f / (0.03 * s));
+    s += max(0.0025, s * 0.22);
+    if (sh < 0.0 || s > min(distL, 0.30)) break;
+  }
+  sh = smoothstep(0.0, 1.0, sat(sh));
+  vec3 V = -d;
+  vec3 Hh = normalize(Ld + V);
+  float ndl = dot(n, Ld), ndh = max(dot(n, Hh), 0.0), ndv = max(dot(n, V), 0.0);
+  vec3 E = lightAt(xw) * sh;
+  vec3 col;
+  if (isEye){
+    // the eye: turned toward wherever uWhG says. Nearly black: a dark brown iris with faint fibres, the pupil wide open
+    // (it is very dark down here), and round them the white, which shows only when it looks aside
+    vec3 g = normalize(uWhG.xyz);
+    float a = acos(clamp(dot(n, g), -1.0, 1.0));
+    vec3 gx = normalize(cross(vec3(0.0, 1.0, 0.0), g)), gy = cross(g, gx);
+    float az = atan(dot(n, gy), dot(n, gx));
+    float pr = 0.36 * (1.0 + 0.22 * abs(cos(az)));                     // a broad oval, wider than tall
+    float fib = vnoise(vec2(az * 14.0, a * 10.0)) * 0.6 + vnoise(vec2(az * 40.0, a * 4.0)) * 0.4;
+    vec3 iris = vec3(0.0085, 0.0058, 0.0042) * (0.7 + 0.5 * fib) * (0.8 + 0.5 * smoothstep(pr, 0.72, a));
+    iris *= 1.0 - 0.5 * smoothstep(0.64, 0.74, a);                      // a darker ring at its edge
+    vec3 sclera = vec3(0.16, 0.15, 0.135) * (0.80 + 0.30 * vnoise(vec2(az * 6.0, a * 7.0)));
+    sclera = mix(sclera, vec3(0.025, 0.017, 0.012), smoothstep(1.0, 0.80, a) * 0.7);   // brown seeps into the white near the iris
+    vec3 alb = mix(iris, sclera, smoothstep(0.76, 0.84, a));
+    alb = mix(vec3(0.0012, 0.0010, 0.0010), alb, smoothstep(pr - 0.03, pr + 0.03, a));
+    // a wet cornea: one crisp highlight, and a soft sheen over the whole ball
+    float fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+    float spec = 2.0 * pow(ndh, 1400.0) * (0.25 + fr);
+    col = E * (alb * max(ndl, 0.0) + spec * step(0.0, ndl)) ;
+    col *= smoothstep(-0.010, 0.008, hb);                               // dim where it sinks in under the lids
+  } else {
+    // skin: nearly black slate; darker in its creases; pale where scarred; barnacles chalky grey, grimed, a little green
+    vec3 alb = vec3(0.0070, 0.0076, 0.0090) * (0.80 + 0.40 * vnoise(p.xy * 11.0) + 0.15 * (vnoise(p.xy * 90.0) - 0.5));
+    alb *= 1.0 - 0.6 * sat(mat.z);
+    alb = mix(alb, vec3(0.034, 0.035, 0.036) * (0.75 + 0.4 * vnoise(p.xy * 150.0)), sat(mat.w) * 0.8);
+    vec3 shell = vec3(0.085, 0.082, 0.075) * (0.6 + 0.6 * vnoise(p.xy * 320.0)) * mix(vec3(1.0), vec3(0.70, 0.80, 0.60), smoothstep(0.4, 0.8, vnoise(p.xy * 45.0)) * 0.8);
+    alb = mix(alb, shell, sat(mat.x));
+    vec3 opening = vec3(0.004, 0.0035, 0.003);
+    vec3 plug = vec3(0.022, 0.021, 0.019) * (0.6 + 0.6 * vnoise(p.xy * 500.0));
+    alb = mix(alb, mix(plug, opening, smoothstep(0.4, 0.9, mat.y)), smoothstep(0.0, 0.25, mat.y));
+    alb = mix(alb, vec3(0.13, 0.07, 0.04), sat(lice));
+    // wet skin: a broad sheen that shows its shape; a glassy line where the lid meets the eye
+    float fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+    float gloss = (0.030 * pow(ndh, 40.0) + 0.005 * pow(ndh, 6.0)) * (1.0 - sat(mat.x) * 0.6);
+    gloss += 0.15 * pow(ndh, 250.0) * smoothstep(0.0025, 0.0005, eyeOpen(p.xy, gOpen)) * smoothstep(0.3, 0.7, vnoise(p.xy * 300.0));
+    float wrap = sat((ndl + 0.10) / 1.10);
+    col = E * (alb * wrap + gloss * (0.4 + fr) * step(0.0, ndl));
+  }
   T = t;
   return col * exp(-SIG_V * t);
 }
@@ -7655,7 +8394,13 @@ W.deepsea = {
     ];
     // the whale: once in a long while it goes by, left to right, just beyond the light
     // its near side slides by a hand's breadth behind the light: all we see is skin, and once, the eye
-    this.whale = { E0: [0.0, 0.12, -3.33], F: YL.V.norm([1, 0, -0.02]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null };
+    this.whale = { E0: [0.0, 0.12, -3.33], F: YL.V.norm([1, 0, -0.02]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null, look: 0, blink: 0 };
+    // debug: &whaletest=x — a fixed close-up on the eye (x: how far it has slid on), &look=0…1, &blink=0…1, &wl=x,y,z the light by the eye
+    if (YL.QS.has('whaletest')) {
+      const q = (k, d) => YL.QS.has(k) ? YL.QS.get(k).split(',').map(Number) : d;
+      this.wtest = { x: +YL.QS.get('whaletest') || 0, L: q('wl', [0.07, 0.05, 0.20]), F: YL.V.norm(q('wf', [1, 0, -0.18])), E: q('we', [0.09, -0.02, -0.55]) };
+      this.whale.look = +(YL.QS.get('look') || 0); this.whale.blink = +(YL.QS.get('blink') || 0);
+    }
     // small lives in the dark: each a little fish with a row of blue lights along its side
     this.glow = [];
     for (let i = 0; i < 16; i++) {
@@ -7701,6 +8446,8 @@ W.deepsea = {
     const recent = this.t - H.moved < 4;
     if (this.rise > 0) {
       tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 0.9)), [0, 0.05, 0]);
+    } else if (H.hold) {
+      tgt = V.add(H.hold, [0.006 * Math.sin(this.t * 0.9), 0.006 * Math.sin(this.t * 0.7 + 1), 0]);
     } else if (H.aim && recent) {
       const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, H.aim[0] * cam.tan[0]), V.mul(cam.up, H.aim[1] * cam.tan[1]))));
       tgt = V.add(cam.eye, V.mul(rd, 1.0));
@@ -7713,7 +8460,7 @@ W.deepsea = {
     // the eye follows only when the light nears the edge of the picture
     const v = V.sub(H.p, cam.eye), z = Math.max(V.dot(v, cam.fwd), 0.1);
     const nx = V.dot(v, cam.right) / (z * cam.tan[0]), ny = V.dot(v, cam.up) / (z * cam.tan[1]);
-    const push = (x) => Math.sign(x) * Math.max(Math.abs(x) - 0.5, 0);
+    const push = (x) => this.pass ? 0 : Math.sign(x) * Math.max(Math.abs(x) - 0.5, 0);
     this.yawOff = (this.yawOff || 0) + push(nx) * 0.9 * dt;
     this.pitchOff = Math.max(-0.6, Math.min(0.6, (this.pitchOff || 0) + push(ny) * 0.7 * dt));
     H.speed *= Math.exp(-dt * 3);
@@ -7819,14 +8566,70 @@ W.deepsea = {
     const g = ctx.createGain(); g.gain.value = 0.35;
     src.connect(lp); lp.connect(g); g.connect(S.bus); g.connect(S.wet); src.start(t0);
   },
+  /* ---- the whale's pass. It comes out of the dark from the left, a hand's breadth behind the light: first the line of
+     its jaw with the knobs and barnacles slides through the light, then its eye. It slows and stops there; the eye turns
+     to look at the light; it blinks once; and it goes on its way. The light goes to wait where the eye will stop. */
+  startWhale(go = 9.0) {
+    const V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
+    const F = V.norm(V.add(cam.right, V.mul(cam.fwd, 0.18))), Z = V.norm(V.cross(F, [0, 1, 0])), U = V.cross(Z, F);
+    const E = V.add(cam.eye, V.add(V.mul(cam.fwd, 0.55), V.add(V.mul(cam.right, 0.09), V.mul(cam.up, -0.02))));
+    this.pass = { t0: this.t, E, F, go };
+    this.whale.F = F;
+    this.hero.hold = V.add(E, V.add(V.mul(F, 0.07), V.add(V.mul(U, 0.05), V.mul(Z, 0.20))));
+    this.whaleCall();
+  },
+  whalePassUpdate() {
+    const P = this.pass; if (!P) return;
+    const s = this.t - P.t0, W = this.whale;
+    W.look = YL.smooth(4.6, 5.6, s) * (1 - YL.smooth(P.go, P.go + 1.2, s));
+    W.blink = Math.max(0, 1 - Math.abs(s - 7.2) / 0.16);
+    if (s > P.go + 0.5) this.hero.hold = null;
+  },
+  whaleSlide() {
+    const P = this.pass, s = this.t - P.t0, u = Math.min(1, s / 4.8);
+    // gliding in, slowing to a stop; later, gathering way again
+    return -1.15 * Math.pow(1 - u, 2.2) + (s > P.go ? 0.05 * Math.pow(s - P.go, 2) : 0);
+  },
+  // the whale, close: a long low call, and the hush of the water it pushes aside
+  whaleCall() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.1;
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(70, t0); o.frequency.linearRampToValueAtTime(96, t0 + 2.2); o.frequency.exponentialRampToValueAtTime(58, t0 + 5.5);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.setValueAtTime(260, t0); bp.frequency.linearRampToValueAtTime(420, t0 + 2.4); bp.frequency.linearRampToValueAtTime(180, t0 + 5.5); bp.Q.value = 5;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.09, t0 + 1.2); g.gain.setValueAtTime(0.09, t0 + 3.6); g.gain.linearRampToValueAtTime(0, t0 + 5.6);
+    o.connect(bp); bp.connect(lp); lp.connect(g); g.connect(S.wet); g.connect(S.bus);
+    o.start(t0); o.stop(t0 + 5.8);
+    const sr = ctx.sampleRate, n = Math.floor(sr * 6), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    let b = 0; for (let i = 0; i < n; i++) { b += ((Math.random() * 2 - 1) - b) * 0.02; d[i] = b * 4; }
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const wl = ctx.createBiquadFilter(); wl.type = 'lowpass'; wl.frequency.setValueAtTime(90, t0); wl.frequency.linearRampToValueAtTime(260, t0 + 3); wl.frequency.linearRampToValueAtTime(80, t0 + 6);
+    const wg = ctx.createGain(); wg.gain.setValueAtTime(0, t0); wg.gain.linearRampToValueAtTime(0.5, t0 + 2.5); wg.gain.linearRampToValueAtTime(0, t0 + 6);
+    src.connect(wl); wl.connect(wg); wg.connect(S.bus); src.start(t0);
+  },
+  // the small lives take fright all at once (something big is coming)
+  scare() { const H = this.hero; H.speed = 2.5; H.moved = this.t; },
   // where the whale's eye is (how far along its pass), or null when it isn't near
   whalePos() {
     const W = this.whale, V = YL.V;
+    if (this.wtest) { W.F = this.wtest.F; return { eye: V.add(this.wtest.E, V.mul(W.F, this.wtest.x)), x: this.wtest.x }; }
+    if (this.pass) { const x = this.whaleSlide(); return x < 2.0 ? { eye: V.add(this.pass.E, V.mul(this.pass.F, x)), x } : null; }
     // (its pass is still being framed — see M4b; for now it only appears when asked for with &whale=)
     if (W.at === null) return null;
     const x = W.at;
     if (x < -6 || x > 18) return null;
     return { eye: V.add(W.E0, V.mul(W.F, x)), x };
+  },
+  // where the whale's eye looks, in its own frame: out and a little forward; or, as much as it can, at the light
+  whaleGaze(wp, L) {
+    const V = YL.V, F = this.whale.F, Z = V.norm(V.cross(F, [0, 1, 0])), U = V.cross(Z, F);
+    const ball = V.add(wp.eye, V.mul(Z, -0.036)), l = V.sub(L, ball);
+    const toL = V.norm([V.dot(l, F), V.dot(l, U), V.dot(l, Z)]), rest = V.norm([0.10, -0.03, 1]);
+    // it can turn about 30° from rest
+    const c = Math.max(-1, Math.min(1, V.dot(toL, rest))), ang = Math.acos(c), lim = Math.min(ang, 0.52);
+    const k = this.whale.look * (ang > 1e-4 ? lim / ang : 0);
+    return [...V.norm(V.add(V.mul(rest, 1 - k), V.mul(toL, k))), 0];
   },
   targets(w, h) {
     const k = MOBILE ? 0.7 : 1.0, sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
@@ -7838,6 +8641,13 @@ W.deepsea = {
   // the eye: drifting, weightless, turning a little
   camera(aspect, t, still) {
     const V = YL.V;
+    if (this.wtest) {
+      // (&wz=k: k× closer in on the eye, for looking at detail)
+      const z = +(YL.QS.get('wz') || 1), ty = Math.tan(25 * Math.PI / 180) / z;
+      const wa = YL.QS.has('wa') ? YL.QS.get('wa').split(',').map(Number) : [0, 0];
+      const at = z > 1 ? V.norm(V.add(this.whalePos().eye, [wa[0], wa[1], 0])) : [0, 0, -1], right = V.norm(V.cross(at, [0, 1, 0]));
+      return { eye: [0, 0, 0], fwd: at, right, up: V.cross(right, at), tan: [ty * aspect, ty] };
+    }
     const eye = still ? [0, 0, 0] : [0.04 * Math.sin(t * 0.07), 0.03 * Math.sin(t * 0.05 + 1), 0.03 * Math.sin(t * 0.06 + 2)];
     // at the end it rises toward the light above, and the eye goes up with it, looking up
     const r = Math.min(1, (this.rise || 0) * 1.8), re = r * r * (3 - 2 * r);
@@ -7860,6 +8670,8 @@ W.deepsea = {
   },
   // (world only) the light that will be 一粒光: a metre in front, drifting
   lightPos(t, cam) {
+    if (this.wtest) { const wp = this.whalePos(), F = this.whale.F, Z = YL.V.norm(YL.V.cross(F, [0, 1, 0])), U = YL.V.cross(Z, F), l = this.wtest.L;
+      return YL.V.add(wp.eye, YL.V.add(YL.V.mul(F, l[0]), YL.V.add(YL.V.mul(U, l[1]), YL.V.mul(Z, l[2])))); }
     if (this.hero.on) return this.hero.p.slice();
     const V = YL.V, still = YL.DBG.still;
     const off = still ? [0, -0.02, 0] : [0.07 * Math.sin(t * 0.21), -0.02 + 0.05 * Math.sin(t * 0.17 + 1), 0.05 * Math.sin(t * 0.13 + 2)];
@@ -7928,6 +8740,7 @@ W.deepsea = {
     this.sound(dt);
     this.heroUpdate(dt);
     this.lureUpdate(dt);
+    this.whalePassUpdate();
     this.creaturesUpdate(dt);
     for (const j of this.jel) {
       // the moon jelly swims in pulses: a quick contraction, a long slow relaxing; it rises a little after each
@@ -7963,7 +8776,8 @@ W.deepsea = {
     gl.uniform4fv(this.pSea.u.uJP, jp); gl.uniform4fv(this.pSea.u.uJU, ju); gl.uniform4fv(this.pSea.u.uJK, jk);
     const wp = this.wp = this.whalePos();
     U(this.pSea, 'uWh', wp ? [...wp.eye, 1] : [0, 0, 0, 0]);
-    U(this.pSea, 'uWhF', [...this.whale.F, 0.6 * Math.sin(this.t * 0.45)]);
+    U(this.pSea, 'uWhF', [...this.whale.F, this.whale.blink]);
+    U(this.pSea, 'uWhG', wp ? this.whaleGaze(wp, L) : [0, 0, 1, 0]);
     U(this.pSea, 'uSurf', [this.surfY ?? 99, this.surf || 0, this.tea || 0, 0]);
     const ff = this.fishFrame();
     U(this.pSea, 'uFishP', [...ff.c, Lr.shown]); U(this.pSea, 'uFishF', [...ff.F, Lr.gape]);
@@ -8011,6 +8825,805 @@ W.deepsea = {
 
 </script>
 <script>
+/* ---- src/worlds/ink.js ---- */
+/* ============================================================================
+   世界六 · 水墨·烟雨山水
+   ----------------------------------------------------------------------------
+   深海的黑水化开，像一滴墨落进清水：翻涌、散成丝，再沉下来，沉成山。
+   · 只有墨和纸。没有一根硬线：每一块墨的边都是湿的——往纸里洇开，毛边顺着纸的纤维，边上积一圈深的墨。
+   · 墨分五色：远山淡墨一抹，中景的山用中墨，近处的石壁浓墨、焦墨，干笔擦出飞白；石上一棵老松斜出水面。
+   · 大片留白就是水和云：雾一层一层地流过山腰，细雨斜斜地下。
+   · 笔一笔一笔地落下来：远山先洇开，然后中景，然后石壁和松，最后是水上一叶小舟。
+   · 一粒光在这里是一点朱砂：整张画里唯一暖的颜色，落在小舟上，水里一道淡淡的倒影。
+   · 走的时候天边破晓：颜色从水墨里渗出来——天边的粉、水的青、山的绿——下一个世界从颜色里炸开。
+   渲染：一个全屏着色器，直接出最终颜色。
+   ========================================================================== */
+(() => {
+'use strict';
+const YL = window.YL;
+const W = (YL.worlds = YL.worlds || {});
+
+const FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime, uFade, uBloom, uDawn, uAspect;
+uniform vec4 uGrow;          // how far each layer of ink has spread: far peaks, middle range, the near cliff and its pine, the boat
+uniform vec4 uHero;          // the vermilion light: where (painting coords), how bright, how big
+uniform vec2 uPan;
+uniform sampler2D uBrush;    // the painted layers: R the near cliff, G the old pine, B the reeds
+uniform sampler2D uSeal;
+out vec4 o;
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a * vnoise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return s / 0.96875; }
+float sat(float x){ return clamp(x, 0.0, 1.0); }
+// ---- wet ink. sd: how far inside the shape (painting units, + inside). The edge bleeds into the paper along its
+// fibres; the ink pools at the edge as it dries (a darker rim); the wash inside is uneven
+float wash(vec2 p, float sd, float soft, float seed){
+  float feather = 0.010 * (fbm(p * 38.0 + seed) - 0.5) + 0.004 * (vnoise(vec2(p.x * 900.0, p.y * 140.0) + seed) - 0.5);
+  float s = sd + feather * soft;
+  float cov = smoothstep(-0.0035 * soft, 0.0035 * soft, s);
+  float rim = exp(-max(s, 0.0) / (0.006 * soft)) * cov;
+  float body = 0.78 + 0.35 * fbm(p * 7.0 + seed * 3.0);
+  return cov * (body + 0.45 * rim);
+}
+// a spreading front: the ink reaches from where the brush touched (seed) out to r; at the front it is wettest
+float spread(vec2 p, vec2 seed, float r, float seedN){
+  float d = length((p - seed) * vec2(0.8, 1.0)) + 0.10 * (fbm(p * 5.0 + seedN) - 0.5);
+  return smoothstep(r, r - 0.04, d);
+}
+// a mountain's outline: peaks with rounded tops (height h at x = c, flanks falling at slope k)
+float peak(float x, float c, float h, float k){ float d = abs(x - c); return h - k * d * d / (d + 0.03); }
+// dry brush (飞白): streaks where the hairs of a nearly dry brush skipped the paper, running along dir
+float dry(vec2 p, vec2 dir, float amt){
+  vec2 q = vec2(dot(p, dir), dot(p, vec2(-dir.y, dir.x)));
+  float st = vnoise(vec2(q.x * 9.0, q.y * 260.0)) * 0.6 + vnoise(vec2(q.x * 30.0, q.y * 700.0)) * 0.4;
+  return 1.0 - amt * smoothstep(0.45, 0.75, st);
+}
+float sdSeg(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = sat(dot(pa, ba) / dot(ba, ba)); return length(pa - ba * h); }
+// the painting: how much ink lies at p (and how warm a grey it is)
+float ink(vec2 p, out float tone){
+  tone = 0.0;
+  float t = uTime, D = 0.0;
+  // ---- the far peaks: pale, slender, rising out of the mist
+  {
+    float x = p.x, n = 0.012 * (fbm(vec2(x * 9.0, 1.0)) - 0.5);
+    float r = max(max(peak(x, 0.62, 0.92, 2.6), peak(x, 0.76, 0.80, 3.0)), max(peak(x, 0.47, 0.71, 3.2), max(peak(x, 0.93, 0.68, 2.8), peak(x, 1.10, 0.60, 2.4))));
+    float sd = r + n - p.y;
+    float base = smoothstep(0.38, 0.62, p.y);
+    float d = wash(p, sd, 1.6, 1.0) * base * 0.16;
+    // a few soft vertical strokes down the faces (the far peaks' texture: barely there)
+    d *= 0.85 + 0.3 * vnoise(vec2(p.x * 60.0, p.y * 6.0));
+    D += d * spread(p, vec2(0.62, 0.80), uGrow.x * 1.1, 1.0);
+  }
+  // ---- the middle range on the right: a long ridge, hemp-fibre strokes down its slopes, moss dots along its top
+  {
+    float x = p.x;
+    float r = max(peak(x, 1.25, 0.63, 1.2), max(peak(x, 1.52, 0.55, 1.5), peak(x, 1.05, 0.47, 2.0))) + 0.015 * (fbm(vec2(x * 7.0, 3.0)) - 0.5);
+    float sd = r - p.y;
+    float base = smoothstep(0.33, 0.50, p.y);
+    float d = wash(p, sd, 1.2, 7.0) * base * 0.32;
+    // 披麻皴: long, slightly wavy strokes running down the slopes
+    float f = vnoise(vec2((x + 0.25 * p.y) * 95.0, p.y * 9.0)) * 0.7 + vnoise(vec2((x - 0.3 * p.y) * 160.0, p.y * 14.0)) * 0.3;
+    d *= 0.70 + 0.55 * smoothstep(0.55, 0.85, f) * smoothstep(0.0, 0.05, sd);
+    // 点苔: dark dots of moss along the ridge
+    vec2 g = p * vec2(70.0, 70.0); vec2 gi = floor(g);
+    float h = hash12(gi);
+    float dot_ = smoothstep(0.30, 0.12, length(fract(g) - 0.5 - 0.2 * (vec2(hash12(gi + 3.0), hash12(gi + 5.0)) - 0.5))) * step(0.72, h) * smoothstep(0.035, 0.0, abs(sd - 0.012));
+    d = max(d, dot_ * 0.75 * base);
+    D = max(D, d * spread(p, vec2(1.30, 0.58), uGrow.y * 1.2, 7.0));
+  }
+  // ---- the far shore: a low pale line of land across the water, a few dots of trees
+  {
+    float y0 = 0.305 + 0.012 * (fbm(vec2(p.x * 4.0, 9.0)) - 0.5) + 0.02 * smoothstep(0.9, 1.4, p.x);
+    float sd = min(y0 + 0.018 * fbm(vec2(p.x * 25.0, 2.0)) - p.y, p.y - 0.292);
+    float d = wash(p, sd, 0.8, 11.0) * 0.20 * smoothstep(0.45, 0.6, p.x) * smoothstep(1.75, 1.55, p.x);
+    D = max(D, d * spread(p, vec2(1.0, 0.30), uGrow.y * 1.6, 11.0));
+  }
+  // ---- the near things, painted with the brush: wet. Each stroke bleeds a little into the paper round it, and its ink
+  // pools at its edges as it dries (darker there than in its middle)
+  {
+    vec2 uv = vec2(p.x / 1.7778, 1.0 - p.y);
+    vec3 d0 = texture(uBrush, uv).rgb, d1 = textureLod(uBrush, uv, 2.5).rgb, d2 = textureLod(uBrush, uv, 4.5).rgb;
+    vec3 wet = d0 + 0.45 * max(d1 - d0, 0.0) + 0.55 * max(d0 - d2, 0.0) * d0;
+    wet *= 0.85 + 0.3 * vnoise(p * 240.0);
+    float g0 = spread(p, vec2(0.12, 0.32), uGrow.z * 1.05, 21.0), g1 = spread(p, vec2(0.28, 0.46), max(uGrow.z - 0.35, 0.0) * 1.3, 23.0), g2 = spread(p, vec2(1.60, 0.0), uGrow.w * 0.9, 27.0);
+    D = max(D, wet.r * 0.92 * g0);
+    D = max(D, wet.g * 0.90 * g1);
+    D = max(D, wet.b * 0.85 * g2);
+  }
+  // ---- the water: left white; a few short pale strokes for ripples
+  {
+    float yy = p.y;
+    float rip = smoothstep(0.0025, 0.0, abs(fract(yy * 38.0 + 0.3 * vnoise(vec2(p.x * 3.0, floor(yy * 38.0)))) - 0.5) / 38.0) * smoothstep(0.58, 0.85, vnoise(vec2(p.x * 9.0 - t * 0.05, floor(yy * 38.0) * 3.1)));
+    D = max(D, rip * 0.12 * smoothstep(0.29, 0.25, yy) * smoothstep(0.55, 0.65, p.x) * uGrow.w);
+  }
+  // ---- a skiff on the water: a dark sliver of a hull, a fisherman in a broad hat, a pole
+  {
+    vec2 bc = vec2(1.08 + 0.004 * sin(t * 0.7), 0.205 + 0.002 * sin(t * 1.3));
+    vec2 q = p - bc;
+    float hull = smoothstep(0.004, 0.0015, abs(q.y + 0.0015 - 0.35 * q.x * q.x / 0.04) - 0.0035 * (1.0 - q.x * q.x / 0.0016)) * step(abs(q.x), 0.040);
+    float man = smoothstep(0.0045, 0.002, length((q - vec2(0.012, 0.012)) * vec2(1.6, 1.0)) - 0.005);
+    float hat = smoothstep(0.003, 0.001, abs(q.y - 0.020 + 0.25 * abs(q.x - 0.012)) - 0.0012) * step(abs(q.x - 0.012), 0.011);
+    float pole = smoothstep(0.0018, 0.0007, sdSeg(q, vec2(0.016, 0.014), vec2(0.045, -0.025)));
+    float boat = max(max(hull, man), max(hat, pole)) * 0.85;
+    D = max(D, boat * smoothstep(0.5, 1.0, uGrow.w));
+  }
+  // ---- mist: bands of it flowing across the mountains' waists; the ink there thins to nothing
+  {
+    float m1 = smoothstep(0.35, 0.7, fbm(vec2(p.x * 2.2 - t * 0.018, p.y * 7.0 + 1.0))) * exp(-pow((p.y - 0.47) / 0.07, 2.0));
+    float m2 = smoothstep(0.45, 0.75, fbm(vec2(p.x * 1.6 - t * 0.011 + 4.0, p.y * 5.0))) * exp(-pow((p.y - 0.68) / 0.09, 2.0));
+    D *= 1.0 - 0.9 * max(m1, m2 * 0.8);
+  }
+  // ---- 烟雨: a fine slanting drizzle, pale
+  {
+    vec2 r = vec2(p.x + p.y * 0.25, p.y);
+    vec2 g = vec2(r.x * 160.0, r.y * 6.0 + t * 2.2);
+    vec2 gi = floor(g);
+    float h = hash12(gi);
+    float l = smoothstep(0.08, 0.0, abs(fract(g.x) - 0.5) - 0.0) * step(0.93, h) * smoothstep(0.0, 0.4, fract(g.y + h * 7.0)) * smoothstep(1.0, 0.6, fract(g.y + h * 7.0));
+    D = max(D, l * 0.07);
+  }
+  tone = 0.5;
+  return D;
+}
+void main(){
+  vec2 fr = gl_FragCoord.xy / uRes.y;
+  // the painting is composed for a wide frame; on a narrow one, keep its middle
+  vec2 p = vec2(fr.x + (1.7778 - uAspect) * 0.5, fr.y) + uPan;
+  float tone;
+  float D = ink(p, tone);
+  // ---- out of the deep: the black water breaking up into ink, swirling, thinning to threads, settling
+  if (uBloom > 0.0){
+    float t = uTime;
+    vec2 w = p + 0.35 * vec2(fbm(p * 1.3 + vec2(t * 0.11, 0.0)), fbm(p * 1.3 + vec2(5.2, -t * 0.09))) - 0.17;
+    w += 0.12 * vec2(fbm(w * 3.1 - t * 0.07), fbm(w * 3.1 + 7.0 + t * 0.05)) - 0.06;
+    float n = fbm(w * 2.4);
+    // where the ink thins it doesn't fade evenly: it pulls out into fine curling threads, as ink does in still water
+    vec2 w2 = w * 4.0 + 0.6 * vec2(fbm(w * 6.0 + t * 0.08), fbm(w * 6.0 - 3.0 - t * 0.06));
+    float rid = 1.0 - abs(2.0 * fbm(w2) - 1.0);
+    float threads = pow(rid, 7.0);
+    float th = mix(1.05, -0.15, uBloom);
+    float mass = smoothstep(th - 0.06, th + 0.10, n);
+    float near_ = smoothstep(th - 0.38, th - 0.02, n);
+    float plume = max(mass * (0.88 + 0.12 * rid), threads * near_ * 0.95);
+    D = mix(D, max(D, plume), smoothstep(0.0, 0.25, uBloom));
+  }
+  // ---- paper and ink
+  vec2 pp = gl_FragCoord.xy / uRes.y;
+  float fib = 0.97 + 0.03 * vnoise(pp * vec2(900.0, 120.0)) - 0.025 * smoothstep(0.85, 1.0, vnoise(pp * vec2(80.0, 1500.0)));
+  vec3 paper = vec3(0.925, 0.900, 0.845) * fib * (0.97 + 0.04 * fbm(pp * 3.0));
+  vec3 inkC = vec3(0.075, 0.070, 0.068);
+  float gran = 0.92 + 0.16 * vnoise(pp * 520.0);
+  vec3 c = mix(paper, inkC, sat(D * gran));
+  // ---- dawn: colour seeps into it — rose along the sky, a green-blue into the water and the hills
+  if (uDawn > 0.0){
+    float sky = smoothstep(0.55, 1.0, p.y) * (1.0 - sat(D * 2.0));
+    vec3 rose = vec3(0.98, 0.76, 0.66), jade = vec3(0.55, 0.72, 0.66), gold = vec3(1.0, 0.86, 0.55);
+    vec3 tint = mix(jade, rose, smoothstep(0.35, 0.9, p.y));
+    tint = mix(tint, gold, exp(-pow((p.y - 0.80) / 0.08, 2.0)) * 0.6);
+    float seep = uDawn * (0.6 + 0.4 * fbm(p * 3.0 + uTime * 0.05));
+    c = mix(c, c * tint * 1.08, sat(seep * (0.5 + 0.5 * sky)));
+    c = mix(c, gold * 1.02, sat((uDawn - 0.7) / 0.3) * sky * 0.6);
+  }
+  // ---- 一粒光: a point of vermilion, the only warm thing; its reflection a soft streak in the water
+  {
+    vec2 hp = uHero.xy, d = p - hp;
+    float r = uHero.w;
+    float core = exp(-dot(d, d) / (r * r)), halo = exp(-length(d) / (r * 5.0));
+    float refl = exp(-pow(d.x / (r * 1.2), 2.0)) * smoothstep(0.0, -0.01, d.y) * exp(d.y / 0.05) * (0.6 + 0.4 * sin(p.y * 220.0 + uTime * 3.0)) * step(hp.y, 0.27);
+    vec3 cin = vec3(0.90, 0.20, 0.08);
+    c = mix(c, cin, sat(uHero.z * (core * 0.95 + halo * 0.25 + refl * 0.35)));
+    c += vec3(1.0, 0.55, 0.25) * uHero.z * core * 0.35;
+  }
+  // the seal 「光」, red, the character left white in it (白文)
+  {
+    vec2 sp = (vec2(gl_FragCoord.x / uRes.y - (uAspect - 0.125), gl_FragCoord.y / uRes.y - 0.045)) / 0.05;
+    if (sp.x > 0.0 && sp.y > 0.0 && sp.x < 1.0 && sp.y < 1.0){
+      float ch = texture(uSeal, vec2(sp.x, 1.0 - sp.y)).r;
+      float worn = 0.75 + 0.25 * vnoise(sp * 40.0);
+      c = mix(c, vec3(0.70, 0.13, 0.09), (1.0 - ch) * worn * 0.9 * smoothstep(0.85, 1.0, uGrow.w));
+    }
+  }
+  vec2 uv = gl_FragCoord.xy / uRes - 0.5;
+  c *= 1.0 - 0.18 * dot(uv, uv) * 1.6;
+  c += (hash12(gl_FragCoord.xy + fract(uTime * 7.13) * 917.0) - 0.5) * 0.012;
+  o = vec4(c * uFade, 1.0);
+}`;
+/* ---------------------------------------------------------------- the brush
+   The near things are painted, not computed: strokes of a soft brush whose hairs each carry their own ink, and run dry
+   one by one (the outer ones first), skipping the paper where they do (飞白). They are laid into a canvas the size of the
+   painting, each layer in its own channel, so each can spread into the paper at its own moment. */
+const PW = 2048, PH = 1152, PS = 1152;
+function paint(rand) {
+  const cv = document.createElement('canvas'); cv.width = PW; cv.height = PH;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, PW, PH);
+  g.globalCompositeOperation = 'lighter'; g.lineCap = 'round'; g.lineJoin = 'round';
+  const X = x => x * PS, Y = y => (1 - y) * PS;
+  // a smooth run through points [x, y, width] (painting units)
+  const run = (pts, per = 10) => {
+    const out = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, pts.length - 1)];
+      for (let k = 0; k < per; k++) { const t = k / per, t2 = t * t, t3 = t2 * t; out.push([0, 1, 2].map(j => 0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3))); }
+    }
+    out.push(pts[pts.length - 1].slice()); return out;
+  };
+  // one stroke of the brush
+  function stroke(pts, { ch = 0, ink = 0.8, hairs = 24, dry = 0.3, taper = [0.12, 0.3], per = 10 } = {}) {
+    const P = run(pts, per), n = P.length, col = ['255,0,0', '0,255,0', '0,0,255'][ch];
+    const wMax = Math.max(...P.map(q => q[2]));
+    for (let h = 0; h < hairs; h++) {
+      const off = ((h + 0.5) / hairs * 2 - 1) * (0.85 + 0.3 * rand()), load = ink * (0.45 + 0.55 * rand());
+      const runOut = 1 - dry * (0.2 + 0.8 * rand()) * (0.3 + 0.7 * Math.abs(off)), seed = rand() * 100;
+      g.strokeStyle = `rgba(${col},${load})`; g.lineWidth = Math.max(0.8, wMax * PS / hairs * 1.7);
+      let open = false;
+      for (let i = 0; i < n; i++) {
+        const u = i / (n - 1), q = P[i], a = P[Math.max(i - 1, 0)], b = P[Math.min(i + 1, n - 1)];
+        const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1e-6;
+        const tw = Math.max(0.0, Math.min(1, u / taper[0], (1 - u) / taper[1]));
+        const o = off * q[2] * 0.5 * (0.35 + 0.65 * tw);
+        const x = q[0] - dy / L * o, y = q[1] + dx / L * o;
+        const lifted = Math.abs(off) > tw * 1.15 + 0.08;                     // as the brush lifts, its outer hairs leave the paper
+        const skip = lifted || u > runOut && (Math.sin(u * 41 + seed) + Math.sin(u * 97 + seed * 2.3)) * 0.5 > 1 - 1.8 * Math.min(1, (u - runOut) / 0.25);
+        if (skip) { if (open) { g.stroke(); open = false; } continue; }
+        if (!open) { g.beginPath(); g.moveTo(X(x), Y(y)); open = true; } else g.lineTo(X(x), Y(y));
+      }
+      if (open) g.stroke();
+    }
+  }
+  const dot = (x, y, r, ch, ink) => { g.fillStyle = `rgba(${['255,0,0', '0,255,0', '0,0,255'][ch]},${ink})`; g.beginPath(); g.ellipse(X(x), Y(y), r * PS * (0.8 + 0.4 * rand()), r * PS * (0.6 + 0.4 * rand()), rand() * 3, 0, 6.283); g.fill(); };
+  // ---- the near cliff. First a pale uneven wash for its mass; then the line of its top, laid with the side of a loaded
+  //      brush; a few drier lines for the facets of the rock; straight wedges dragged down its face as the brush dries
+  //      (斧劈皴), and much of it left white; moss dots along the top
+  const C = [[-0.02, 0.495, 0.026], [0.07, 0.525, 0.034], [0.16, 0.50, 0.03], [0.25, 0.44, 0.036], [0.34, 0.345, 0.03], [0.44, 0.235, 0.034], [0.53, 0.125, 0.03], [0.60, 0.02, 0.026]];
+  const CP = run(C, 20), along = (u) => CP[Math.min(CP.length - 1, Math.floor(u * (CP.length - 1)))];
+  {
+    // the wash: heaviest under the line of the top, fading as it goes down into the water
+    const gr = g.createLinearGradient(X(0.25), Y(0.48), X(0.10), Y(0.0));
+    gr.addColorStop(0, 'rgba(255,0,0,0.42)'); gr.addColorStop(0.35, 'rgba(255,0,0,0.22)'); gr.addColorStop(1, 'rgba(255,0,0,0.06)');
+    g.fillStyle = gr; g.beginPath(); CP.forEach((q, i) => i ? g.lineTo(X(q[0]), Y(q[1] - 0.004)) : g.moveTo(X(q[0]), Y(q[1] - 0.004))); g.lineTo(X(-0.05), Y(-0.05)); g.closePath(); g.fill();
+  }
+  stroke(C, { ch: 0, ink: 0.95, hairs: 30, dry: 0.45, per: 14, taper: [0.03, 0.08] });
+  const facet = (pts) => stroke(pts, { ch: 0, ink: 0.75, hairs: 10, dry: 0.6, taper: [0.08, 0.5] });
+  facet([[0.13, 0.49, 0.012], [0.15, 0.40, 0.014], [0.13, 0.31, 0.010]]);
+  facet([[0.30, 0.385, 0.012], [0.27, 0.29, 0.012], [0.28, 0.20, 0.008]]);
+  // rubbing (擦): a broad, nearly dry brush dragged down the rock, leaving grain rather than shapes
+  const rubs = [[0.02, 0.49, 0.22], [0.07, 0.50, 0.26], [0.16, 0.47, 0.24], [0.21, 0.44, 0.20], [0.29, 0.37, 0.20], [0.36, 0.30, 0.18], [0.44, 0.21, 0.15], [0.50, 0.13, 0.11], [0.08, 0.30, 0.20], [0.20, 0.27, 0.18], [0.03, 0.20, 0.16]];
+  for (const [x, y, L] of rubs) {
+    const dx = 0.15 + 0.45 * rand(), n = Math.hypot(dx, 1), w = 0.035 + 0.05 * rand(), bend = 0.03 * (rand() - 0.5), ll = L * (0.6 + 0.6 * rand());
+    stroke([[x, y - 0.006, w], [x + dx / n * ll * 0.5 + bend, y - ll * 0.5 / n, w * 1.2], [x + dx / n * ll, y - ll / n, w * 0.7]], { ch: 0, ink: 0.22 + 0.3 * rand(), hairs: 26, dry: 0.85 + 0.12 * rand(), taper: [0.04 + 0.1 * rand(), 0.3 + 0.4 * rand()], per: 8 });
+  }
+  for (let k = 0; k < 26; k++) { const q = along(0.02 + 0.9 * rand()); dot(q[0] + 0.01 * (rand() - 0.5), q[1] + 0.006 + 0.006 * rand(), 0.004 + 0.004 * rand(), 0, 0.9); }
+  for (let k = 0; k < 9; k++) { const q = along(0.05 + 0.85 * rand()); for (let j = 0; j < 4; j++) { const a = 1.2 + 0.7 * (rand() - 0.5) + (j - 1.5) * 0.25; stroke([[q[0], q[1] + 0.004, 0.003], [q[0] + Math.cos(a) * 0.012, q[1] + Math.sin(a) * 0.022, 0.002], [q[0] + Math.cos(a) * 0.02, q[1] + Math.sin(a) * 0.035, 0.001]], { ch: 0, ink: 0.8, hairs: 3, dry: 0.1 }); } }
+  // ---- the old pine, rooted in the cliff top, its trunk reaching out over the water: two dry lines for the trunk with
+  //      a pale wash between and bark scales; its needles in flat clusters of short strokes fanning upward
+  const T = [[0.245, 0.43, 0], [0.265, 0.50, 0], [0.305, 0.565, 0], [0.38, 0.595, 0], [0.47, 0.588, 0], [0.56, 0.566, 0], [0.64, 0.548, 0]];
+  const TP = run(T, 12), wid = (u) => 0.016 * (1 - 0.65 * u);
+  const side = (sgn) => TP.map((q, i) => { const a = TP[Math.max(i - 1, 0)], b = TP[Math.min(i + 1, TP.length - 1)], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1e-6, u = i / (TP.length - 1), w = wid(u) * (1 + 0.15 * Math.sin(i * 1.7)); return [q[0] - dy / L * w * 0.5 * sgn, q[1] + dx / L * w * 0.5 * sgn, 0.006]; });
+  stroke(TP.map((q, i) => [q[0], q[1], wid(i / (TP.length - 1))]), { ch: 1, ink: 0.28, hairs: 14, dry: 0.3, per: 2 });
+  stroke(side(1), { ch: 1, ink: 0.95, hairs: 6, dry: 0.5, per: 2 }); stroke(side(-1), { ch: 1, ink: 0.85, hairs: 6, dry: 0.6, per: 2 });
+  for (let i = 5; i < TP.length - 8; i += 4 + Math.floor(rand() * 4)) { const q = TP[i]; dot(q[0] + 0.003 * (rand() - 0.5), q[1] + 0.003 * (rand() - 0.5), 0.0018, 1, 0.7); }
+  const branch = (pts) => stroke(pts, { ch: 1, ink: 0.85, hairs: 5, dry: 0.4, taper: [0.05, 0.6] });
+  branch([[0.33, 0.578, 0.008], [0.305, 0.63, 0.006], [0.275, 0.655, 0.004]]);
+  branch([[0.47, 0.588, 0.007], [0.485, 0.625, 0.005], [0.50, 0.645, 0.003]]);
+  branch([[0.56, 0.566, 0.006], [0.595, 0.59, 0.005], [0.625, 0.61, 0.003]]);
+  branch([[0.63, 0.55, 0.006], [0.67, 0.53, 0.005], [0.70, 0.50, 0.003]]);
+  branch([[0.40, 0.594, 0.006], [0.42, 0.615, 0.004]]);
+  const needles = (cx, cy, s) => {
+    for (let f = 0; f < 3; f++) {
+      const ox = cx + (f - 1) * 0.018 * s + 0.004 * (rand() - 0.5), oy = cy + 0.004 * (rand() - 0.5) - Math.abs(f - 1) * 0.004;
+      for (let k = 0; k < 15; k++) {
+        const a = Math.PI * (0.08 + 0.84 * k / 14) + 0.06 * (rand() - 0.5), L = (0.020 + 0.008 * rand()) * s;
+        const ca = Math.cos(a), sa = Math.sin(a) * 0.75;
+        stroke([[ox + ca * 0.003, oy + sa * 0.003, 0.0024], [ox + ca * L * 0.6, oy + sa * L * 0.6, 0.0020], [ox + ca * L, oy + sa * L, 0.0008]], { ch: 1, ink: 0.75 + 0.2 * rand(), hairs: 2, dry: 0.15, taper: [0.02, 0.6], per: 4 });
+      }
+    }
+  };
+  [[0.27, 0.66, 1.1], [0.32, 0.632, 1.0], [0.40, 0.622, 0.9], [0.50, 0.648, 1.1], [0.455, 0.605, 0.8], [0.555, 0.60, 0.9], [0.625, 0.615, 1.0], [0.66, 0.562, 0.8], [0.705, 0.502, 0.9]].forEach(([x, y, s]) => needles(x, y, s));
+  // ---- reeds in the near water, bottom right: long blades bending in the wind, two plumes
+  for (let k = 0; k < 9; k++) {
+    const x0 = 1.46 + k * 0.028 + 0.02 * rand(), h = 0.16 + 0.16 * rand(), lean = 0.04 + 0.06 * rand() * (k % 3 === 0 ? -1 : 1);
+    stroke([[x0, -0.01, 0.009], [x0 + lean * 0.3, h * 0.5, 0.008], [x0 + lean * 0.8, h * 0.85, 0.005], [x0 + lean * 1.4, h * 0.95, 0.001]], { ch: 2, ink: 0.55 + 0.3 * rand(), hairs: 6, dry: 0.3, taper: [0.02, 0.5] });
+  }
+  // two reeds in flower: a tall stem each, its plume nodding
+  for (const [x0, h, lean] of [[1.53, 0.33, 0.05], [1.60, 0.29, 0.03]]) {
+    const tip = [x0 + lean, h];
+    stroke([[x0, -0.01, 0.004], [x0 + lean * 0.4, h * 0.55, 0.0035], [tip[0], tip[1], 0.003]], { ch: 2, ink: 0.7, hairs: 3, dry: 0.2, taper: [0.02, 0.1] });
+    for (let j = 0; j < 9; j++) { const a = -0.35 - 0.12 * j + 0.08 * rand(); stroke([[tip[0], tip[1], 0.004], [tip[0] + Math.cos(a) * 0.018, tip[1] + Math.sin(a) * 0.012 - 0.003 * j, 0.003], [tip[0] + Math.cos(a) * 0.032, tip[1] + Math.sin(a) * 0.02 - 0.006 * j, 0.001]], { ch: 2, ink: 0.45, hairs: 3, dry: 0.4 }); }
+  }
+  return cv;
+}
+const VS_FULL = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+W.ink = {
+  ready: false, t: 0, fade: 1, vol: 1, bloom: 0, dawn: 0, grow: [1, 1, 1, 1],
+  init() {
+    if (this.ready) return;
+    const gl = YL.gl;
+    this.p = YL.makeProgram('ink', VS_FULL, FS); YL.checkProgram(this.p);
+    this.empty = gl.createVertexArray();
+    const up = (src, mips) => {
+      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, src);
+      if (mips) gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    const seed = 0x2f6b7d; let a = seed; const rand = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+    this.brush = up(paint(rand), true);
+    this.seal = up(YL.makeSeal ? YL.makeSeal() : document.createElement('canvas'), false);
+    if (!this.inited) this.t = +(YL.QS.get('wt') || 0);
+    this.inited = true;
+    this.ready = true;
+  },
+  // 一粒光: a point of vermilion, drifting down to the skiff, where it becomes its lantern
+  hero: { on: true, p: [1.09, 0.235], v: [0, 0], home: [1.094, 0.232], aim: null },
+  arrive(px, py) { this.hero.p = [px, py]; this.hero.v = [0, 0]; this.hero.on = true; },
+  // a point on the screen (ndc) in the painting's coordinates
+  toPaint(nx, ny, aspect) { return [(nx * 0.5 + 0.5) * aspect + (1.7778 - aspect) * 0.5 + (this.pan ? this.pan[0] : 0), ny * 0.5 + 0.5]; },
+  pointer(nx, ny) { this.hero.aim = this.toPaint(nx, ny, YL.canvasAspect()); this.hero.aimT = this.t; },
+  update(dt) {
+    this.t += dt;
+    const H = this.hero;
+    const tgt = H.aim && this.t - H.aimT < 3 ? H.aim : H.home;
+    for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.p[i]) * 3.0 * dt; H.v[i] *= Math.exp(-dt * 2.4); H.p[i] += H.v[i] * dt; }
+    this.pan = [0.05 * Math.min(1, this.t / 20), 0];
+    this.sound(dt);
+  },
+  render(target, aspect) {
+    const gl = YL.gl, U = YL.U, p = this.p;
+    const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(p.p);
+    const H = this.hero, br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
+    U(p, 'uRes', [w, h]); U(p, 'uTime', this.t); U(p, 'uFade', this.fade); U(p, 'uAspect', aspect);
+    U(p, 'uBloom', this.bloom); U(p, 'uDawn', this.dawn); U(p, 'uGrow', this.grow); U(p, 'uPan', this.pan || [0, 0]);
+    U(p, 'uHero', [H.p[0], H.p[1], H.on ? br : 0, 0.0045]);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.brush); gl.uniform1i(p.u.uBrush, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.seal); gl.uniform1i(p.u.uSeal, 1);
+    gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
+  },
+  /* ---- sound: rain on water, the lap of it; a guqin (古琴) plucked now and then, its notes sliding */
+  buildAudio(b) {
+    const { ctx, out, noiseBuffer, loop } = b;
+    const bus = ctx.createGain(); bus.gain.value = 0; bus.connect(out);
+    const pink = noiseBuffer(7.7, 'pink');
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 900;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200;
+    const rg = ctx.createGain(); rg.gain.value = 0.10;
+    loop(pink, 1.0, hp); hp.connect(lp); lp.connect(rg); rg.connect(bus);
+    // a long, soft room for the qin
+    const sr = ctx.sampleRate, n = Math.floor(sr * 4), ir = ctx.createBuffer(2, n, sr);
+    for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sr * 1.2)); }
+    const conv = ctx.createConvolver(); conv.buffer = ir; const wet = ctx.createGain(); wet.gain.value = 0.35; wet.connect(conv); conv.connect(bus);
+    this.snd = { ctx, bus, wet, next: 0.6, k: 0 };
+  },
+  // a plucked silk string: Karplus–Strong, low and woody, with the left hand sliding the pitch after the pluck
+  qin(f0, f1, when, gain = 0.25) {
+    const S = this.snd, ctx = S.ctx, sr = ctx.sampleRate, dur = 3.5, n = Math.floor(sr * dur);
+    const buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    let period = sr / f0, L = Math.ceil(sr / Math.min(f0, f1)) + 2;
+    const line = new Float32Array(L * 2); for (let i = 0; i < line.length; i++) line[i] = Math.random() * 2 - 1;
+    let w = 0, prev = 0;
+    for (let i = 0; i < n; i++) {
+      const u = Math.min(1, Math.max(0, (i / sr - 0.25) / 0.6)), f = f0 + (f1 - f0) * u * u * (3 - 2 * u);
+      period = sr / f;
+      const rp = w - period; const i0 = Math.floor(rp), fr = rp - i0;
+      const a = line[(i0 + line.length * 4) % line.length], b2 = line[(i0 + 1 + line.length * 4) % line.length];
+      const x = (a * (1 - fr) + b2 * fr);
+      const y = 0.5 * (x + prev) * 0.996; prev = x;
+      line[w % line.length] = y; w++;
+      d[i] = y * Math.min(1, i / 40);
+    }
+    const s = ctx.createBufferSource(); s.buffer = buf;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400;
+    const g = ctx.createGain(); g.gain.value = gain;
+    s.connect(lp); lp.connect(g); g.connect(S.bus); g.connect(S.wet); s.start(when);
+  },
+  sound(dt) {
+    if (!this.snd) { const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (b) this.buildAudio(b); else return; }
+    const S = this.snd, now = S.ctx.currentTime;
+    S.bus.gain.setTargetAtTime(this.fade * (this.vol ?? 1), now, 0.6);
+    if ((S.next -= dt) <= 0) {
+      // a phrase from the pentatonic scale: D E G A B (low), one or two notes, one of them slid
+      const sc = [146.83, 164.81, 196.0, 220.0, 246.94, 293.66];
+      const k = S.k++ % 4, a = sc[[2, 4, 3, 5][k]], b = sc[[3, 3, 2, 4][k]];
+      this.qin(a, k % 2 ? b : a, now + 0.05);
+      if (k % 2 === 0) this.qin(sc[[0, 1, 0, 2][k]], sc[[0, 1, 0, 2][k]], now + 0.75, 0.18);
+      S.next = 3.2 + Math.random() * 1.5;
+    }
+  },
+};
+})();
+
+</script>
+<script>
+/* ---- src/worlds/pond.js ---- */
+/* ============================================================================
+   世界七 · 印象派·清晨睡莲池
+   ----------------------------------------------------------------------------
+   天边破晓，颜色从水墨里渗出来、炸开：一片清晨的睡莲池。整张画全是笔触。
+   · 先在一张小图上「打底」：天光、雾里的远岸、水面倒映的天、太阳在水上铺开的一条碎金的路、
+     透视里一簇簇的睡莲叶、几朵粉白的花、从上方垂下来的柳条。每一处还记下笔该朝哪个方向走、多大。
+   · 再用一万多笔把它重新画出来：每一笔取它所在处的颜色，却不老实——明度、色相各自抖一点，
+     有的干脆用补色（绿叶里一笔紫，金光里一笔蓝）；笔有方向（水面横、柳条竖、叶子顺着叶形），
+     有鬃毛的纹路，有颜料的厚度：一侧受光，亮起一道。
+   · 笔触每秒换几次位置，整张画在呼吸。太阳那条路上的笔最碎、最亮，闪个不停。
+   · 一粒光在这里是水面上初升的第一点阳光。最后它停进一片叶子上的一颗露珠里；露珠滚落——落进那杯茶。
+   渲染：打底（小图，两张：颜色 + 笔的方向/大小）→ 底色（打底放大、模糊、压暗：笔触之间露出来的地方）→
+         两层笔触（先大后小，实例化）→ 画布纹理、暗角。
+   ========================================================================== */
+(() => {
+'use strict';
+const YL = window.YL;
+const W = (YL.worlds = YL.worlds || {});
+
+const NPAD = 64;
+const COMMON = `
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * vnoise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return s / 0.9375; }
+float sat(float x){ return clamp(x, 0.0, 1.0); }
+`;
+/* ---------------------------------------------------------------- the underpainting: what is where, its colour, which
+   way the brush should go and how big. Painting coords: x 0…aspect, y 0…1 (up). */
+const FS_BASE = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uAspect, uTime;
+uniform vec4 uPad[${NPAD}];  // lily pads: centre (x, y), radius across, seed (flower if > 0.75)
+uniform vec4 uSun;           // the sun: x, y (on the horizon), its brightness; the light on the water's x
+uniform vec4 uHero;          // 一粒光: x, y, brightness, -
+layout(location = 0) out vec4 oC;    // colour (sRGB-ish, 0…1)
+layout(location = 1) out vec4 oP;    // the brush: direction (angle / π, 0…1), size (0…1), kind (0 water, .33 pad, .66 flower, 1 willow), -
+` + COMMON + `
+const float HZ = 0.745;      // the far bank's foot: where the water starts
+void main(){
+  vec2 p = vec2(gl_FragCoord.x / uRes.y, gl_FragCoord.y / uRes.y) * vec2(1.0, 1.0);
+  p.x += (1.7778 - uAspect) * 0.5;
+  vec3 c; float ang = 0.0, size = 0.5, kind = 0.0;
+  float t = uTime;
+  vec2 S = uSun.xy;
+  if (p.y > HZ){
+    // ---- the sky over the far bank, low sun behind the mist: gold at the horizon going up into a rose, then a lilac blue
+    float h = (p.y - HZ) / (1.0 - HZ);
+    c = mix(vec3(1.0, 0.86, 0.58), vec3(0.98, 0.74, 0.70), smoothstep(0.0, 0.45, h));
+    c = mix(c, vec3(0.72, 0.74, 0.92), smoothstep(0.4, 1.0, h));
+    float sd = length((p - S) * vec2(1.0, 1.3));
+    c = mix(c, vec3(1.0, 0.97, 0.86), exp(-sd / 0.05) * uSun.z) + vec3(0.25, 0.15, 0.0) * exp(-sd / 0.18) * uSun.z;
+    // the far bank: a long low line of trees in the mist, blue-violet, softer the further it is
+    float crowns = 0.0; for (int k = 0; k < 7; k++){ float fk = float(k), cx = fk * 0.29 + 0.1 * sin(fk * 2.3), w = 0.10 + 0.06 * fract(fk * 0.618); crowns = max(crowns, (0.05 + 0.05 * fract(fk * 0.37)) * sqrt(sat(1.0 - pow((p.x - cx) / w, 2.0)))); }
+    float bank = HZ + 0.020 + crowns + 0.02 * fbm(vec2(p.x * 6.0, 1.0)) + 0.05 * smoothstep(1.3, 1.78, p.x);
+    float inB = smoothstep(bank + 0.006, bank - 0.006, p.y);
+    vec3 trees = mix(vec3(0.46, 0.46, 0.66), vec3(0.62, 0.58, 0.72), smoothstep(HZ, bank, p.y));
+    trees = mix(trees, vec3(0.86, 0.72, 0.62), exp(-abs(p.x - S.x) / 0.18) * 0.55);       // the sun's glow through them
+    c = mix(c, trees, inB * 0.85);
+    ang = inB > 0.5 ? vnoise(p * 25.0) : 0.05 * (vnoise(p * 10.0) - 0.5);
+    size = inB > 0.5 ? 0.35 : 0.9;
+    kind = inB > 0.5 ? 0.66 : 0.0;                                          // (dabs, not long strokes)
+  } else {
+    // ---- the water: the sky's colours upside down, deeper and bluer the nearer it is; long ripples
+    float z = (HZ - p.y) / HZ;                                      // 0 at the far bank … 1 at our feet
+    float rip = fbm(vec2(p.x * 6.0, p.y * 40.0 / (0.3 + z)) + vec2(t * 0.05, 0.0));
+    c = mix(vec3(0.95, 0.80, 0.66), vec3(0.62, 0.68, 0.86), smoothstep(0.0, 0.35, z));
+    c = mix(c, vec3(0.30, 0.42, 0.62), smoothstep(0.3, 1.0, z));
+    c *= 0.9 + 0.2 * rip;
+    // the trees' reflections: dark, broken verticals hanging down from the far bank
+    float refl = smoothstep(0.12, 0.0, z) * (0.6 + 0.4 * fbm(vec2(p.x * 3.0, 1.0)));
+    c = mix(c, vec3(0.40, 0.42, 0.58), refl * 0.6);
+    // the sun's road: a column of broken gold down the water from under the sun, widening as it comes
+    float road = exp(-pow((p.x - uSun.w) / (0.03 + 0.10 * z), 2.0)) * (0.35 + 0.65 * smoothstep(0.35, 0.8, vnoise(vec2(p.x * 40.0, p.y * 140.0 / (0.3 + z)) + t * 0.6)));
+    c = mix(c, vec3(1.0, 0.86, 0.50), sat(road * uSun.z * 1.1));
+    // 一粒光: the first light on the water: a hot point, ringed with glitter
+    vec2 hd = p - uHero.xy;
+    float hp = exp(-dot(hd * vec2(1.0, 2.5), hd * vec2(1.0, 2.5)) / 0.0006) * uHero.z;
+    c = mix(c, vec3(1.0, 0.95, 0.75), sat(hp * 1.2));
+    ang = 0.0 + 0.06 * (vnoise(p * 8.0) - 0.5);
+    size = 0.45 + 0.4 * z;
+    kind = 0.0;
+    // ---- lily pads, in perspective: flattened discs with the notch cut in; some carry a flower
+    for (int i = 0; i < ${NPAD}; i++){
+      vec4 P = uPad[i];
+      if (P.z <= 0.0) continue;
+      vec2 q = p - P.xy;
+      vec2 e = q / vec2(P.z, P.z * (0.25 + 0.35 * sat((HZ - P.y) / HZ)));
+      float r = length(e);
+      if (r > 1.25) continue;
+      float a = atan(e.y, e.x), notch = smoothstep(0.10, 0.0, abs(a - (P.w * 6.28 - 3.14)) * 0.5) ;
+      float pad = smoothstep(1.02, 0.95, r + 0.04 * sin(a * 5.0 + P.w * 20.0)) * (1.0 - notch * smoothstep(0.2, 0.5, r));
+      if (pad > 0.0){
+        vec3 g = mix(vec3(0.26, 0.48, 0.30), vec3(0.50, 0.66, 0.34), vnoise(P.xy * 40.0) * 0.7 + 0.3 * (e.x * 0.5 + 0.5));
+        g = mix(g, vec3(0.72, 0.62, 0.38), smoothstep(0.6, 1.0, r) * 0.35);                     // the rim catches the light
+        c = mix(c, g, pad);
+        ang = mix(ang, 0.12 * sin(a) + 0.04 * (vnoise(p * 50.0) - 0.5), pad);   // the brush lies along the leaf, bending a little round it
+        size = mix(size, 0.25 + 0.4 * P.z / 0.06, pad);
+        kind = mix(kind, 0.33, pad);
+        if (P.w > 0.72){
+          vec2 f = (q - vec2(0.0, P.z * 0.10)) / (P.z * 0.45);
+          float fl = smoothstep(1.0, 0.6, length(f * vec2(1.0, 1.4)));
+          vec3 pink = mix(vec3(0.98, 0.70, 0.78), vec3(1.0, 0.94, 0.92), smoothstep(-0.2, 0.6, f.y));
+          c = mix(c, pink, fl);
+          ang = mix(ang, 0.5, fl); size = mix(size, 0.18, fl); kind = mix(kind, 0.66, fl);
+        }
+      }
+    }
+  }
+  // ---- willow: long fronds hanging from the top right, swaying; yellow-green in the sun, dark where they overlap
+  {
+    float best = 0.0;
+    for (int k = 0; k < 16; k++){
+      float fk = float(k), x0 = 1.14 + fk * 0.042 + 0.02 * sin(fk * 3.1);
+      float len_ = 0.26 + 0.34 * fract(fk * 0.618) + 0.08 * sin(fk);
+      float yy = 1.02 - p.y;
+      if (yy < 0.0 || yy > len_) continue;
+      float sway = 0.015 * sin(t * 0.7 + fk) * yy / len_ + 0.03 * yy * yy;
+      float d = abs(p.x - x0 - sway);
+      float w = 0.020 * (1.0 - 0.5 * yy / len_);
+      best = max(best, smoothstep(w, w * 0.4, d) * smoothstep(len_, len_ - 0.05, yy));
+    }
+    if (best > 0.0){
+      vec3 wl = mix(vec3(0.42, 0.58, 0.26), vec3(0.85, 0.82, 0.40), vnoise(p * 60.0) * 0.7);
+      c = mix(c, wl, best);
+      ang = mix(ang, 0.5, best); size = mix(size, 0.22, best); kind = mix(kind, 1.0, best);
+    }
+  }
+  oC = vec4(clamp(c, 0.0, 1.0), 1.0);
+  oP = vec4(fract(ang + 1.0), size, kind, 1.0);
+}`;
+/* ---------------------------------------------------------------- the ground: the underpainting, softened, a little
+   darker and duller, showing between the strokes */
+const FS_GROUND = `#version 300 es
+precision highp float;
+uniform sampler2D uC; uniform vec2 uRes;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = textureLod(uC, uv, 2.0).rgb;
+  float l = dot(c, vec3(0.3, 0.55, 0.15));
+  o = vec4(mix(vec3(l), c, 0.7) * 0.82 + vec3(0.04, 0.02, 0.0), 1.0);
+}`;
+/* ---------------------------------------------------------------- the strokes */
+const VS_STROKE = `#version 300 es
+precision highp float;
+layout(location = 0) in vec4 aS;     // where (0…1 of the frame), two dice
+uniform sampler2D uC, uP;
+uniform vec2 uRes; uniform float uTime, uScale, uBoil, uReveal; uniform vec4 uSun; uniform vec2 uBurst;
+out vec2 vQ; out vec3 vCol; out float vSeed, vA;
+` + COMMON + `
+vec3 rgb2hsv(vec3 c){ vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0); vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g)); vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r)); float d = q.x - min(q.w, q.y); float e = 1.0e-10; return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x); }
+vec3 hsv2rgb(vec3 c){ vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0); return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y); }
+void main(){
+  int corner = gl_VertexID;
+  vec2 cq = vec2(corner & 1, corner >> 1) * 2.0 - 1.0;
+  // the brush is put down again a few times a second, a little elsewhere each time
+  float b = uBoil;
+  vec2 jit = (vec2(hash12(aS.zw + b * 1.7), hash12(aS.wz + b * 3.1)) - 0.5) * 0.004;
+  vec2 pos = aS.xy + jit;
+  vec4 C = textureLod(uC, pos, 0.0), P = textureLod(uP, pos, 0.0);
+  float kind = P.z;
+  // colour: the place's colour, its value and hue each nudged; now and then the complement
+  vec3 hsv = rgb2hsv(C.rgb);
+  float r1 = hash12(aS.zw * 7.3 + b), r2 = hash12(aS.zw * 3.9 - b);
+  hsv.x += (r1 - 0.5) * 0.06;
+  hsv.y = clamp(hsv.y * (0.85 + 0.5 * r2), 0.0, 1.0);
+  hsv.z = clamp(hsv.z * (0.88 + 0.24 * hash12(aS.zw * 1.3 + b * 0.7)), 0.0, 1.0);
+  if (r2 > 0.975 && kind < 0.9){ hsv.x = fract(hsv.x + 0.5); hsv.y *= 0.45; }
+  vec3 col = hsv2rgb(hsv);
+  // on the sun's road, the strokes are short, fat and bright, and flicker
+  float road = exp(-pow((aS.x * uRes.x / uRes.y - uSun.w) / 0.08, 2.0)) * step(aS.y, 0.74) * uSun.z;
+  // direction and size
+  float ang = P.x * 3.14159 + (hash12(aS.zw * 5.1 + b) - 0.5) * 0.35;
+  float len_ = uScale * (0.6 + 0.8 * P.y) * (0.75 + 0.5 * hash12(aS.zw * 2.2));
+  float wid = len_ * (kind > 0.5 && kind < 0.9 ? 0.55 : kind > 0.9 ? 0.18 : 0.30) * (1.0 - 0.3 * road);
+  len_ *= 1.0 - 0.45 * road;
+  vec2 dir = vec2(cos(ang), sin(ang)), nrm = vec2(-dir.y, dir.x);
+  vec2 off = (dir * cq.x * len_ + nrm * cq.y * wid) / vec2(uRes.x / uRes.y, 1.0);
+  // the painting bursts out of the dawn: from where the sun is, outward
+  float dist = length((aS.xy - uBurst) * vec2(uRes.x / uRes.y, 1.0));
+  vA = smoothstep(dist * 0.9 + 0.1 * hash12(aS.zw), dist * 0.9 + 0.1 * hash12(aS.zw) + 0.15, uReveal);
+  gl_Position = vec4((pos + off) * 2.0 - 1.0, 0.0, 1.0);
+  vQ = cq; vCol = col; vSeed = hash12(aS.zw * 11.0);
+}`;
+const FS_STROKE = `#version 300 es
+precision highp float;
+in vec2 vQ; in vec3 vCol; in float vSeed, vA;
+out vec4 o;
+` + COMMON + `
+void main(){
+  // along (s) and across (t) the stroke; it is fattest a little after it starts and thins as the brush lifts
+  float s = vQ.x * 0.5 + 0.5, t = vQ.y;
+  float w = sin(3.14159 * pow(s, 0.8)) * (0.85 + 0.15 * sin(s * 9.0 + vSeed * 20.0));
+  float edge = abs(t) - w;
+  float m = smoothstep(0.05, -0.08, edge);
+  // the hairs of the brush: streaks along it, and where it ran thin at its end
+  float hairs = vnoise(vec2(t * 9.0 + vSeed * 50.0, s * 1.5)) * 0.6 + vnoise(vec2(t * 23.0 + vSeed * 9.0, s * 3.0)) * 0.4;
+  m *= smoothstep(0.15, 0.45, hairs + 0.35 * (1.0 - s));
+  if (m * vA < 0.01) discard;
+  // the paint stands up off the canvas: its ridge catches the light from the upper left
+  float h = (1.0 - smoothstep(0.0, 1.0, abs(t) / max(w, 0.05))) * (0.6 + 0.4 * hairs);
+  float lit = 0.92 + 0.22 * (h - 0.5) + 0.18 * smoothstep(0.2, 0.0, -t) * smoothstep(-0.2, -0.05, edge);
+  o = vec4(vCol * lit, m * vA * 0.95);
+}`;
+const FS_FINAL = `#version 300 es
+precision highp float;
+uniform sampler2D uA; uniform vec2 uRes; uniform float uTime, uFade, uWhite; uniform vec4 uDew;
+out vec4 o;
+` + COMMON + `
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = texture(uA, uv).rgb;
+  // the canvas under the paint: its weave shows through a little
+  vec2 g = gl_FragCoord.xy / uRes.y * 420.0;
+  float weave = 0.5 + 0.25 * sin(g.x * 3.14159) * sin(g.y * 3.14159) + 0.25 * vnoise(g * 0.5);
+  c *= 0.95 + 0.07 * weave;
+  // the dewdrop on its leaf, holding the sun: a bright bead, then a falling glint
+  vec2 dp = (gl_FragCoord.xy - uDew.xy * uRes) / uRes.y;
+  float dew = exp(-dot(dp, dp) / (uDew.z * uDew.z));
+  c = mix(c, vec3(1.0, 0.97, 0.88), sat(dew * uDew.w * 1.4));
+  c += vec3(1.0, 0.85, 0.55) * exp(-length(dp) / (uDew.z * 4.0)) * uDew.w * 0.25;
+  vec2 v = uv - 0.5; c *= 1.0 - 0.28 * dot(v, v) * 1.6;
+  c = mix(c, vec3(1.0, 0.97, 0.90), uWhite);
+  o = vec4(c * uFade, 1.0);
+}`;
+const VS_FULL = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+W.pond = {
+  ready: false, t: 0, fade: 1, vol: 1, reveal: 1, white: 0,
+  init() {
+    if (this.ready) return;
+    const gl = YL.gl;
+    this.pBase = YL.makeProgram('pond-base', VS_FULL, FS_BASE);
+    this.pGround = YL.makeProgram('pond-ground', VS_FULL, FS_GROUND);
+    this.pStroke = YL.makeProgram('pond-stroke', VS_STROKE, FS_STROKE);
+    this.pFinal = YL.makeProgram('pond-final', VS_FULL, FS_FINAL);
+    [this.pBase, this.pGround, this.pStroke, this.pFinal].forEach(YL.checkProgram);
+    // the lily pads: clusters drifting across the water, smaller and flatter toward the far bank
+    let a = 0x51ed27; const rnd = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+    const pads = [], clusters = [[0.30, 0.13, 9], [0.80, 0.06, 7], [1.42, 0.17, 9], [0.58, 0.36, 7], [1.18, 0.43, 7], [0.16, 0.48, 6], [1.58, 0.55, 6], [0.88, 0.60, 6], [0.40, 0.64, 5]];
+    for (const [cx, cy, n] of clusters) {
+      const z = (0.745 - cy) / 0.745;
+      for (let i = 0; i < n && pads.length < NPAD; i++) {
+        const r = (0.025 + 0.085 * z * z) * (0.65 + 0.7 * rnd());
+        pads.push([cx + (rnd() - 0.5) * 0.36 * (0.35 + z), cy + (rnd() - 0.5) * 0.08 * (0.3 + z), r, rnd()]);
+      }
+    }
+    pads.sort((p, q) => q[1] - p[1]);                                 // far ones first, so near ones overlap them
+    this.pads = new Float32Array(NPAD * 4); pads.forEach((p, i) => this.pads.set(p, i * 4));
+    // the dewdrop sits on a near leaf
+    const near = pads.filter(p => p[1] < 0.3).sort((p, q) => q[2] - p[2])[0] || pads[pads.length - 1];
+    this.dewPad = near;
+    // the strokes: two layers, on jittered grids
+    const mk = (n) => { const d = new Float32Array(n * 4); for (let i = 0; i < n; i++) d.set([rnd(), rnd(), rnd() * 100, rnd() * 100], i * 4); return d; };
+    this.layers = [];
+    for (const [n, scale] of [[2600, 0.030], [9000, 0.016]]) {
+      const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, mk(n), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(0, 1);
+      gl.bindVertexArray(null);
+      this.layers.push({ vao, n, scale });
+    }
+    this.empty = gl.createVertexArray();
+    if (!this.inited) this.t = +(YL.QS.get('wt') || 0);
+    this.inited = true;
+    this.ready = true;
+  },
+  targets(w, h) {
+    if (this.res && this.res.w === w && this.res.h === h) return;
+    const gl = YL.gl;
+    if (this.res) for (const t of [this.base, this.canvas]) { gl.deleteFramebuffer(t.fb); t.texs.forEach(x => gl.deleteTexture(x.t)); }
+    this.base = YL.makeTarget(Math.max(64, w >> 2), Math.max(36, h >> 2), ['rgba8', 'rgba8'], { mips: true });
+    this.canvas = YL.makeTarget(w, h, ['rgba8']);
+    this.res = { w, h };
+  },
+  // 一粒光: the first light on the water, drifting along the sun's road; at the end it goes into the dewdrop
+  hero: { p: [0.98, 0.30], v: [0, 0], aim: null, k: 1 },
+  arrive(px, py) { this.hero.p = [px, py]; this.hero.v = [0, 0]; },
+  toPaint(nx, ny, aspect) { return [(nx * 0.5 + 0.5) * aspect + (1.7778 - aspect) * 0.5, ny * 0.5 + 0.5]; },
+  pointer(nx, ny) { this.hero.aim = this.toPaint(nx, ny, YL.canvasAspect()); this.hero.aimT = this.t; },
+  dew: 0, drop: 0,
+  update(dt) {
+    this.t += dt;
+    const H = this.hero, sunX = 1.0;
+    let tgt = H.aim && this.t - H.aimT < 3 ? H.aim : [sunX + 0.03 * Math.sin(this.t * 0.5), 0.30 + 0.05 * Math.sin(this.t * 0.31)];
+    if (this.dew > 0) tgt = [this.dewPad[0] + 0.004, this.dewPad[1] + this.dewPad[2] * 0.12];
+    for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.p[i]) * 3.2 * dt; H.v[i] *= Math.exp(-dt * 2.6); H.p[i] += H.v[i] * dt; }
+    this.sound(dt);
+  },
+  render(target, aspect) {
+    const gl = YL.gl, U = YL.U;
+    const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
+    this.targets(w, h);
+    const t = this.t, H = this.hero, br = 1 + 0.07 * Math.sin(t * 2.1) + 0.03 * Math.sin(t * 5.3);
+    const sun = [1.0, 0.765, 1.0, 1.0];
+    // 1) the underpainting
+    const B = this.base;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb); gl.viewport(0, 0, B.w, B.h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.pBase.p);
+    U(this.pBase, 'uRes', [B.w, B.h]); U(this.pBase, 'uAspect', aspect); U(this.pBase, 'uTime', t);
+    gl.uniform4fv(this.pBase.u.uPad, this.pads); U(this.pBase, 'uSun', sun);
+    U(this.pBase, 'uHero', [H.p[0], H.p[1], (1 - this.dew) * br, 0]);
+    gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    for (const tx of B.texs) { gl.bindTexture(gl.TEXTURE_2D, tx.t); gl.generateMipmap(gl.TEXTURE_2D); }
+    // 2) the ground, then the strokes over it, big ones first
+    const Cv = this.canvas;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, Cv.fb); gl.viewport(0, 0, Cv.w, Cv.h);
+    gl.useProgram(this.pGround.p); U(this.pGround, 'uRes', [Cv.w, Cv.h]); YL.bindTex(this.pGround, 'uC', B.texs[0], 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(this.pStroke.p);
+    YL.bindTex(this.pStroke, 'uC', B.texs[0], 0); YL.bindTex(this.pStroke, 'uP', B.texs[1], 1);
+    // (the strokes are laid with the base texture's nearest samples: its direction must not be blended across an edge)
+    gl.activeTexture(gl.TEXTURE1); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const boil = YL.reduced ? 0 : Math.floor(t * 6);
+    U(this.pStroke, 'uRes', [Cv.w, Cv.h]); U(this.pStroke, 'uTime', t); U(this.pStroke, 'uBoil', boil % 64); U(this.pStroke, 'uSun', sun);
+    U(this.pStroke, 'uReveal', this.reveal * 2.4); U(this.pStroke, 'uBurst', [(sun[0] - (1.7778 - aspect) * 0.5) / aspect, 0.74]);
+    for (const L of this.layers) {
+      U(this.pStroke, 'uScale', L.scale);
+      gl.bindVertexArray(L.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, L.n);
+    }
+    gl.activeTexture(gl.TEXTURE1); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.disable(gl.BLEND);
+    // 3) the canvas, the dewdrop, the frame
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
+    gl.useProgram(this.pFinal.p);
+    U(this.pFinal, 'uRes', [w, h]); U(this.pFinal, 'uTime', t); U(this.pFinal, 'uFade', this.fade); U(this.pFinal, 'uWhite', this.white);
+    const dx = (H.p[0] - (1.7778 - aspect) * 0.5) / aspect, dy = H.p[1] - this.drop * this.drop * 0.9;
+    U(this.pFinal, 'uDew', [dx, dy, 0.0045 + 0.002 * this.dew, this.dew * br]);
+    YL.bindTex(this.pFinal, 'uA', Cv.tex, 0);
+    gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
+  },
+  /* ---- sound: morning birds, a breath of wind in the willow, now and then a drop into the water */
+  buildAudio(b) {
+    const { ctx, out, noiseBuffer, loop } = b;
+    const bus = ctx.createGain(); bus.gain.value = 0; bus.connect(out);
+    const pink = noiseBuffer(6.3, 'pink');
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 700; bp.Q.value = 0.5;
+    const wg = ctx.createGain(); wg.gain.value = 0.05;
+    loop(pink, 0.8, bp); bp.connect(wg); wg.connect(bus);
+    this.snd = { ctx, bus, wg, nextBird: 0.4, nextDrip: 2.5 };
+  },
+  bird() {
+    const S = this.snd, ctx = S.ctx; let t = ctx.currentTime + 0.05;
+    const o = ctx.createOscillator(), g = ctx.createGain(); g.gain.value = 0;
+    const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    o.connect(g); if (p) { p.pan.value = Math.random() * 1.4 - 0.7; g.connect(p); p.connect(S.bus); } else g.connect(S.bus);
+    const base = 2400 + Math.random() * 1600, n = 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      const d = 0.06 + Math.random() * 0.08, f0 = base * (0.9 + 0.3 * Math.random());
+      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * (0.75 + 0.5 * Math.random()), t + d);
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.03, t + 0.01); g.gain.setTargetAtTime(0, t + d * 0.7, d * 0.2);
+      t += d + 0.04 + Math.random() * 0.08;
+    }
+    o.start(); o.stop(t + 0.3);
+  },
+  plip(gain = 0.08) {
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.02;
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(900, t0); o.frequency.exponentialRampToValueAtTime(2200, t0 + 0.05);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(gain, t0 + 0.004); g.gain.setTargetAtTime(0, t0 + 0.01, 0.03);
+    o.connect(g); g.connect(S.bus); o.start(t0); o.stop(t0 + 0.3);
+  },
+  sound(dt) {
+    if (!this.snd) { const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (b) this.buildAudio(b); else return; }
+    const S = this.snd, now = S.ctx.currentTime;
+    S.bus.gain.setTargetAtTime(this.fade * (this.vol ?? 1), now, 0.5);
+    S.wg.gain.setTargetAtTime(0.04 + 0.03 * Math.sin(this.t * 0.4), now, 0.5);
+    if ((S.nextBird -= dt) <= 0) { this.bird(); S.nextBird = 0.8 + Math.random() * 2.5; }
+    if ((S.nextDrip -= dt) <= 0) { this.plip(0.04); S.nextDrip = 2 + Math.random() * 4; }
+  },
+};
+})();
+
+</script>
+<script>
 /* ---- src/director.js ---- */
 /* ============================================================================
    导演 —— 时间线、镜头与转场。
@@ -8029,12 +9642,25 @@ W.deepsea = {
    第三幕 · 雪夜·木刻
      print     这张纸被印上去：先靛版，再墨版，最后朱版——世界一块版一块版地出现；它随着雪落下来
      woodcut   它找到那盏黑着的灯笼，钻进去，灯亮了；你在黑处划一刀，它就沿着你的刀痕走
-     leave     最后它从灯笼里出来，自己刻出一条路，走到冰窟窿，沉进黑水里
-   转场 3→4 · 冰窟窿
-     tear      冰窟窿里的黑水变成了真的水；纸从洞口撕开，越撕越大，我们掉进去
+   转场 · 灯笼里
+     inlantern 镜头推进灯笼，直到只剩它透亮的纸；那张纸变成另一盏灯的纸
+   走马灯·皮影
+     shadow    一盏走马灯：烛火的热气推着纸轮转，骑马的人、跃起的鲤鱼、浪、渔船的影子在纸幕上奔跑
+     snuff     烛火一缩，纸幕暗下去，影子的黑涌上来，只剩那一点火——它落进黑水里
+   （旧的出口，只在调试里还能看到：leave 刻一条路走到冰窟窿，tear 纸从洞口撕开）
    第四幕 · 深海
      deepsea   只有它照亮的那一小团水是看得见的。手牵着它走；不动，黑暗里的小生命就过来看它；
                一会儿，黑暗里出现另一粒一模一样的光
+   转场 · 墨
+     inkbloom  黑水化开：像一滴墨落进清水，翻涌、散成丝，沉下来，沉成山
+   水墨·烟雨山水
+     ink       远山、中景、石壁和老松一笔一笔洇开；雾流过山腰，细雨；一点朱砂落在小舟上
+     dawn      天边破晓：颜色从水墨里渗出来
+   印象派·清晨睡莲池
+     burst     颜色炸开：一万多笔从太阳那里往外铺开，成了一片清晨的睡莲池
+     pond      全是笔触的水、天光、柳、睡莲；一粒光是水上第一点阳光
+     dew       它停进一片叶子上的露珠里；露珠滚落——落进那杯茶
+   （旧的出口，只在调试里还能看到：rise 往上浮到杯底）
    转场 4→5 · 杯底
      rise      它往上浮。头顶有一圈暖光——杯口那么大，边上一圈白搪瓷，几片茶叶的影子漂着；水越来越像茶
    第五幕 · 回到房间
@@ -8057,23 +9683,37 @@ const ROUTE = [
   { p: [0.26, 1.07, 0.04], travel: 3.4, dwell: 2.4 },       // in among the spider plant's leaves
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
-const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24, T_SEA = 46, T_RISE = 8, T_SURF = 4.5;
+let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
+let T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_WHALE = 10, T_LURE = 24, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+/* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
+   深海里小鱼一齐受惊，然后鲸来了。 */
+const FILM = QS.has('film');
+const FILM_ROUTE = [
+  { p: S.BULB },
+  { p: [-0.50, 0.985, 0.27], travel: 0.6, dwell: 0.4 },
+  { p: [-0.17, 0.905, 0.19], travel: 1.5, dwell: 0.8 },     // the tea's steam
+  { p: [0.26, 1.07, 0.04], travel: 2.0, dwell: 0.7 },       // the spider plant
+  { p: [0.20, 1.42, -0.098], travel: 1.8, dwell: 0 },       // the glass
+];
+if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
+  { T_HOLD: 0.4, T_DAY: 1.7, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
 YL.reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const D = YL.director = {
-  phase: 'intro', t: 0, pt: 0,
-  go(ph) { D.phase = ph; D.pt = 0; },
+  phase: 'intro', t: 0, pt: 0, clock: 0, later: [],
+  go(ph) { D.phase = ph; D.pt = 0; if (FILM) console.log('film ' + D.clock.toFixed(2) + ' ' + ph); },
+  // do something a little later, by the film's own clock (the recorder runs far slower than real time)
+  after(s, fn) { D.later.push({ at: D.clock + s, fn }); },
   escape() {
     if (D.phase !== 'intro') return;
     D.go('wander'); D.t = 0;
     HERO.on = true; HERO.glow = 0; YL.hero.glowTarget = 1;
-    YL.hero.setRoute(ROUTE);
+    YL.hero.setRoute(FILM ? FILM_ROUTE : ROUTE);
     LIGHT.on = 0; LIGHT.dip = 0;
     YL.AUDIO.click && YL.AUDIO.click(0);
-    setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(-0.4), 350);
+    D.after(0.35, () => YL.AUDIO.motif && YL.AUDIO.motif(-0.4));
   },
   // the window shot (and where the dive goes)
   winShot(aspect) {
@@ -8081,21 +9721,27 @@ const D = YL.director = {
     return { pos: portrait ? [0.16, 1.38, 0.72] : [0.12, 1.41, 0.62], tgt: [0.20, 1.42, S.GLASS_Z], vfov: portrait ? 44 : 30 };
   },
   update(dt, realT) {
-    D.t += dt; D.pt += dt;
+    D.t += dt; D.pt += dt; D.clock += dt;
+    for (const e of D.later.filter(e => e.at <= D.clock)) { D.later.splice(D.later.indexOf(e), 1); e.fn(); }
+    if (FILM) D.fade(dt);
     const summer = YL.worlds.summer;
     if (D.phase === 'intro') {
-      // it wants out: two little flickers of the lamp, then it goes by itself
-      LIGHT.dip = 0.55 * (smooth(7.4, 7.5, D.t) - smooth(7.6, 7.75, D.t)) + 0.35 * (smooth(8.3, 8.36, D.t) - smooth(8.45, 8.6, D.t));
-      if (D.t > 10) D.escape();
+      // it wants out: two little flickers of the lamp, then it goes by itself (in the film, almost at once)
+      const t = D.t + (FILM ? 6.6 : 0);
+      LIGHT.dip = 0.55 * (smooth(7.4, 7.5, t) - smooth(7.6, 7.75, t)) + 0.35 * (smooth(8.3, 8.36, t) - smooth(8.45, 8.6, t));
+      if (t > 10) D.escape();
       YL.cam = null;
       return;
     }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
-    if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'leave') { D.inPrint(dt); return; }
+    if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'inlantern' || D.phase === 'leave') { D.inPrint(dt); return; }
+    if (D.phase === 'shadow' || D.phase === 'snuff') { D.inShadow(dt); return; }
+    if (D.phase === 'inkbloom' || D.phase === 'ink' || D.phase === 'dawn') { D.inInk(dt); return; }
+    if (D.phase === 'burst' || D.phase === 'pond' || D.phase === 'dew') { D.inPond(dt); return; }
     if (D.phase === 'tear' || D.phase === 'deepsea' || D.phase === 'rise') { D.inSea(dt); return; }
     if (D.phase === 'surface' || D.phase === 'home' || D.phase === 'end') { D.inRoom(dt, realT); return; }
     YL.hero.update(dt, realT);
-    const L = YL.hero.routeLength(), Tw = L - 2.0;
+    const L = YL.hero.routeLength(), Tw = L - (FILM ? 2.4 : 2.0), Tww = FILM ? 2.8 : 3.5;
     if (D.phase === 'wander' && D.t > L) D.go('window');
     if (D.phase === 'window' && D.pt > 0.2 && !summer.ready) summer.init();                 // compile the next world early
     if (D.phase === 'window' && D.pt > T_HOLD) D.go('daydrops');
@@ -8106,7 +9752,7 @@ const D = YL.director = {
     const base = YL.framing(aspect), h = HERO.p;
     const follow = { pos: V.add(base.pos, V.mul(V.sub(h, base.tgt), 0.12)), tgt: base.tgt.map((v, i) => lerp(v, h[i], 0.45)), vfov: base.vfov * 0.92 };
     const win = D.winShot(aspect);
-    const ww = D.phase === 'wander' ? smooth(Tw, Tw + 3.5, D.t) : 1;
+    const ww = D.phase === 'wander' ? smooth(Tw, Tw + Tww, D.t) : 1;
     let pos = follow.pos.map((v, i) => lerp(v, win.pos[i], ww)), tgt = follow.tgt.map((v, i) => lerp(v, win.tgt[i], ww));
     let vfov = lerp(follow.vfov, win.vfov, ww);
     if (D.phase === 'dive') {
@@ -8132,12 +9778,32 @@ const D = YL.director = {
     D.go('summer');
     YL.sharpMix = 0; YL.roomTarget = null; YL.roomVol = 0;
     D.world = 'summer'; D.placeHero = true;              // (placed on the first summer frame, once the world exists)
-    setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(0, 0.05, 1), 400);
+    D.after(0.4, () => YL.AUDIO.motif && YL.AUDIO.motif(0, 0.05, 1));
+  },
+  /* ---- the film's own hand. In the summer: one sweep across the field (a gust: the grass goes down in a wave and the
+     light is blown along), then a press held still (the wind drops and the cicadas swell). */
+  filmHand(world, t) {
+    const set = (nx, ny, speed, down) => { YL.ptr = { nx, ny, t: YL.now(), speed }; YL.ptrDown = down; };
+    if (world === 'summer') {
+      const a = [-0.85, -0.40], b = [0.80, -0.05], t0 = 1.4, t1 = 2.2;
+      if (t > t0 && t < t1) { const u = ease((t - t0) / (t1 - t0)); set(lerp(a[0], b[0], u), lerp(a[1], b[1], u), 2.6, true); }
+      else if (t >= t1 && t < t1 + 0.1) YL.ptrDown = false;
+      else if (t > 3.3 && t < 6.6) { if (!YL.ptrDown) set(0.15, -0.15, 0, true); }
+      else if (t >= 6.6 && YL.ptrDown) YL.ptrDown = false;
+    }
+  },
+  // the film opens out of black and closes into it
+  fade(dt) {
+    let el = D.fadeEl;
+    if (!el) { el = D.fadeEl = document.createElement('div'); el.style.cssText = 'position:fixed;inset:0;background:#000;pointer-events:none;z-index:50'; document.body.appendChild(el); }
+    const a = Math.max(1 - smooth(0.2, 1.6, D.clock), D.phase === 'end' ? smooth(4.0, 6.0, D.pt) : 0);
+    el.style.opacity = a.toFixed(3);
+    if (D.phase === 'end' && D.pt > 6.5) D.filmDone = true;
   },
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
-    if (D.phase === 'summer') { if (D.pt > T_SUMMER) D.go('updraft'); return; }
+    if (D.phase === 'summer') { if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('updraft'); } return; }
     // the light is carried up toward the tower of cloud, further and further away; the eye follows it up
     const T = summer.tower, dir = [Math.sin(T[0]) * Math.cos(T[1]), Math.sin(T[1]), -Math.cos(T[0]) * Math.cos(T[1])];
     if (D.phase === 'updraft') {
@@ -8154,7 +9820,7 @@ const D = YL.director = {
       H.fly = V.add([0, 0.85, 0], V.mul(dir, 30 + 40 * u));
       summer.vol = 1 - ease(clamp((u - 0.2) / 0.7, 0, 1));
       if (D.pt > T_CLOUD) {
-        D.go('print'); D.world = 'woodcut';
+        D.go('print'); D.world = 'woodcut'; if (FILM) wood.pace = 1.7;
         const hp = D.drainHero || [0, 0.5];
         wood.show = [0, 0, 0]; wood.vol = 0;
         wood.arrive(hp[0], hp[1], YL.canvasAspect());
@@ -8166,7 +9832,8 @@ const D = YL.director = {
     const wood = YL.worlds.woodcut;
     if (D.phase === 'print') {
       const t = D.pt;
-      wood.show = [ease(clamp(t / 1.6, 0, 1)), ease(clamp((t - 1.3) / 1.6, 0, 1)), ease(clamp((t - 2.7) / 1.3, 0, 1))];
+      const k = T_PRINT / 4.8;
+      wood.show = [ease(clamp(t / (1.6 * k), 0, 1)), ease(clamp((t - 1.3 * k) / (1.6 * k), 0, 1)), ease(clamp((t - 2.7 * k) / (1.3 * k), 0, 1))];
       wood.vol = ease(clamp(t / 3, 0, 1));
       if (D.pt > T_PRINT) { wood.show = [1, 1, 1]; D.go('woodcut'); }
     } else if (D.phase === 'woodcut') {
@@ -8177,25 +9844,65 @@ const D = YL.director = {
         const h = document.getElementById('hint');
         if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
       }
-      // nobody has cut anything: it shows how, carving a new moon into the night
-      if (D.pt > 20 && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
-      if (D.pt > T_WOOD && wood.hero.mode === 'home') { wood.leave(); D.go('leave'); }
+      // nobody has cut anything: it shows how, carving a new moon into the night (in the film, as soon as it is home)
+      if (D.pt > (FILM ? 0.6 : 20) && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
+      const done = FILM ? wood.moonDone && !wood.queue.length && wood.hero.mode === 'home' && D.pt > 5 : D.pt > T_WOOD;
+      if (done && wood.hero.mode === 'home') { D.go('inlantern'); const sh = YL.worlds.shadow; if (!sh.ready) sh.init(); }
+    } else if (D.phase === 'inlantern') {
+      const u = clamp(D.pt / T_ZOOM, 0, 1), sh = YL.worlds.shadow;
+      wood.zoomIn = u; wood.whole = true;
+      wood.vol = 1 - smooth(0.5, 1.0, u);
+      if (D.pt > T_ZOOM) { D.go('shadow'); D.world = 'shadow'; wood.vol = 0; sh.vol = 1; sh.pull = 0; sh.light = 1; }
     } else if (D.phase === 'leave') {
       const sea = YL.worlds.deepsea;
       if (!sea.ready) sea.init();                                                // ready the water while it walks
       if (wood.gone) { D.go('tear'); D.tearSound(); }
     }
   },
+  // ---- inside the lantern of shadows; then the candle shrinks to nothing, and there is only the black water
+  inShadow(dt) {
+    const sh = YL.worlds.shadow, sea = YL.worlds.deepsea;
+    if (D.phase === 'shadow') {
+      sh.pull = Math.min(1, D.pt / 3.4);
+      if (D.pt > T_SHADOW) { D.go('snuff'); if (!sea.ready) sea.init(); }
+    } else if (D.phase === 'snuff') {
+      const u = clamp(D.pt / T_SNUFF, 0, 1);
+      // the candle gutters: the flame sinks and shrinks, so every shadow stretches up and swells over the paper; then it dies
+      sh.sink = Math.pow(u, 1.4);
+      sh.light = Math.pow(1 - u, 1.8) * (1 - 0.3 * u) + 0.012;
+      sh.vol = 1 - u;
+      if (D.pt > T_SNUFF) {
+        // the deep, with the light just where the flame was on the screen
+        const aspect = YL.canvasAspect(), c = sh.cam, f = sh.flame(sh.t).p, v = YL.V.sub(f, c.eye), z = YL.V.dot(v, c.fwd);
+        sea.arrive(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
+        sea.fade = 0; sea.vol = 1;
+        D.go('deepsea'); D.world = 'deepsea';
+      }
+    }
+  },
   // ---- through the ice: the print tears open onto the deep, and then there is only the deep
   inSea(dt) {
     const sea = YL.worlds.deepsea, wood = YL.worlds.woodcut;
+    if (!sea.ready) return;                                                      // (a jump straight here: wait for the world to exist)
     if (D.phase === 'tear') {
       const u = clamp(D.pt / T_TEAR, 0, 1);
       wood.vol = 1 - ease(clamp(u / 0.6, 0, 1)); sea.vol = ease(clamp((u - 0.2) / 0.8, 0, 1));
       if (D.pt > T_TEAR) { D.go('deepsea'); D.world = 'deepsea'; sea.vol = 1; }
     } else if (D.phase === 'deepsea') {
-      if (D.pt > T_LURE && sea.lure.state === 'off') sea.startLure();
-      if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) { D.go('rise'); D.riseY0 = sea.cam ? sea.cam.eye[1] : 0; }
+      sea.fade = Math.min(1, (sea.fade ?? 1) + dt / 1.2);
+      // the small lives come to look; then all at once they flash and scatter: something big is coming. It is the whale
+      if (FILM && D.pt > T_WHALE - 0.8 && !D.scared) { D.scared = true; sea.scare(); }
+      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 9.5 : 9.0);
+      if (!FILM && D.pt > T_LURE && sea.lure.state === 'off' && (!sea.pass || sea.t - sea.pass.t0 > 12)) sea.startLure();
+      if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) {
+        // the black water breaks up into ink; the light keeps its place on the screen and turns to vermilion
+        sea.hero.hold = null;
+        const ink = YL.worlds.ink; if (!ink.ready) ink.init();
+        const c = sea.cam, v = YL.V.sub(sea.hero.p, c.eye), z = Math.max(YL.V.dot(v, c.fwd), 0.05), aspect = YL.canvasAspect();
+        const P = ink.toPaint(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
+        ink.arrive(P[0], P[1]); ink.bloom = 1; ink.dawn = 0; ink.grow = [0, 0, 0, 0]; ink.vol = 0;
+        D.go('inkbloom');
+      }
     } else if (D.phase === 'rise') {
       // up toward the light above; the water turns to tea; then the surface
       const u = clamp(D.pt / T_RISE, 0, 1);
@@ -8207,11 +9914,54 @@ const D = YL.director = {
       if (D.pt > T_RISE) D.surface();
     }
   },
+  // ---- ink: the deep's black breaking up into it, the painting laying itself down, then the dawn
+  inInk(dt) {
+    const ink = YL.worlds.ink, sea = YL.worlds.deepsea;
+    const G = (a, b, x) => smooth(a, b, x);
+    if (D.phase === 'inkbloom') {
+      const u = clamp(D.pt / T_BLOOM, 0, 1);
+      ink.bloom = 1 - smooth(0.12, 1.0, u);
+      ink.grow = [G(0.35, 0.85, u), G(0.55, 1.0, u), 0, 0];
+      ink.vol = smooth(0.1, 0.8, u); sea.vol = 1 - smooth(0.0, 0.3, u);
+      if (D.pt > T_BLOOM) { D.go('ink'); D.world = 'ink'; ink.bloom = 0; sea.vol = 0; }
+    } else if (D.phase === 'ink') {
+      const t = D.pt;
+      ink.grow = [1, 1, G(0.0, 2.6, t), G(2.2, 4.2, t)];
+      if (D.pt > T_INK) D.go('dawn');
+    } else if (D.phase === 'dawn') {
+      ink.dawn = smooth(0, T_DAWN, D.pt);
+      if (D.pt > T_DAWN) {
+        const pond = YL.worlds.pond; if (!pond.ready) pond.init();
+        const aspect = YL.canvasAspect(), H = ink.hero.p;
+        const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (ink.pan ? ink.pan[0] : 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
+        pond.arrive(...pond.toPaint(nx, ny, aspect)); pond.reveal = 0; pond.dew = 0; pond.drop = 0; pond.white = 0; pond.vol = 0;
+        D.go('burst');
+      }
+    }
+  },
+  // ---- the pond: bursting out of the dawn; then the light into a dewdrop, and the drop into the tea
+  inPond(dt) {
+    const pond = YL.worlds.pond, ink = YL.worlds.ink;
+    if (D.phase === 'burst') {
+      const u = clamp(D.pt / T_BURST, 0, 1);
+      pond.reveal = smooth(0.15, 1.0, u); pond.vol = smooth(0.0, 0.8, u); ink.vol = 1 - smooth(0.0, 0.5, u);
+      if (D.pt > T_BURST) { D.go('pond'); D.world = 'pond'; pond.reveal = 1; ink.vol = 0; }
+    } else if (D.phase === 'pond') {
+      if (D.pt > T_POND) D.go('dew');
+    } else if (D.phase === 'dew') {
+      const t = D.pt;
+      pond.dew = smooth(0.0, 1.2, t);
+      pond.drop = smooth(1.7, 2.5, t);
+      pond.white = smooth(2.3, T_DEW, t);
+      if (t > 1.7 && !D.dropSound) { D.dropSound = true; pond.plip && pond.plip(0.14); }
+      if (D.pt > T_DEW) { D.dropSound = false; pond.vol = 0; D.surface(); }
+    }
+  },
   // ---- back in the room: out of the tea, home to the lamp
   surface() {
     const sea = YL.worlds.deepsea, S_ = YL.S, wood = YL.worlds.woodcut;
     D.go('surface'); D.world = 'room'; YL.roomTarget = null;
-    sea.vol = 0; if (wood) wood.vol = 0; YL.roomVol = 1;
+    sea.vol = 0; if (wood) wood.vol = 0; if (YL.worlds.ink) YL.worlds.ink.vol = 0; if (YL.worlds.pond) YL.worlds.pond.vol = 0; YL.roomVol = 1;
     const tea = [S_.MUG_X, S_.DESK_TOP + S_.MUG_H * 0.70 + 0.004, S_.MUG_Z];
     HERO.on = true; HERO.glow = 1; HERO.p = tea.slice(); YL.hero.glowTarget = 1;
     YL.hero.setRoute([
@@ -8241,7 +9991,7 @@ const D = YL.director = {
       D.go('end');
       LIGHT.on = 1; YL.hero.glowTarget = 0;
       YL.AUDIO.click && YL.AUDIO.click(1);
-      setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(-0.4, 0.05, 1), 300);
+      D.after(0.3, () => YL.AUDIO.motif && YL.AUDIO.motif(-0.4, 0.05, 1));
     }
     if (D.phase === 'end' && HERO.glow < 0.02) HERO.on = false;
     if (D.phase === 'end') YL.hero.update(dt, realT);
@@ -8250,8 +10000,12 @@ const D = YL.director = {
   replay() {
     const sm = YL.worlds.summer, wd = YL.worlds.woodcut, sea = YL.worlds.deepsea;
     if (sm) { sm.lift = 0; sm.zoom = 0; if (sm.hero) { sm.hero.fly = null; sm.hero.on = false; } sm.vol = 0; }
-    if (wd) { wd.gone = false; wd.hero.mode = 'home'; wd.show = [1, 1, 1]; wd.lanLight = 1; wd.vol = 0; }
-    if (sea) { sea.hero.on = false; sea.rise = 0; sea.riseY = 0; sea.surf = 0; sea.tea = 0; sea.flash = 0; sea.lure.state = 'off'; sea.vol = 0; }
+    if (wd) { wd.gone = false; wd.hero.mode = 'home'; wd.show = [1, 1, 1]; wd.lanLight = 1; wd.vol = 0; wd.zoomIn = 0; wd.whole = false; }
+    const sh = YL.worlds.shadow; if (sh) { sh.vol = 0; sh.light = 1; sh.pull = 1; sh.sink = 0; }
+    const ik = YL.worlds.ink; if (ik) { ik.vol = 0; ik.bloom = 0; ik.dawn = 0; }
+    const pd = YL.worlds.pond; if (pd) { pd.vol = 0; pd.dew = 0; pd.drop = 0; pd.white = 0; }
+    if (sea) { sea.hero.on = false; sea.hero.hold = null; sea.pass = null; sea.rise = 0; sea.riseY = 0; sea.surf = 0; sea.tea = 0; sea.flash = 0; sea.lure.state = 'off'; sea.vol = 0; }
+    D.scared = false;
     YL.sharpMix = 0; YL.cam = null; D.world = 'room'; YL.roomVol = 1;
     D.phase = 'intro'; D.escape();
   },
@@ -8402,6 +10156,25 @@ void main(){
   float inside = (1.0 - smoothstep(-1.0, 1.0, edgePx)) * mix(seep, 1.0, step(0.18, uU));
   o = vec4(mix(print_, sea, inside), 1.0);
 }`;
+// ---- one world dissolving into the next through a warm glow
+const FS_MIX = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uK, uGlow;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, uK);
+  c = mix(c, vec3(1.0, 0.82, 0.55), uGlow * (1.0 - 0.5 * length(uv - 0.5)));
+  o = vec4(c, 1.0);
+}`;
+let mixProg = null;
+function mixP() {
+  if (mixProg) return mixProg;
+  mixProg = YL.makeProgram('mix', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_MIX);
+  YL.checkProgram(mixProg);
+  return mixProg;
+}
 let tearP = null;
 function tear() {
   if (tearP) return tearP;
@@ -8460,6 +10233,46 @@ D.renderFrame = (dt, realT) => {
     YL.U(p, 'uFog', S(0.0, 0.35, u)); YL.U(p, 'uCold', S(0.2, 0.62, u)); YL.U(p, 'uSnow', S(0.38, 0.7, u)); YL.U(p, 'uPaper', S(0.72, 1.0, u));
     YL.U(p, 'uHero', [hp[0], hp[1], 1]);
     YL.bindTex(p, 'uA', I.B.tex, 0); YL.bindTex(p, 'uB', I.A.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inkbloom' && D.pt < 1.2) {
+    const I = irisTargets(), gl = YL.gl, sea = YL.worlds.deepsea, ink = YL.worlds.ink, aspect = YL.canvasAspect();
+    sea.update(dt); sea.render(I.A, aspect);
+    ink.update(dt); ink.render(I.B, aspect);
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.2, D.pt)); YL.U(p, 'uGlow', 0);
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inkbloom' && D.world !== 'ink') D.world = 'ink';
+  if (D.phase === 'burst') {
+    // the colour bursts out of the ink: the pond's strokes spreading from the sun over the dawn-lit painting
+    const I = irisTargets(), gl = YL.gl, ink = YL.worlds.ink, pond = YL.worlds.pond, aspect = YL.canvasAspect();
+    if (!pond.ready) pond.init();
+    ink.update(dt); ink.render(I.A, aspect);
+    pond.update(dt); pond.render(I.B, aspect);
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.1, D.pt)); YL.U(p, 'uGlow', 0.25 * Math.exp(-Math.pow((D.pt - 0.6) / 0.35, 2)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'inlantern') {
+    const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, sh = YL.worlds.shadow, aspect = YL.canvasAspect();
+    const u = clamp(D.pt / T_ZOOM, 0, 1), k = smooth(0.70, 1.0, u);
+    wood.update(dt); wood.render(I.A, aspect);
+    if (k > 0) { if (!sh.ready) sh.init(); sh.pull = 0; sh.update(dt); sh.render(I.B, aspect); }
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.55 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
   }
@@ -8537,7 +10350,7 @@ D.afterRoom = () => {
 if (D.world !== 'room') YL.roomVol = 0;
 // a lost and restored GL context: everything the worlds and the transitions made belongs to the old one
 YL.onContextRestored = () => {
-  iris = null; tearP = null; drainP = null; YL.sharp2 = null; YL.roomTarget = null;
+  iris = null; tearP = null; drainP = null; mixProg = null; YL.sharp2 = null; YL.roomTarget = null;
   for (const w of Object.values(YL.worlds || {})) {
     w.ready = false;
     w.res = null; w.tw = 0; w.inks = null; w.A = null; w.B = null;
@@ -8553,7 +10366,7 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave', 'tear', 'deepsea', 'rise', 'surface'];
+    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'inlantern', 'shadow', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];
     if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
@@ -8562,6 +10375,9 @@ if (QS.get('phase')) {
         // straight into the print (once the GL context exists: see renderFrame)
         D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
         if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
+        if (ph === 'shadow' || ph === 'snuff') { D.world = 'shadow'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.shadow.t = 1 + pt; }
+        if (ph === 'burst' || ph === 'pond' || ph === 'dew') { D.world = ph === 'burst' ? 'ink' : 'pond'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.ink.dawn = 1; }
+        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; }
         if (ph === 'surface') { D.jump = null; YL.roomVol = 1; setTimeout(() => { D.surface(); D.pt = pt; YL.hero.t = pt; if (pt > T_SURF) D.go('home'); }, 0); }
       }
     }

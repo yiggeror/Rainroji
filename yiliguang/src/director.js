@@ -69,7 +69,7 @@ const FILM_ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 1.8, dwell: 0 },       // the glass
 ];
 if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.4, T_DAY: 1.7, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 11.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 13.0, T_BLOOM: 4.0, T_INK: 8.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 7.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+  { T_HOLD: 0.4, T_DAY: 1.7, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -219,7 +219,7 @@ const D = YL.director = {
       }
       // nobody has cut anything: it shows how, carving a new moon into the night (in the film, as soon as it is home)
       if (D.pt > (FILM ? 0.6 : 20) && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
-      const done = FILM ? wood.moonDone && !wood.queue.length && wood.hero.mode === 'home' && D.pt > 2 : D.pt > T_WOOD;
+      const done = FILM ? wood.moonDone && !wood.queue.length && wood.hero.mode === 'home' && D.pt > 5 : D.pt > T_WOOD;
       if (done && wood.hero.mode === 'home') { D.go('inlantern'); const sh = YL.worlds.shadow; if (!sh.ready) sh.init(); }
     } else if (D.phase === 'inlantern') {
       const u = clamp(D.pt / T_ZOOM, 0, 1), sh = YL.worlds.shadow;
@@ -256,6 +256,7 @@ const D = YL.director = {
   // ---- through the ice: the print tears open onto the deep, and then there is only the deep
   inSea(dt) {
     const sea = YL.worlds.deepsea, wood = YL.worlds.woodcut;
+    if (!sea.ready) return;                                                      // (a jump straight here: wait for the world to exist)
     if (D.phase === 'tear') {
       const u = clamp(D.pt / T_TEAR, 0, 1);
       wood.vol = 1 - ease(clamp(u / 0.6, 0, 1)); sea.vol = ease(clamp((u - 0.2) / 0.8, 0, 1));
@@ -264,7 +265,7 @@ const D = YL.director = {
       sea.fade = Math.min(1, (sea.fade ?? 1) + dt / 1.2);
       // the small lives come to look; then all at once they flash and scatter: something big is coming. It is the whale
       if (FILM && D.pt > T_WHALE - 0.8 && !D.scared) { D.scared = true; sea.scare(); }
-      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 8.0 : 9.0);
+      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 9.5 : 9.0);
       if (!FILM && D.pt > T_LURE && sea.lure.state === 'off' && (!sea.pass || sea.t - sea.pass.t0 > 12)) sea.startLure();
       if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) {
         // the black water breaks up into ink; the light keeps its place on the screen and turns to vermilion
