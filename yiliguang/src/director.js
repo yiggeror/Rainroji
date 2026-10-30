@@ -60,6 +60,23 @@ const D = YL.director = {
     YL.cam = { pos, tgt, vfov: lerp(follow.vfov, win.vfov, ww), focus: Math.max(focus, 0.25), w: smooth(0, 2.5, D.t) };
   },
 };
+// ---- which world is on screen. The room is the host's own render; the others draw themselves.
+D.world = YL.QS.get('world') || 'room';
+let lastPtr = null;
+D.renderFrame = (dt, realT) => {
+  if (D.world === 'room') return false;
+  const w = YL.worlds && YL.worlds[D.world];
+  if (!w) return false;
+  if (!w.ready) w.init();
+  const P = YL.ptr;
+  if (P && P !== lastPtr && w.pointer) w.pointer(P.nx, P.ny, P.speed);
+  lastPtr = P;
+  YL.ptrPar = YL.CAM.par;
+  w.update(dt, YL.DBG.still);
+  w.render(null, YL.canvasAspect());
+  return true;
+};
+if (D.world !== 'room') YL.roomVol = 0;
 YL.onLampTap = () => { if (D.phase === 'intro') D.escape(); return true; };   // after it has gone, the lamp is just empty
 // screenshots: jump straight to a moment
 if (QS.get('phase')) {

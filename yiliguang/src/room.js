@@ -4493,7 +4493,7 @@ const UI = (() => {
    · 室内底噪、台灯开关的咔哒、手指擦玻璃的摩擦声；房间混响用程序生成的指数衰减脉冲响应。
    ========================================================================== */
 Object.assign(AUDIO, (() => {
-  let ctx = null, master, comp, wet, enabled = true, ready = false;
+  let ctx = null, master, comp, wet, film, roomVol, enabled = true, ready = false;
   let bedGain, bedLP, patGain, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0, birdT = 2;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
@@ -4571,9 +4571,11 @@ Object.assign(AUDIO, (() => {
   }
   function loop(buf, rate, dest) { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.playbackRate.value = rate; s.loopStart = 0; s.connect(dest); s.start(0, rand() * buf.duration); return s; }
   function build() {
-    master = ctx.createGain(); master.gain.value = 0;
+    master = ctx.createGain(); master.gain.value = 1;
     comp = ctx.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 2.5; comp.attack.value = 0.02; comp.release.value = 0.4;
-    master.connect(comp); comp.connect(ctx.destination);
+    // 《一粒光》: the room's sounds → roomVol (each world fades the rain in or out) → film (the whole film's fader) → compressor
+    film = ctx.createGain(); film.gain.value = 0; roomVol = ctx.createGain(); roomVol.gain.value = YL.roomVol ?? 1;
+    master.connect(roomVol); roomVol.connect(film); film.connect(comp); comp.connect(ctx.destination);
     const conv = ctx.createConvolver(); conv.buffer = reverbIR(); wet = ctx.createGain(); wet.gain.value = 0.35; wet.connect(conv); conv.connect(master);
     const pink = noiseBuffer(9.3, 'pink'), brown = noiseBuffer(7.1, 'brown');
     // rain wash outside the glass
@@ -4659,16 +4661,18 @@ Object.assign(AUDIO, (() => {
         if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; ctx = new AC(); build(); }
         if (ctx.state === 'suspended') ctx.resume();
         master.gain.cancelScheduledValues(ctx.currentTime);
-        master.gain.setTargetAtTime(1.0, ctx.currentTime, 1.2);       // gentle fade-in
+        film.gain.setTargetAtTime(1.0, ctx.currentTime, 1.2);         // gentle fade-in
       } catch (e) { console.warn('audio', e); }
     },
     setEnabled(on) {
       enabled = on;
       if (!ctx) { if (on) this.unlock(); return; }
-      master.gain.setTargetAtTime(on ? 1.0 : 0, ctx.currentTime, on ? 0.6 : 0.25);
+      film.gain.setTargetAtTime(on ? 1.0 : 0, ctx.currentTime, on ? 0.6 : 0.25);
       if (on && ctx.state === 'suspended') ctx.resume();
     },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
+    // other worlds play into the film bus (and may borrow the noise generator)
+    bus() { return ready && ctx.state === 'running' ? { ctx, out: film, noiseBuffer, loop } : null; },
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
     click(on) { if (ready) oneShot(clickBuf, 0.5 * (1 - 0.92 * VIEW.mix), -0.45, on ? 1.0 : 0.88, 0.4, VIEW.mix > 0.5 ? 1500 : 0); },
     // 一粒光的动机：三个音（A–C♯–E 的上行），每个世界换一种音色；这里是房间里的版本：柔和的钢片琴
@@ -4725,6 +4729,7 @@ Object.assign(AUDIO, (() => {
     update(dt, wdt) {
       if (!ready || ctx.state !== 'running') { SIM.events.length = 0; return; }
       const now = ctx.currentTime, I = SIM.rain;
+      roomVol.gain.setTargetAtTime(YL.roomVol ?? 1, now, 0.5);
       // slow gusts: random walk retargeted every couple of seconds
       gustT -= dt; if (gustT <= 0) { gustT = 1.5 + rand() * 2.5; gust = clamp(gust * 0.6 + (rand() - 0.45) * 0.8, -0.4, 0.6); }
       // snow falls almost silently and the snow cover soaks up the street's echoes: the bed drops and darkens
@@ -4819,7 +4824,7 @@ function loop(now) {
   simAdvance(wdt);
   viewTick(dt);
   if (!DBG.shot && VIEW.want === VIEW.out) R.fade = Math.min(1, R.fade + dt / R.fadeIn);
-  render(simT, dt, realT);
+  if (!(YL.director && YL.director.renderFrame && YL.director.renderFrame(dt, realT, simT))) render(simT, dt, realT);
   UI.tick(dt);
   if (frame % 15 === 0) UI.syncTime();
   AUDIO.update && AUDIO.update(dt, wdt);
@@ -4884,6 +4889,7 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 // 《一粒光》: what the director, the hero and the other worlds need from the host
 Object.assign(YL, { QS, DBG, S, V, CAM, LIGHT, HERO, WORLD, SIM, AUDIO, R, clamp, lerp, smooth, bb, mulc, camRay, pickGlass, drift, rnd: mulberry32(DBG.seed + 1),
-  get gl() { return gl; }, framing, canvasAspect: () => canvas.clientWidth / Math.max(1, canvas.clientHeight), makeProgram, checkProgram, makeTarget, bindTarget, bindTex, drawFull, U, I });
+  framing, canvasAspect: () => canvas.clientWidth / Math.max(1, canvas.clientHeight), makeProgram, checkProgram, makeTarget, bindTarget, bindTex, drawFull, U, I });
+Object.defineProperty(YL, 'gl', { get: () => gl });          // (a live getter: gl is created at boot)
 setTimeout(boot, 30);
 })();
