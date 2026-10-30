@@ -31,8 +31,10 @@ p.on('console', m => { const t = m.text(); if (!/prewarm/.test(t)) console.log('
 p.on('pageerror', e => console.log('  pageerror:', e.message));
 const t0 = Date.now();
 let last = t0;
-await p.exposeFunction('__recFrame', async (k) => {
-  const png = await p.screenshot({ type: 'png' });
+await p.exposeFunction('__recFrame', async (k, url) => {
+  // the page hands each frame over as a PNG read off its canvas (a page screenshot of a 1080p software-GL canvas can
+  // take longer than the browser is willing to wait)
+  const png = Buffer.from(url.slice(url.indexOf(',') + 1), 'base64');
   if (!enc.stdin.write(png)) await new Promise(r => enc.stdin.once('drain', r));
   const now = Date.now();
   if (k % 24 === 0 || k === N - 1) {
@@ -43,7 +45,7 @@ await p.exposeFunction('__recFrame', async (k) => {
 });
 const chunks = [];
 await p.exposeFunction('__recAudio', async (i, n, b64) => { chunks[i] = Buffer.from(b64, 'base64'); });
-await p.goto(`file://${page_}?rec&fps=${FPS}&dur=${secs}&seed=7&q=1&${query}`);
+await p.goto(`file://${page_}?rec&fps=${FPS}&dur=${secs}&seed=7&q=${process.env.Q || 1}&${query}`);
 await p.waitForFunction(() => window.__done, null, { timeout: 0, polling: 1000 });
 await b.close();
 enc.stdin.end();

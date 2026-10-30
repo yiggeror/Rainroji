@@ -4870,8 +4870,22 @@ async function recRun() {
   AUDIO.unlock();
   const ctx = AUDIO.recCtx();
   let k = 0;
+  // the frame as a PNG, read straight off the canvas (its buffer is kept); the film's fade to black painted over it
+  const c2 = document.createElement('canvas'), g2 = c2.getContext('2d');
+  const grab = () => {
+    c2.width = canvas.width; c2.height = canvas.height;
+    g2.drawImage(canvas, 0, 0);
+    const fe = YL.director && YL.director.fadeEl, fade = fe ? +fe.style.opacity || 0 : 0;
+    if (fade > 0) { g2.fillStyle = `rgba(0,0,0,${fade})`; g2.fillRect(0, 0, c2.width, c2.height); }
+    return c2.toDataURL('image/png');
+  };
   const frameOut = async () => {
-    try { tick(1 / F); gl.finish(); if (window.__recFrame) await window.__recFrame(k); }
+    try {
+      const t0 = performance.now(); tick(1 / F); const t1 = performance.now(); gl.finish(); const t2 = performance.now();
+      const png = grab(); const t3 = performance.now();
+      if (QS.has('rectime') && k < 6) console.log(`rec timing ${k}: tick ${(t1 - t0).toFixed(0)} finish ${(t2 - t1).toFixed(0)} grab ${(t3 - t2).toFixed(0)} ms`);
+      if (window.__recFrame) await window.__recFrame(k, png);
+    }
     catch (e) { console.error('rec frame ' + k + ': ' + e.message); }
     k++;
   };

@@ -1094,7 +1094,8 @@ W.deepsea = {
     return [...V.norm(V.add(V.mul(rest, 1 - k), V.mul(toL, k))), 0];
   },
   targets(w, h) {
-    const k = MOBILE ? 0.7 : 1.0, sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
+    // (&seaq=k: draw the water at k of the screen's resolution — it is dark and soft; the recorder uses this to save time)
+    const k = MOBILE ? 0.7 : +(YL.QS.get('seaq') || 1), sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
     if (this.A && this.A.w === sw && this.A.h === sh) return;
     const gl = YL.gl;
     for (const t of [this.A, this.B]) if (t) { gl.deleteFramebuffer(t.fb); gl.deleteTexture(t.tex.t); }
