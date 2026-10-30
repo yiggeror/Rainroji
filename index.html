@@ -2840,7 +2840,7 @@ void main(){
     q.y += uTime * vfall + float(k) * 3.7;
     vec2 g = vec2(q.x / cell, q.y / (cell * 3.0)), gi = floor(g);
     vec3 hh = hash32(gi + float(k) * 13.0);
-    if (hh.z > 0.55 * sat(uRain * 1.6 + uSnow)) continue;
+    if (hh.z > 0.7 * sat(uRain * 1.6 + uSnow)) continue;
     vec2 c = (gi + 0.15 + 0.7 * hh.xy) * vec2(cell, cell * 3.0);
     float w = max(max(coc, px * 1.2), 0.0015);
     float dx = abs(q.x - c.x), dy = abs(q.y - c.y);
@@ -2852,7 +2852,7 @@ void main(){
     // a 2 mm drop is mostly a lens (lit from behind); a 5 mm snowflake is a white scatterer, lit from every side
     float k2 = uSnow > 0.5 ? 0.012 / w : 0.0018 / w;
     vec3 Ls = uSnow > 0.5 ? Li * 0.4 + (uCityGlow + uWinL * 0.3) * 0.25 : Li;
-    col += Ls * shape * k2 * (0.35 + 0.65 * hh.x) * 0.2;
+    col += Ls * shape * k2 * (0.35 + 0.65 * hh.x) * 0.5;
   }
   o = vec4(col, 1.0);
 }
@@ -4793,6 +4793,11 @@ function viewTick(dt) {
     R.fade = Math.max(0, R.fade - dt / 0.6);
     if (R.fade <= 0 && (!VIEW.want || streetReady())) {
       VIEW.out = VIEW.want; R.taaReset = 1; LIGHT.adapted = false; R.fadeIn = 1.2;
+      if (VIEW.out && !VIEW.hinted && !DBG.shot) {
+        VIEW.hinted = true;
+        const h = document.getElementById('hint'); h.textContent = '轻触亮着的窗 · 开关屋里的台灯';
+        setTimeout(() => h.classList.add('show'), 1400); setTimeout(() => h.classList.remove('show'), 7500);
+      }
       CAM.par = [0, 0]; CAM.parT = [0, 0];
       UI.showView && UI.showView();
     }
