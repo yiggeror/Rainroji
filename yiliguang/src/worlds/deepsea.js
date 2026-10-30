@@ -54,7 +54,8 @@ uniform vec4 uJU[3];         //            up axis, pulse (0 relaxed … 1 contr
 uniform vec4 uJK[3];         //            kind (0 moon jelly, 1 comb jelly, 2 Atolla), phase, alarm, -
 uniform vec4 uSurf;          // the surface far above: its height (world y), how bright, how much the water is tea, -
 uniform vec4 uWh;            // the whale: its eye (world), on/off
-uniform vec4 uWhF;           //            which way it swims (unit), the fin's stroke
+uniform vec4 uWhF;           //            which way it swims (unit), its blink
+uniform vec4 uWhG;           //            where its eye looks (in its own frame)
 out vec4 o;
 ` + COMMON + `
 // ---- the light scattered toward the eye along [0, T]: equi-angular samples about the closest approach
@@ -235,124 +236,293 @@ vec3 atollaGlow(int k, vec3 ro, vec3 rd){
   return g * (0.6 + 0.4 * sin(uTime * 1.7 + KK.y));
 }
 
-/* ---- the whale: a humpback going by at the edge of the light. Local frame at its eye: x forward, y up, z out of
-   its right side (toward us). Only a stretch of it is ever in view: the head and eye, the long white flipper, the flank. */
+/* ---- the whale: a humpback sliding by a hand's breadth behind the light. Never the whole animal: only the skin
+   round its eye fills the picture. The skin is not noise but a drawn relief, a height (m) over its own surface —
+   x along the body (forward), y up, eye at the origin — lit by our light from close by, so every fold casts a shadow:
+     the almond of the eye, its lids, the folds that follow them and run out toward the corners, the fine creases
+     fanning from the back corner; the line of the mouth below, the lower lip standing proud of it with its row of
+     knobs (each with one bristle); crowns of barnacles on the chin; the pale rakes of an orca's teeth, long healed.
+   The eye: a wet dark ball behind the lids, which turns to look at the light. */
 float smin(float a, float b, float k){ float h = sat(0.5 + 0.5 * (b - a) / k); return mix(b, a, h) - k * h * (1.0 - h); }
-float bodyR(float x){
-  // the head narrows to the snout ahead of the eye; the body swells behind it and tapers away to the tail
-  float f = sqrt(max(1.0 - pow((x + 3.0) / 5.8, 2.0), 0.0));
-  float b = 1.0 - 0.75 * pow(sat((-x - 3.0) / 8.0), 1.4);
-  return 2.0 * (x > -3.0 ? f : b);
+float smax(float a, float b, float k){ return -smin(-a, -b, k); }
+float sq(float x){ return x * x; }
+const float EYE_A = 0.042;                       // half the length of the eye's opening
+const vec3 BALL = vec3(0.0, 0.0, -0.041);        // the eyeball's centre, under the skin
+const float BALL_R = 0.050;
+// the mouth: the lower lip's edge, coming back from the snout and rising to its corner just below and behind the eye
+const vec2 MOUTH = vec2(-0.035, -0.112);
+float lipY(float x){ float u = x - MOUTH.x; return MOUTH.y - 0.060 * u - 0.30 * u * u; }
+// a crease: a sharp valley, steep on the side the skin rolls over from (wa), easing out on the other (wb)
+float crease(float d, float wa, float wb){ return -exp(-sqrt(d * d + 2e-7) / (d < 0.0 ? wa : wb)); }
+// the opening between the lids: the intersection of two arcs, the back corner drawn to a point, the front rounder.
+// open: 1 wide … 0 shut (the upper lid comes down to the lower). < 0 inside.
+float eyeOpen(vec2 p, float open){
+  p.y -= 0.004 * p.x / EYE_A;                    // the back corner sits a little lower
+  const float hu = 0.0175, hl = 0.0105;
+  float ru = (EYE_A * EYE_A + hu * hu) / (2.0 * hu), rl = (EYE_A * EYE_A + hl * hl) / (2.0 * hl);
+  float du = length(p - vec2(0.0, hu - ru)) - ru, dl = length(p - vec2(0.0, rl - hl)) - rl;
+  float k = mix(0.0015, 0.007, smoothstep(-EYE_A, EYE_A, p.x));
+  float d = smax(du, dl, k);
+  // the upper lid's edge, lowered for a blink
+  float yu = hu - ru + sqrt(max(ru * ru - p.x * p.x, 0.0)), yl = rl - hl - sqrt(max(rl * rl - p.x * p.x, 0.0));
+  return max(d, (p.y - mix(yl, yu, open)) * 0.9);
 }
-vec3 finLocal(vec3 p, float stroke, out float s){
-  // the flipper: from behind the eye, swept back, down and out toward us; it beats slowly
-  vec3 root = vec3(-1.25, -0.75, 0.95);
-  vec3 ax = normalize(vec3(-0.66, -0.50 + 0.25 * stroke, 0.24));
-  vec3 ch = normalize(cross(ax, vec3(0.0, 0.0, 1.0)));      // chord: leading edge forward-ish
-  vec3 th = cross(ax, ch);
-  vec3 q = p - root;
-  s = dot(q, ax);
-  return vec3(dot(q, ch), dot(q, th), s);
+float ballH(vec2 p){ vec2 q = p - BALL.xy; float r2 = BALL_R * BALL_R - dot(q, q); return r2 > 0.0 ? BALL.z + sqrt(r2) : -1.0; }
+// the skin's angle round the eye, 0 straight ahead (+x), PI/2 up, PI behind
+float eyeAng(vec2 p){ return atan(p.y * 1.6, p.x); }
+// a fold drawn as an arch over (dir +1) or under (dir -1) the eye: x0 ± L, its ends at height y1, its crown at y0.
+// Each fold is a roll of skin overhanging the next one in toward the eye: steep on its outer side, easing inward.
+float arch(vec2 p, float x0, float L, float y1, float y0, float A, float seed, inout float cav){
+  float u = (p.x - x0) / L;
+  if (abs(u) > 1.0) return 0.0;
+  float yk = y1 + (y0 - y1) * (1.0 - u * u) + 0.0016 * sin(u * 5.0 + seed) + 0.0008 * sin(u * 13.0 + seed * 2.0);
+  float slope = -2.0 * (y0 - y1) * u / L;
+  float dk = (p.y - yk) * sign(y0 - y1) / sqrt(1.0 + slope * slope);
+  float env = pow(1.0 - u * u, 0.6) * (0.55 + 0.45 * vnoise(vec2(u * 4.0, seed * 5.0)));
+  cav += env * exp(-abs(dk) / 0.0016) * A / 0.004;
+  return A * env * crease(dk, 0.0040, 0.0013);
 }
-float whaleSDF(vec3 p, float stroke, out float part){
-  float x = p.x;
-  float r = bodyR(x);
-  vec2 yz = vec2((p.y + 0.10 * x * 0.1) / 0.86, p.z);
-  float body = (length(yz) - r) * 0.82;
-  if (x > 2.8) body = length(p - vec3(2.8, -0.15, 0.0)) - 0.02;
-  // the eye sits in a shallow socket; around it, folds of skin
-  vec3 ep = p - vec3(0.0, -0.22, bodyR(0.0) * 0.98);
-  float sock = length(ep * vec3(0.85, 1.7, 1.0)) - 0.085;
-  body = max(body, -sock * 0.6 - 0.012);
-  float eye = length(ep - vec3(0.0, 0.0, -0.012)) - 0.044;
-  // the flipper
-  float s;
-  vec3 f = finLocal(p, stroke, s);
-  float L = 3.9;
-  float u = sat(s / L);
-  float chord = mix(0.42, 0.10, u) * (1.0 - 0.6 * pow(u, 4.0)) + 0.035 * sin(s * 11.0) * step(0.0, f.x);   // scalloped leading edge
-  float thick = mix(0.10, 0.03, u);
-  float fin = (length(vec2(f.x / chord, f.y / thick)) - 1.0) * min(chord, thick) * 0.8;
-  fin = max(fin, max(-s, s - L));
-  float d = body;
-  part = 0.0;
-  if (eye < d){ d = eye; part = 2.0; }
-  return d;
+// a bump of rounded flesh
+float knob(vec2 p, vec2 c, vec2 r, float h){ float q = length((p - c) / r); return q < 1.0 ? h * sq(1.0 - q * q) : 0.0; }
+// an acorn barnacle (Coronula): a ribbed crown sunk deep in the skin, its plates uneven, a ragged opening in its top
+// with the grey plug inside; mat.x gets its shell, mat.y the dark of its opening
+float barnacle(vec2 p, vec2 c, float r, float seed, inout vec4 mat){
+  vec2 q = p - c; float dd = length(q);
+  if (dd > r * 1.5) return 0.0;
+  float th = atan(q.y, q.x);
+  float jag = vnoise(vec2(th * 2.0 + seed * 10.0, seed));
+  float rr = dd / r * (1.0 + 0.05 * sin(6.0 * th + seed * 6.0) + 0.10 * (jag - 0.5));
+  float wall = smoothstep(1.0, 0.60, rr);
+  float rim = 0.30 + 0.10 * (vnoise(vec2(th * 3.0, seed * 3.0)) - 0.5);
+  float top = smoothstep(rim + 0.07, rim - 0.03, rr);
+  float ribs = (0.5 + 0.5 * cos(18.0 * th + seed + 4.0 * vnoise(vec2(th * 3.0, seed)))) * smoothstep(1.0, 0.8, rr) * smoothstep(rim, 0.70, rr);
+  float h = r * (0.40 + 0.25 * jag) * (wall * (1.0 + 0.05 * ribs) - 0.30 * top);
+  h += r * 0.30 * exp(-sq((rr - 1.04) / 0.20));                       // sunk in: the skin heaped up round its foot
+  mat.x = max(mat.x, smoothstep(1.0, 0.86, rr) * (1.0 - top) * (0.75 + 0.25 * ribs) * (0.45 + 0.55 * jag));
+  vec2 sl = mat2(cos(seed), sin(seed), -sin(seed), cos(seed)) * q / r;
+  mat.y = max(mat.y, top * (0.25 + 0.75 * smoothstep(0.05, 0.015, abs(sl.y)) * step(abs(sl.x), 0.22)));
+  return h;
 }
-vec3 whaleN(vec3 p, float stroke){
-  float pp; vec2 e = vec2(0.004, 0.0);
-  return normalize(vec3(whaleSDF(p + e.xyy, stroke, pp) - whaleSDF(p - e.xyy, stroke, pp), whaleSDF(p + e.yxy, stroke, pp) - whaleSDF(p - e.yxy, stroke, pp), whaleSDF(p + e.yyx, stroke, pp) - whaleSDF(p - e.yyx, stroke, pp)));
+// the relief. fine: also the smallest creases (for shading; the shape and the shadows don't need them)
+// mat: barnacle shell, barnacle top, crease darkness, pale (scars); lice: the little crabs among the barnacles
+float whaleH(vec2 p, bool fine, out vec4 mat, out float lice){
+  mat = vec4(0.0); lice = 0.0;
+  float h = 0.0;
+  // the head curves away above and toward the snout
+  h -= sq(p.x + 0.05) / (2.0 * 2.6) + sq(p.y - 0.06) / (2.0 * 0.85);
+  // ---- the mouth. The lower lip is a broad rounded rim standing out of the line; the upper jaw tucks in behind it
+  float ym = lipY(p.x) + 0.0025 * sin(p.x * 37.0 + 1.0) + 0.0010 * sin(p.x * 107.0);
+  float dy = p.y - ym;
+  float lipOn = smoothstep(MOUTH.x - 0.005, MOUTH.x + 0.05, p.x);
+  float lipT = 0.015 * (0.8 + 0.4 * vnoise(vec2(p.x * 11.0, 3.0)));
+  h += lipOn * lipT * smoothstep(0.003, -0.007, dy) * (1.0 - 0.45 * smoothstep(-0.012, -0.05, dy));
+  h += lipOn * 0.010 * crease(dy - 0.0025, 0.0016, 0.0050);
+  // small creases across the lip's edge
+  float lcr = smoothstep(0.65, 1.0, sin(p.x * 240.0 + 9.0 * vnoise(p * 18.0))) * smoothstep(0.35, 0.7, vnoise(vec2(p.x * 30.0, 4.0)));
+  h -= lipOn * 0.0007 * lcr * smoothstep(0.001, -0.004, dy) * smoothstep(-0.028, -0.010, dy);
+  mat.z += lipOn * (exp(-abs(dy - 0.0025) / 0.0030) + 0.4 * lcr * smoothstep(0.001, -0.004, dy) * smoothstep(-0.028, -0.010, dy));
+  // behind its corner the mouth runs on as a fold that fades into the cheek; the corner itself a deep dimple
+  float tail = smoothstep(MOUTH.x + 0.01, MOUTH.x - 0.02, p.x) * smoothstep(MOUTH.x - 0.17, MOUTH.x - 0.03, p.x);
+  float ty = MOUTH.y + 0.20 * (p.x - MOUTH.x) - 0.7 * sq(p.x - MOUTH.x);
+  h += tail * 0.006 * crease(p.y - ty, 0.0020, 0.0050);
+  mat.z += tail * 0.7 * exp(-abs(p.y - ty) / 0.003);
+  float cm = length((p - MOUTH) * vec2(1.0, 1.4));
+  h -= 0.007 * exp(-sq(cm / 0.011));
+  // the knobs along the lower jaw, each with a bristle in a pit on its top
+  if (dy < 0.0 && dy > -0.075 && p.x > MOUTH.x) for (int k = 0; k < 6; k++){
+    float fk = float(k), hk = hash12(vec2(fk, 41.0));
+    float x = MOUTH.x + 0.07 + fk * 0.070 + 0.014 * (hk - 0.5);
+    vec2 c = vec2(x, lipY(x) - 0.040 - 0.012 * hash12(vec2(fk, 5.0)));
+    float r = 0.015 * (0.85 + 0.3 * hk);
+    h += knob(p, c, vec2(r * 1.15, r), 0.0075 * (0.8 + 0.4 * hk));
+    float pit = length(p - c - vec2(0.002, 0.003));
+    h -= 0.0020 * exp(-sq(pit / 0.0016));
+    mat.z += smoothstep(0.0020, 0.0006, pit);
+  }
+  // ---- the eye: a broad mound of thick flesh with the opening in it
+  float d = eyeOpen(p, 1.0);
+  float ang = eyeAng(p), r = length(p * vec2(0.75, 1.15));
+  if (r < 0.22){
+    h += 0.012 * exp(-sq((p.x + 0.01) / 0.10) - sq((p.y + 0.004) / 0.065));
+    // the lids' rims: the upper a fat roll, the lower thinner
+    float up = smoothstep(-0.2, 0.4, sin(ang));
+    h += mix(0.0030, 0.0050, up) * (0.7 + 0.6 * vnoise(vec2(ang * 3.0, 11.0))) * exp(-sq((d - 0.005) / mix(0.0045, 0.0070, up)));
+    // into the opening the skin turns under (the eyeball, below, fills it)
+    h -= 0.05 * smoothstep(0.0005, -0.004, d);
+    // folds that follow the lids, longer and flatter the further out, running on past the back corner; one forks
+    float cav = 0.0;
+    h += arch(p, -0.004, 0.058, -0.004, 0.029, 0.0036, 1.0, cav);
+    h += arch(p, -0.013, 0.078, -0.007, 0.043, 0.0030, 2.0, cav);
+    h += arch(p, -0.030, 0.085, -0.012, 0.058, 0.0022, 3.0, cav);
+    h += arch(p, -0.070, 0.050, -0.020, 0.040, 0.0016, 5.0, cav);
+    h += arch(p, 0.002, 0.055, -0.006, -0.020, 0.0024, 6.0, cav);
+    h += arch(p, -0.010, 0.074, -0.008, -0.034, 0.0018, 7.0, cav);
+    h += arch(p, -0.040, 0.060, -0.014, -0.047, 0.0012, 8.0, cav);
+    // creases running out from the eye across the folds, so the skin round it is puckered into soft cells
+    float rr = length(vec2(p.x, p.y * 1.6));
+    if (fine) for (int j = 0; j < 18; j++){
+      float fj = float(j), hj = hash12(vec2(fj, 77.0));
+      float d0 = 0.006 + 0.018 * hash12(vec2(fj, 3.0)), d1 = d0 + 0.010 + 0.026 * hash12(vec2(fj, 9.0));
+      if (d > d0 && d < d1){
+        float sj = (d - d0) / (d1 - d0);
+        float aa = ang - ((fj + 0.6 * hj) / 18.0 * 6.2832 - 3.14159) - 0.12 * sin(d * 70.0 + fj * 2.0);
+        aa = mod(aa + 3.14159, 6.2832) - 3.14159;
+        float w = pow(sin(sj * 3.14159), 1.2) * (0.5 + 0.5 * hj) * (1.0 - 0.7 * smoothstep(0.2, 0.8, sin(ang)));
+        float dist = aa * rr / 1.3;
+        h += 0.0013 * w * crease(dist, 0.0020, 0.0020);
+        cav += 0.3 * w * exp(-abs(dist) / 0.0018);
+      }
+    }
+    mat.z += cav + smoothstep(0.004, -0.0005, d) * 0.8;
+  }
+  // fine creases fanning out of the back corner, and a few from the front one
+  vec2 q = p - vec2(-EYE_A - 0.003, -0.004);
+  if (fine && q.x < 0.0 && dot(q, q) < 0.09 * 0.09){
+    float a = atan(q.y, -q.x), rq = length(q);
+    for (int k = 0; k < 7; k++){
+      float fk = float(k), hk = hash12(vec2(fk, 13.0));
+      float ak = (fk - 3.0) * 0.19 + 0.08 * (hk - 0.5) + 0.25 * rq;      // they curve a little as they go
+      float along = rq / (0.030 + 0.045 * hk);
+      if (along < 1.0){
+        float w = sin(along * 3.14159) * (1.0 - along * 0.4) * smoothstep(1.35, 1.0, abs(a));
+        float dist = (a - ak) * rq;
+        h += 0.0013 * w * crease(dist, 0.0010, 0.0018);
+        mat.z += 0.4 * w * exp(-abs(dist) / 0.0013);
+      }
+    }
+  }
+  q = p - vec2(EYE_A + 0.004, 0.002);
+  if (fine && q.x > 0.0 && dot(q, q) < 0.05 * 0.05){
+    float a = atan(q.y, q.x), rq = length(q);
+    for (int k = 0; k < 3; k++){
+      float fk = float(k);
+      float along = rq / (0.022 + 0.01 * fk);
+      if (along < 1.0) h += 0.0009 * sin(along * 3.14159) * crease((a - (fk - 1.0) * 0.45 - 0.15) * rq, 0.001, 0.0016);
+    }
+  }
+  // ---- barnacles: a crowd of them on the chin, one riding a knob, a pair alone behind the mouth
+  if (p.y < -0.12){
+    h += barnacle(p, vec2(0.215, -0.220), 0.025, 1.0, mat);
+    h += barnacle(p, vec2(0.251, -0.193), 0.018, 2.0, mat);
+    h += barnacle(p, vec2(0.181, -0.244), 0.020, 3.0, mat);
+    h += barnacle(p, vec2(0.252, -0.238), 0.013, 4.0, mat);
+    h += barnacle(p, vec2(0.282, -0.216), 0.010, 5.0, mat);
+    h += barnacle(p, vec2(0.236, -0.166), 0.007, 6.0, mat);
+    h += barnacle(p, vec2(0.172, -0.166), 0.010, 7.0, mat);
+    h += barnacle(p, vec2(-0.168, -0.176), 0.012, 8.0, mat);
+    h += barnacle(p, vec2(-0.150, -0.188), 0.008, 9.0, mat);
+  }
+  // ---- the skin itself: broad slow swells; and (fine) patches of shallow creases that mostly run along the body
+  h += 0.0022 * (vnoise(p * 7.0) - 0.5) + 0.0009 * (vnoise(p * 19.0 + 3.0) - 0.5);
+  if (fine){
+    vec2 w = p + 0.012 * vec2(vnoise(p * 11.0), vnoise(p * 11.0 + 9.0));
+    float ph = w.y * 210.0 + 7.0 * vnoise(w * 5.0);
+    float li = floor(ph);
+    float seg = smoothstep(0.35, 0.70, vnoise(vec2(w.x * 6.0, li * 1.7))) * smoothstep(0.45, 0.70, vnoise(p * 3.5 + 20.0));
+    float cr = 0.00018 * seg * crease((fract(ph) - 0.5) / 210.0, 0.0006, 0.0011);
+    // near the eye the fine creases follow the lids
+    float near = smoothstep(0.10, 0.05, r); float rr = length(vec2(p.x, p.y * 1.6));
+    float ph2 = ang * 45.0 + 4.0 * vnoise(vec2(d * 120.0, 1.0));
+    float seg2 = smoothstep(0.45, 0.75, vnoise(vec2(d * 160.0, floor(ph2) * 2.3)));
+    float cr2 = 0.00022 * seg2 * crease((fract(ph2) - 0.5) * rr / 45.0, 0.0008, 0.0008) * smoothstep(0.004, 0.012, d);
+    h += mix(cr, cr2, near);
+    h += 0.00005 * (vnoise(p * 600.0) + vnoise(p * 1300.0 + 7.0) - 1.0);
+  }
+  return h;
 }
-float cell(vec2 p){   // distance to the nearest of a scatter of points (for barnacles)
-  vec2 i = floor(p), f = fract(p); float m = 1.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++){ vec2 g = vec2(x, y); vec2 o2 = vec2(hash12(i + g), hash12(i + g + 17.0)); m = min(m, length(g + o2 - f)); }
-  return m;
-}
+float whaleSurf(vec2 p){ vec4 m; float l; return max(whaleH(p, false, m, l), ballH(p)); }
 // returns the whale's colour (carried to the eye) and its distance, or T unchanged
 vec3 whale(vec3 ro, vec3 rd, inout float T){
   if (uWh.w <= 0.0) return vec3(0.0);
   vec3 F = uWhF.xyz, Up = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up)); Up = cross(Z, F);
-  // local frame: x along F, y up, z toward its right side
   vec3 rl = ro - uWh.xyz;
   vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
-  // bound: a fat capsule round the body's axis
-  vec3 A = vec3(3.0, 0.0, 0.0), B = vec3(-12.0, 0.0, 0.0);
-  vec3 ba = B - A, oa = o - A;
-  float baba = dot(ba, ba), bard = dot(ba, d), baoa = dot(ba, oa), rdoa = dot(d, oa), oaoa = dot(oa, oa);
-  float a = baba - bard * bard, b = baba * rdoa - baoa * bard, c = baba * oaoa - baoa * baoa - 6.0 * 6.0 * baba;
-  float h = b * b - a * c;
-  if (h < 0.0) return vec3(0.0);
-  float t = max((-b - sqrt(h)) / a, 0.0), tEnd = min((-b + sqrt(h)) / a, T);
-  float stroke = uWhF.w, part = 0.0;
-  bool hit = false;
-  for (int i = 0; i < 90; i++){
+  // the skin lies within a thin shell under the plane z = 0.03 (and nowhere is deeper than ~0.2 in view)
+  if (d.z >= -0.02) return vec3(0.0);
+  float t = max((0.035 - o.z) / d.z, 0.0), tEnd = min((-0.45 - o.z) / d.z, T);
+  if (t > tEnd) return vec3(0.0);
+  float tp = t; bool hit = false;
+  for (int i = 0; i < 48; i++){
     vec3 p = o + d * t;
-    float dd = whaleSDF(p, stroke, part);
-    if (dd < 0.0015 * t){ hit = true; break; }
-    t += dd * 0.75;
+    float f = p.z - whaleSurf(p.xy);
+    if (f < 0.0){ hit = true; break; }
+    tp = t;
+    t += max(f * 0.55, 0.0004);
     if (t > tEnd) break;
   }
   if (!hit) return vec3(0.0);
+  for (int i = 0; i < 6; i++){ float tm = 0.5 * (tp + t); vec3 p = o + d * tm; if (p.z - whaleSurf(p.xy) < 0.0) t = tm; else tp = tm; }
   vec3 p = o + d * t;
-  vec3 n = whaleN(p, stroke);
-  // the skin's surface: fine wrinkles running round the body (across its length), pores, and folds round the eye
-  float er = length((p - vec3(0.0, -0.22, bodyR(0.0) * 0.98)).xy * vec2(0.8, 1.9));    // the folds lie long and low, like lids
-  float wr = sin(p.x * 70.0 + 6.0 * vnoise(p.yz * 6.0)) * 0.5 + 0.5;
-  float fold = sin(er * 80.0 + 1.5) * smoothstep(0.36, 0.10, er) * smoothstep(0.06, 0.09, er);
-  vec2 bump = vec2((vnoise(p.xy * 90.0) - 0.5) * 0.14 + (vnoise(p.xy * 23.0) - 0.5) * 0.10 + fold * 0.10, (vnoise(p.yx * 85.0) - 0.5) * 0.14 + fold * 0.55 + (vnoise(p.yx * 19.0 + 4.0) - 0.5) * 0.10);
-  n = normalize(n + vec3(bump.x, bump.y, 0.0) * (part == 2.0 ? 0.0 : 1.0));
-  // colour: dark slate above, paler below, with crisp-edged pale patches; scars; barnacles round the chin; the throat's grooves
-  float under = smoothstep(-0.2, -0.9, p.y / max(bodyR(p.x), 0.3));
-  float mott = vnoise(p.xy * 1.6 + p.z) * 0.6 + vnoise(p.xz * 4.0 + 3.0) * 0.4;
-  float patch_ = smoothstep(0.60, 0.63, mott) * under;                      // the pale patches are on its belly
-  vec3 alb = mix(vec3(0.085, 0.088, 0.095), vec3(0.34, 0.34, 0.33), patch_);
-  alb *= 0.80 + 0.35 * vnoise(p.xy * 6.0 + p.z) + 0.15 * (vnoise(p.xy * 40.0) - 0.5);
-  alb *= 1.0 - 0.45 * smoothstep(0.22, 0.05, er);                          // the skin darkens round the eye
-  float groove = smoothstep(0.75, 1.0, sin(atan(p.y, p.z) * 70.0)) * under * step(p.x, 1.5);
-  alb *= 1.0 - 0.45 * groove;
-  // old scars: a few thin wandering pale lines, here and there
-  vec2 sc = p.xy * vec2(2.2, 3.0) + p.z * 0.5;
-  float scar = smoothstep(0.006, 0.0, abs(vnoise(sc * 1.7 + 7.0) - 0.5)) * smoothstep(0.70, 0.80, vnoise(p.xy * 0.9 + 11.0));
-  alb = mix(alb, vec3(0.45, 0.45, 0.43), scar * 0.85);
-  float barn = smoothstep(0.30, 0.18, cell(p.xy * 9.0 + p.z * 3.0)) * smoothstep(0.55, 0.85, vnoise(p.xy * 2.2)) * step(0.6, p.x) * smoothstep(-0.1, -0.5, p.y);
-  alb = mix(alb, vec3(0.50, 0.48, 0.44) * (0.7 + 0.3 * vnoise(p.xy * 60.0)), barn);
-  if (part == 1.0){
-    // the flipper: white beneath, dark-mottled on top, its scalloped edge pale
-    float sfin; vec3 fl = finLocal(p, stroke, sfin);
-    float top = step(0.0, fl.y);
-    alb = mix(vec3(0.55, 0.56, 0.55), vec3(0.08, 0.085, 0.09), top * smoothstep(0.3, 0.6, vnoise(fl.xz * 3.0)));
-    alb *= 0.85 + 0.25 * vnoise(fl.xz * 14.0);
+  vec4 mat; float lice;
+  float hs = whaleH(p.xy, true, mat, lice), hb = ballH(p.xy);
+  bool isEye = hb > hs;
+  // the normal, from the relief's slope
+  vec2 e = vec2(0.0007, 0.0);
+  vec4 m_; float l_;
+  vec3 n;
+  if (isEye){ n = normalize(vec3(p.xy, hb) - BALL); }
+  else {
+    float hx = whaleH(p.xy + e.xy, true, m_, l_) - whaleH(p.xy - e.xy, true, m_, l_);
+    float hy = whaleH(p.xy + e.yx, true, m_, l_) - whaleH(p.xy - e.yx, true, m_, l_);
+    n = normalize(vec3(-hx, -hy, 2.0 * e.x));
   }
-  float spec = 0.25;
-  if (part == 2.0){ alb = vec3(0.030, 0.018, 0.012); spec = 1.6; }           // a wet, dark brown eye
-  // world point, light
   vec3 xw = ro + rd * t;
-  vec3 E = lightAt(xw), Ld = normalize(uL - xw);
-  vec3 nw = normalize(F * n.x + Up * n.y + Z * n.z);
-  float diff = max(dot(nw, Ld), 0.0);
-  vec3 hv = normalize(Ld - rd);
-  float sp = pow(max(dot(nw, hv), 0.0), part == 2.0 ? 300.0 : 40.0) * spec * (0.04 + 0.96 * pow(1.0 - max(dot(nw, -rd), 0.0), 5.0) + 0.06);
-  vec3 col = E * (alb * (diff * 0.9 + 0.1) + sp);
+  vec3 Lw = uL - xw;
+  vec3 Ll = vec3(dot(Lw, F), dot(Lw, Up), dot(Lw, Z)), Ld = normalize(Ll);
+  float distL = length(Ll);
+  // shadow: walk toward the light over the relief
+  float sh = 1.0, s = 0.0015;
+  for (int i = 0; i < 18; i++){
+    vec3 q = p + Ld * s;
+    float f = q.z - whaleSurf(q.xy);
+    sh = min(sh, 0.5 + 0.5 * f / (0.03 * s));
+    s += max(0.0025, s * 0.22);
+    if (sh < 0.0 || s > min(distL, 0.30)) break;
+  }
+  sh = smoothstep(0.0, 1.0, sat(sh));
+  vec3 V = -d;
+  vec3 Hh = normalize(Ld + V);
+  float ndl = dot(n, Ld), ndh = max(dot(n, Hh), 0.0), ndv = max(dot(n, V), 0.0);
+  vec3 E = lightAt(xw) * sh;
+  vec3 col;
+  if (isEye){
+    // the eye: turned toward wherever uWhG says. Nearly black: a dark brown iris with faint fibres, the pupil wide open
+    // (it is very dark down here), and round them the white, which shows only when it looks aside
+    vec3 g = normalize(uWhG.xyz);
+    float a = acos(clamp(dot(n, g), -1.0, 1.0));
+    vec3 gx = normalize(cross(vec3(0.0, 1.0, 0.0), g)), gy = cross(g, gx);
+    float az = atan(dot(n, gy), dot(n, gx));
+    float pr = 0.36 * (1.0 + 0.22 * abs(cos(az)));                     // a broad oval, wider than tall
+    float fib = vnoise(vec2(az * 14.0, a * 10.0)) * 0.6 + vnoise(vec2(az * 40.0, a * 4.0)) * 0.4;
+    vec3 iris = vec3(0.0085, 0.0058, 0.0042) * (0.7 + 0.5 * fib) * (0.8 + 0.5 * smoothstep(pr, 0.72, a));
+    iris *= 1.0 - 0.5 * smoothstep(0.64, 0.74, a);                      // a darker ring at its edge
+    vec3 sclera = vec3(0.16, 0.15, 0.135) * (0.80 + 0.30 * vnoise(vec2(az * 6.0, a * 7.0)));
+    sclera = mix(sclera, vec3(0.025, 0.017, 0.012), smoothstep(1.0, 0.80, a) * 0.7);   // brown seeps into the white near the iris
+    vec3 alb = mix(iris, sclera, smoothstep(0.76, 0.84, a));
+    alb = mix(vec3(0.0012, 0.0010, 0.0010), alb, smoothstep(pr - 0.03, pr + 0.03, a));
+    // a wet cornea: one crisp highlight, and a soft sheen over the whole ball
+    float fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+    float spec = 2.0 * pow(ndh, 1400.0) * (0.25 + fr);
+    col = E * (alb * max(ndl, 0.0) + spec * step(0.0, ndl)) ;
+    col *= smoothstep(-0.010, 0.008, hb);                               // dim where it sinks in under the lids
+  } else {
+    // skin: nearly black slate; darker in its creases; pale where scarred; barnacles chalky grey, grimed, a little green
+    vec3 alb = vec3(0.0070, 0.0076, 0.0090) * (0.80 + 0.40 * vnoise(p.xy * 11.0) + 0.15 * (vnoise(p.xy * 90.0) - 0.5));
+    alb *= 1.0 - 0.6 * sat(mat.z);
+    alb = mix(alb, vec3(0.034, 0.035, 0.036) * (0.75 + 0.4 * vnoise(p.xy * 150.0)), sat(mat.w) * 0.8);
+    vec3 shell = vec3(0.085, 0.082, 0.075) * (0.6 + 0.6 * vnoise(p.xy * 320.0)) * mix(vec3(1.0), vec3(0.70, 0.80, 0.60), smoothstep(0.4, 0.8, vnoise(p.xy * 45.0)) * 0.8);
+    alb = mix(alb, shell, sat(mat.x));
+    vec3 opening = vec3(0.004, 0.0035, 0.003);
+    vec3 plug = vec3(0.022, 0.021, 0.019) * (0.6 + 0.6 * vnoise(p.xy * 500.0));
+    alb = mix(alb, mix(plug, opening, smoothstep(0.4, 0.9, mat.y)), smoothstep(0.0, 0.25, mat.y));
+    alb = mix(alb, vec3(0.13, 0.07, 0.04), sat(lice));
+    // wet skin: a broad sheen that shows its shape; a glassy line where the lid meets the eye
+    float fr = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
+    float gloss = (0.030 * pow(ndh, 40.0) + 0.005 * pow(ndh, 6.0)) * (1.0 - sat(mat.x) * 0.6);
+    gloss += 0.15 * pow(ndh, 250.0) * smoothstep(0.0025, 0.0005, eyeOpen(p.xy, 1.0)) * smoothstep(0.3, 0.7, vnoise(p.xy * 300.0));
+    float wrap = sat((ndl + 0.10) / 1.10);
+    col = E * (alb * wrap + gloss * (0.4 + fr) * step(0.0, ndl));
+  }
   T = t;
   return col * exp(-SIG_V * t);
 }
@@ -684,7 +854,13 @@ W.deepsea = {
     ];
     // the whale: once in a long while it goes by, left to right, just beyond the light
     // its near side slides by a hand's breadth behind the light: all we see is skin, and once, the eye
-    this.whale = { E0: [0.0, 0.12, -3.33], F: YL.V.norm([1, 0, -0.02]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null };
+    this.whale = { E0: [0.0, 0.12, -3.33], F: YL.V.norm([1, 0, -0.02]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null, look: 0, blink: 0 };
+    // debug: &whaletest=x — a fixed close-up on the eye (x: how far it has slid on), &look=0…1, &blink=0…1, &wl=x,y,z the light by the eye
+    if (YL.QS.has('whaletest')) {
+      const q = (k, d) => YL.QS.has(k) ? YL.QS.get(k).split(',').map(Number) : d;
+      this.wtest = { x: +YL.QS.get('whaletest') || 0, L: q('wl', [0.07, 0.05, 0.20]), F: YL.V.norm(q('wf', [1, 0, -0.18])), E: q('we', [0.09, -0.02, -0.55]) };
+      this.whale.look = +(YL.QS.get('look') || 0); this.whale.blink = +(YL.QS.get('blink') || 0);
+    }
     // small lives in the dark: each a little fish with a row of blue lights along its side
     this.glow = [];
     for (let i = 0; i < 16; i++) {
@@ -851,11 +1027,22 @@ W.deepsea = {
   // where the whale's eye is (how far along its pass), or null when it isn't near
   whalePos() {
     const W = this.whale, V = YL.V;
+    if (this.wtest) { W.F = this.wtest.F; return { eye: V.add(this.wtest.E, V.mul(W.F, this.wtest.x)), x: this.wtest.x }; }
     // (its pass is still being framed — see M4b; for now it only appears when asked for with &whale=)
     if (W.at === null) return null;
     const x = W.at;
     if (x < -6 || x > 18) return null;
     return { eye: V.add(W.E0, V.mul(W.F, x)), x };
+  },
+  // where the whale's eye looks, in its own frame: out and a little forward; or, as much as it can, at the light
+  whaleGaze(wp, L) {
+    const V = YL.V, F = this.whale.F, Z = V.norm(V.cross(F, [0, 1, 0])), U = V.cross(Z, F);
+    const ball = V.add(wp.eye, V.mul(Z, -0.036)), l = V.sub(L, ball);
+    const toL = V.norm([V.dot(l, F), V.dot(l, U), V.dot(l, Z)]), rest = V.norm([0.10, -0.03, 1]);
+    // it can turn about 30° from rest
+    const c = Math.max(-1, Math.min(1, V.dot(toL, rest))), ang = Math.acos(c), lim = Math.min(ang, 0.52);
+    const k = this.whale.look * (ang > 1e-4 ? lim / ang : 0);
+    return [...V.norm(V.add(V.mul(rest, 1 - k), V.mul(toL, k))), 0];
   },
   targets(w, h) {
     const k = MOBILE ? 0.7 : 1.0, sw = Math.max(1, Math.round(w * k)), sh = Math.max(1, Math.round(h * k));
@@ -867,6 +1054,13 @@ W.deepsea = {
   // the eye: drifting, weightless, turning a little
   camera(aspect, t, still) {
     const V = YL.V;
+    if (this.wtest) {
+      // (&wz=k: k× closer in on the eye, for looking at detail)
+      const z = +(YL.QS.get('wz') || 1), ty = Math.tan(25 * Math.PI / 180) / z;
+      const wa = YL.QS.has('wa') ? YL.QS.get('wa').split(',').map(Number) : [0, 0];
+      const at = z > 1 ? V.norm(V.add(this.whalePos().eye, [wa[0], wa[1], 0])) : [0, 0, -1], right = V.norm(V.cross(at, [0, 1, 0]));
+      return { eye: [0, 0, 0], fwd: at, right, up: V.cross(right, at), tan: [ty * aspect, ty] };
+    }
     const eye = still ? [0, 0, 0] : [0.04 * Math.sin(t * 0.07), 0.03 * Math.sin(t * 0.05 + 1), 0.03 * Math.sin(t * 0.06 + 2)];
     // at the end it rises toward the light above, and the eye goes up with it, looking up
     const r = Math.min(1, (this.rise || 0) * 1.8), re = r * r * (3 - 2 * r);
@@ -889,6 +1083,8 @@ W.deepsea = {
   },
   // (world only) the light that will be 一粒光: a metre in front, drifting
   lightPos(t, cam) {
+    if (this.wtest) { const wp = this.whalePos(), F = this.whale.F, Z = YL.V.norm(YL.V.cross(F, [0, 1, 0])), U = YL.V.cross(Z, F), l = this.wtest.L;
+      return YL.V.add(wp.eye, YL.V.add(YL.V.mul(F, l[0]), YL.V.add(YL.V.mul(U, l[1]), YL.V.mul(Z, l[2])))); }
     if (this.hero.on) return this.hero.p.slice();
     const V = YL.V, still = YL.DBG.still;
     const off = still ? [0, -0.02, 0] : [0.07 * Math.sin(t * 0.21), -0.02 + 0.05 * Math.sin(t * 0.17 + 1), 0.05 * Math.sin(t * 0.13 + 2)];
@@ -992,7 +1188,8 @@ W.deepsea = {
     gl.uniform4fv(this.pSea.u.uJP, jp); gl.uniform4fv(this.pSea.u.uJU, ju); gl.uniform4fv(this.pSea.u.uJK, jk);
     const wp = this.wp = this.whalePos();
     U(this.pSea, 'uWh', wp ? [...wp.eye, 1] : [0, 0, 0, 0]);
-    U(this.pSea, 'uWhF', [...this.whale.F, 0.6 * Math.sin(this.t * 0.45)]);
+    U(this.pSea, 'uWhF', [...this.whale.F, this.whale.blink]);
+    U(this.pSea, 'uWhG', wp ? this.whaleGaze(wp, L) : [0, 0, 1, 0]);
     U(this.pSea, 'uSurf', [this.surfY ?? 99, this.surf || 0, this.tea || 0, 0]);
     const ff = this.fishFrame();
     U(this.pSea, 'uFishP', [...ff.c, Lr.shown]); U(this.pSea, 'uFishF', [...ff.F, Lr.gape]);
