@@ -56,13 +56,14 @@
 <div id="hint">轻触台灯 · 指尖划过玻璃</div>
 <div id="ui">
   <div id="panel" role="dialog" aria-label="设置">
+    <div class="row"><span>视角</span><span class="seg" id="view"><button data-v="0">窗内</button><button data-v="1">窗外</button></span></div>
     <div class="row"><span>季节</span><span class="seg" id="season"><button data-s="0">春</button><button data-s="1">夏</button><button data-s="2">秋</button><button data-s="3">冬</button></span></div>
     <label style="margin-top:8px"><span class="row"><span>时刻</span><span class="sub" id="todLabel"></span></span><input id="tod" type="range" min="0" max="24" step="0.05"></label>
     <div class="row" style="margin-bottom:10px"><span>时间流逝</span><button class="tog" id="flow" aria-pressed="false">停</button></div>
     <label><span id="rainLbl">雨势</span><input id="rain" type="range" min="0" max="1" step="0.01" value="0.55"></label>
     <label>流速<input id="speed" type="range" min="0.2" max="2.5" step="0.01" value="1"></label>
     <div class="row"><span>声音</span><button class="tog" id="snd" aria-pressed="true">开</button></div>
-    <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>S 季节 · T 时间流逝 · L 台灯 · M 静音 · H 隐藏</div>
+    <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>V 窗内／窗外 · S 季节 · T 时间流逝 · L 台灯 · M 静音 · H 隐藏</div>
   </div>
   <button id="uiBtn" aria-label="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 1.8C8 1.8 3.6 7 3.6 10a4.4 4.4 0 0 0 8.8 0C12.4 7 8 1.8 8 1.8Z"/></svg></button>
 </div>
@@ -113,6 +114,9 @@ const DBG = {
 const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+// 视角：窗内，或走到楼下的人行道上回头看这扇窗。切换像一次剪辑：暗下 0.6 s，再亮起 1.2 s。
+const VIEW = { out: QS.get('view') === 'out', want: QS.get('view') === 'out', mix: QS.get('view') === 'out' ? 1 : 0 };
+if (VIEW.out) DBG.view = '';
 function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const rnd = mulberry32(DBG.seed);
 const V = {
@@ -263,7 +267,8 @@ float rectIrr(vec3 p, vec3 n, vec2 lo, vec2 hi, float z){
 // --------------------------------------------------------------------------
 // ROOM: SDF raymarcher
 // --------------------------------------------------------------------------
-const FS_ROOM = () => GLSL_HEAD() + GLSL_LIGHT + `
+// everything the room raymarcher needs except its main(): the street view reuses it to see into the room
+const ROOM_LIB = `
 uniform vec2 uRes;
 uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
@@ -1620,6 +1625,8 @@ vec4 smokeVol(vec3 ro, vec3 rd, float tEnd){
   return vec4(S, exp(-tau));
 }
 
+`;
+const FS_ROOM = () => GLSL_HEAD() + GLSL_LIGHT + ROOM_LIB + `
 void main(){
   vec2 ndc = (gl_FragCoord.xy + uJitter) / uRes * 2.0 - 1.0;
   vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
@@ -2259,25 +2266,9 @@ void main(){
   o = vec4(max(h, 0.0) * uHScale, 0.0, 0.0, 1.0);
 }`;
 
-// --------------------------------------------------------------------------
-// COMPOSITE: glass over room (full resolution)
-// --------------------------------------------------------------------------
-const FS_COMPOSITE = () => GLSL_HEAD() + GLSL_LIGHT + GLSL_INTERIOR + `
-uniform vec2 uRes;
-uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
-uniform vec2 uTan;
-uniform sampler2D uRoom, uDefocus, uSharp, uHeight, uState;
-uniform vec2 uSimMM;        // simulated glass size (mm)
-uniform vec2 uHTex;         // height texture size (texels)
-uniform float uHScale;
-uniform float uTime;
-uniform int uDbg;
-uniform float uFrost, uFogK;     // winter frost on the inside; how heavily the inside condenses this season
-uniform vec4 uGLeaf[3];          // autumn: wet leaves stuck to the outside of the glass (x, y, size, angle; size 0 = none)
-out vec4 o;
-
+// optics of water and glass, and the paper-cuts on the inside of the panes (shared by the composite and the street view)
+const GLSL_GLASS = `
 const float NW = 1.333;     // water
-vec2 rot2(vec2 v, float a){ float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
 float rectSoft(vec2 p, vec2 hs, vec2 w){ vec2 q = abs(p) - hs; return smoothstep(w.x, -w.x, q.x) * smoothstep(w.y, -w.y, q.y); }
 const float NG = 1.52;      // soda-lime glass
 // exact unpolarised Fresnel reflectance, n1 → n2, ci = cos(incidence) in medium n1
@@ -2291,8 +2282,6 @@ float fresnel(float ci, float n1, float n2){
 }
 vec2 dirToEq(vec3 d){ return vec2(atan(d.x, -d.z) / AZM * 0.5 + 0.5, (asin(clamp(d.y, -1.0, 1.0)) - ELMIN) / (ELMAX - ELMIN)); }
 
-// micro-droplets of the outside mist (too many to simulate one by one): a jittered grid of
-// tiny caps whose presence and size follow the local mist density M (sim-mm units)
 // 窗花（角花）：红纸剪的扇形角花，贴在内侧玻璃的上角。d = distance from the pane's corner into the pane (m).
 // Paper minus cut-outs: a scalloped rim, a ring of round holes, radial petal slits, a five-petal flower, an eye.
 float paperCut(vec2 d, float R, float aa){
@@ -2312,7 +2301,584 @@ float paperCut(vec2 d, float R, float aa){
   holes = max(holes, smoothstep(aa, -aa, r - R * 0.075) - smoothstep(aa, -aa, r - R * 0.035));
   return paper * (1.0 - holes);
 }
+`;
 
+// --------------------------------------------------------------------------
+// STREET: 走出去，站在楼下的人行道上，隔着雨回头看这扇窗。
+// The facade, the pavement and the lane lamp are a small SDF scene. A ray that reaches our window meets the
+// drops on the outside of the glass (the same height field), refracts through them and the pane, and goes on
+// into the very same room SDF, shaded by the very same lamp; the inside condensation, the frost and the
+// paper-cuts lie on the far side of the glass. Rain in the air and the glow round the lamps are added after TAA.
+// --------------------------------------------------------------------------
+const GLSL_STREET = `
+#define FAC_Z (-0.30)                               // outer face of our wall (30 cm of brick and lime plaster)
+#define PAVE_Y (GROUND_Y + 0.14)                    // the pavement, a kerb's height above the road
+#define FLOOR2 2.98                                 // the floor upstairs
+const vec3 WL_P = vec3(-2.15, 2.80, -0.95);         // the lane lamp's bulb, under a green enamel shade on an iron bracket (from the street, +x is on the left)
+const vec3 UPW_C = vec3(0.0, FLOOR2 + 1.55, 0.0);   // the window upstairs (same size as ours)
+const vec3 NBW_C = vec3(-6.6, WIN_CY, 0.0);         // the neighbour's window on our floor
+const vec3 BSW_C = vec3(0.0, -1.05, 0.0);           // a barred half-window of the semi-basement under ours
+const vec3 AC_C = vec3(1.65, 2.6, FAC_Z - 0.17);    // an old air-conditioner box on two angle-iron brackets
+#define PIPE_X 2.75
+float lampMask(vec3 dirFromBulb){ return smoothstep(-0.05, -0.3, dirFromBulb.y); }   // the shade only lets light down
+vec3 skyRad(vec3 d){ return mix(uSkyH, uSkyZ, sat(d.y * 1.4)); }
+`;
+const FS_STREET = () => GLSL_HEAD() + GLSL_LIGHT + ROOM_LIB + GLSL_CITY.replace('uniform float uTime;\n', '') + GLSL_GLASS + `
+uniform sampler2D uHeight, uState, uSharp;
+uniform vec2 uSimMM, uHTex;
+uniform float uHScale, uFogK, uFrost;
+uniform vec3 uSkyZ, uSkyH, uEVert, uEGround;
+uniform vec3 uCityGlow;      // irradiance on our facade from the lit street behind the viewer
+uniform vec3 uWallI;         // lane lamp intensity (0 by day)
+uniform vec4 uFarLamp;       // the sodium lamp across the street: xyz, intensity
+uniform vec3 uLampTint;
+uniform vec3 uWinL;          // mean radiance leaving our window (lamp-lit room behind fogged glass)
+uniform float uOcc, uSnow, uRain;
+uniform vec4 uGLeaf[3];
+` + GLSL_STREET + `
+#define S_WALL 60.0
+#define S_PLINTH 61.0
+#define S_STONE 62.0
+#define S_PAVE 63.0
+#define S_PIPE 64.0
+#define S_AC 65.0
+#define S_IRON 66.0
+#define S_ENAMEL 67.0
+#define S_BULB 68.0
+#define S_GLASS2 69.0
+#define S_CABLE 70.0
+
+float holeBox(vec3 p, vec3 c, vec2 hs, float depth){ return sdBox(p - vec3(c.x, c.y, FAC_Z + depth * 0.5), vec3(hs, depth * 0.5 + 0.002)); }
+// the wall with its openings (ours leads into the room SDF; the window upstairs, the neighbour's, the basement's)
+float wallSDF(vec3 p){
+  float air = FAC_Z - p.z;
+  if (air > 0.3) return air;
+  float wall = max(air, sdRoom(p));
+  wall = max(wall, -holeBox(p, UPW_C, vec2(WIN_HW, WIN_HH), 0.17));
+  wall = max(wall, -holeBox(p, NBW_C, vec2(WIN_HW, WIN_HH), 0.17));
+  return max(wall, -holeBox(p, BSW_C, vec2(0.42, 0.24), 0.2));
+}
+// everything that stands out from the wall: these are what cast the lane lamp's shadows (a flat wall lit from in
+// front cannot shadow itself, and testing it at grazing angles only makes bands)
+vec2 mapProt(vec3 p, bool shadow){
+  vec2 res = vec2(1e9, -1.0);
+  float air = FAC_Z - p.z;
+  if (air < 0.5){
+    // their glass (a solid here: nobody is looking into those rooms) and the basement bars
+    float g2 = min(sdBox(p - vec3(UPW_C.x, UPW_C.y, FAC_Z + 0.15), vec3(WIN_HW, WIN_HH, 0.015)), sdBox(p - vec3(NBW_C.x, NBW_C.y, FAC_Z + 0.15), vec3(WIN_HW, WIN_HH, 0.015)));
+    g2 = min(g2, sdBox(p - vec3(BSW_C.x, BSW_C.y, FAC_Z + 0.18), vec3(0.42, 0.24, 0.01)));
+    res = opU(res, vec2(g2, S_GLASS2));
+    float bx = p.x - BSW_C.x; bx = bx - 0.12 * clamp(floor(bx / 0.12 + 0.5), -3.0, 3.0);
+    res = opU(res, vec2(max(length(vec2(bx, p.z - FAC_Z - 0.05)) - 0.009, abs(p.y - BSW_C.y) - 0.25), S_IRON));
+    // stone: the plinth's cap, the string course between the floors, our outer sill (weathered to a slope), the sill upstairs
+    float st = sdBox(p - vec3(0.0, -0.05, FAC_Z - 0.025), vec3(60.0, 0.05, 0.026));
+    st = min(st, sdBox(p - vec3(0.0, FLOOR2 - 0.11, FAC_Z - 0.02), vec3(60.0, 0.09, 0.021)));
+    float sill = sdBox(p - vec3(0.0, WIN_Y0 - 0.04, FAC_Z + 0.015), vec3(WIN_HW + 0.09, 0.04, 0.125));
+    sill = max(sill, p.y - (WIN_Y0 - 0.006 + 0.16 * (p.z + 0.16)));
+    st = min(st, sill);
+    st = min(st, sdBox(p - vec3(UPW_C.x, UPW_C.y - WIN_HH - 0.03, FAC_Z - 0.03), vec3(WIN_HW + 0.08, 0.03, 0.06)));
+    st = min(st, sdBox(p - vec3(NBW_C.x, NBW_C.y - WIN_HH - 0.03, FAC_Z - 0.03), vec3(WIN_HW + 0.08, 0.03, 0.06)));
+    res = opU(res, vec2(st, S_STONE));
+    // two black cables slung along the wall between porcelain knobs, sagging between them
+    if (!shadow){                                   // (5 mm cables cast no shadow worth the banding they cause)
+    float cx = fract(p.x / 3.1) * 2.0 - 1.0, sag = 0.07 * (1.0 - cx * cx);
+    float cab = min(length(vec2(p.y - (2.64 - sag), p.z - FAC_Z + 0.05)), length(vec2(p.y - (2.70 - sag * 0.8), p.z - FAC_Z + 0.07))) - 0.0055;
+    res = opU(res, vec2(cab, S_CABLE));
+    }
+  }
+  // our frame, seen from outside (the room SDF's casement)
+  if (air < 0.2 && abs(p.x) < WIN_HW + 0.1 && abs(p.y - WIN_CY) < WIN_HH + 0.1) res = opU(res, vec2(sdFrame(p), M_FRAME));
+  // the air-conditioner box and its brackets
+  vec3 qa = p - AC_C;
+  float ba = sdBox(qa, vec3(0.45, 0.36, 0.2));
+  if (ba < 0.05 || shadow){
+    res = opU(res, vec2(sdRBox(qa, vec3(0.40, 0.26, 0.16), 0.012), S_AC));
+    float br = min(sdBox(qa - vec3(-0.28, -0.285, 0.0), vec3(0.016, 0.016, 0.17)), sdBox(qa - vec3(0.28, -0.285, 0.0), vec3(0.016, 0.016, 0.17)));
+    br = min(br, min(sdCapsule(qa, vec3(-0.28, -0.29, -0.16), vec3(-0.28, -0.60, 0.17), 0.012), sdCapsule(qa, vec3(0.28, -0.29, -0.16), vec3(0.28, -0.60, 0.17), 0.012)));
+    res = opU(res, vec2(br, S_IRON));
+  } else res = opU(res, vec2(ba, S_AC));
+  // the cast-iron downpipe, with collars every 1.6 m
+  vec3 qp = p - vec3(PIPE_X, 0.0, FAC_Z - 0.075);
+  float pipe = length(qp.xz) - 0.048;
+  float cy = mod(p.y, 1.6) - 0.8;
+  pipe = min(pipe, max(length(qp.xz) - 0.058, abs(cy) - 0.02));
+  res = opU(res, vec2(max(pipe, PAVE_Y + 0.02 - p.y), S_PIPE));
+  // the lane lamp: an iron bracket out of the wall, a stay, a green enamel shade over a bare bulb
+  if (shadow) return res;
+  vec3 ql = p - WL_P;
+  float bl = sdBox(ql - vec3(0.0, 0.0, 0.33), vec3(0.2, 0.4, 0.42));
+  if (bl < 0.05){
+    float arm = min(sdCapsule(p, vec3(WL_P.x, WL_P.y + 0.16, FAC_Z), WL_P + vec3(0.0, 0.16, -0.02), 0.014), sdCapsule(p, WL_P + vec3(0.0, 0.16, -0.02), WL_P + vec3(0.0, 0.065, 0.0), 0.011));
+    arm = min(arm, sdCapsule(p, vec3(WL_P.x, WL_P.y - 0.22, FAC_Z), WL_P + vec3(0.0, 0.16, 0.38), 0.009));
+    res = opU(res, vec2(arm, S_IRON));
+    float sh = sdCappedCone(ql - vec3(0.0, 0.025, 0.0), 0.04, 0.165, 0.045);
+    res = opU(res, vec2(abs(sh) - 0.0025, S_ENAMEL));
+    res = opU(res, vec2(length(ql) - 0.032, S_BULB));
+  } else res = opU(res, vec2(bl, S_IRON));
+  return res;
+}
+vec2 mapStreet(vec3 p){
+  vec2 res = vec2(p.y - PAVE_Y, S_PAVE);
+  res = opU(res, vec2(wallSDF(p), p.y < -0.1 ? S_PLINTH : S_WALL));
+  return opU(res, mapProt(p, false));
+}
+vec3 calcNormalS(vec3 p){
+  const vec2 k = vec2(1.0, -1.0); const float e = 0.0008;
+  return normalize(k.xyy * mapStreet(p + k.xyy * e).x + k.yyx * mapStreet(p + k.yyx * e).x + k.yxy * mapStreet(p + k.yxy * e).x + k.xxx * mapStreet(p + k.xxx * e).x);
+}
+float shadowS(vec3 ro, vec3 rd, float tmax, float k){
+  float res = 1.0, t = 0.01;
+  bool recess = ro.z > FAC_Z + 0.002;                         // inside a window's reveal the wall itself can shade
+  for (int i = 0; i < 20; i++){
+    vec3 q = ro + rd * t;
+    float h = mapProt(q, true).x;
+    if (recess) h = min(h, wallSDF(q));
+    res = min(res, k * h / t);
+    t += clamp(h, 0.01, 0.3);
+    if (res < 0.01 || t > tmax) break;
+  }
+  return smoothstep(0.0, 1.0, sat(res));
+}
+// (occlusion from the real occluders only: a bounding box's distance would print its outline on the wall)
+float occS(vec3 q){ return min(min(q.y - PAVE_Y, wallSDF(q)), mapProt(q, true).x); }
+float aoS(vec3 p, vec3 n){
+  float a = occS(p + n * 0.05) / 0.05, b = occS(p + n * 0.2) / 0.2;
+  return sat(0.25 + 0.45 * sat(a) + 0.3 * sat(b));
+}
+// irradiance at a street surface: overcast sky, the lit street behind the viewer, the lane lamp (shadowed),
+// the sodium lamp across the street (through the plane tree: its leaves throw moving shadows on our wall), our window
+vec3 outdoorE(vec3 p, vec3 n, float ao, bool shadows){
+  vec3 E = (n.y >= 0.0 ? mix(uEVert, uEGround, n.y) : mix(uEVert, uEGround * 0.12, -n.y)) * ao;
+  E += uCityGlow * max(-n.z, 0.0) * mix(1.0, ao, 0.6);
+  vec3 L = WL_P - p; float d2 = dot(L, L); vec3 l = L * inversesqrt(d2);
+  float nl = dot(n, l);
+  if (nl > 0.0 && uWallI.r > 0.0){
+    float m = lampMask(-l);
+    if (m > 0.0) E += uWallI * m * nl / d2 * (shadows ? shadowS(p + n * 0.004, l, sqrt(d2) - 0.24, 12.0) : 1.0);   // (the shade itself is lampMask)
+  }
+  vec3 F = uFarLamp.xyz - p; float f2 = dot(F, F); vec3 fl = F * inversesqrt(f2);
+  float nf = dot(n, fl);
+  if (nf > 0.0 && uFarLamp.w > 0.0){
+    float tt = (TREE_Z - p.z) / fl.z, sh = 1.0;
+    if (tt > 0.0){
+      vec2 pt = p.xy + fl.xy * tt, tp = treeParts(pt, 0.07);
+      // the crown's shadow is dappled: light comes through the gaps between leaves
+      sh = 1.0 - 0.9 * max(tp.x * (0.4 + 0.6 * smoothstep(0.42, 0.62, 0.6 * vnoise(FBM_R * pt * 6.0 + 3.0) + 0.4 * vnoise(FBM_R * FBM_R * pt * 5.0))), tp.y);
+    }
+    E += uLampTint * uFarLamp.w * nf / f2 * sh;
+  }
+  E += uWinL * rectIrr(p, n, vec2(WIN_X1, WIN_Y0), vec2(WIN_X0, WIN_Y1), GLASS_Z);
+  return E;
+}
+// the lane lamp's highlight on a glossy surface (sphere light)
+vec3 lampSpec(vec3 p, vec3 n, vec3 v, float a, vec3 f0){
+  vec3 L = WL_P - p; float d2 = dot(L, L), d = sqrt(d2); vec3 l = L / d;
+  float nl = dot(n, l), nv = max(dot(n, v), 1e-3);
+  if (nl <= 0.0 || uWallI.r <= 0.0) return vec3(0.0);
+  vec3 hv = normalize(l + v);
+  float aL = sat(a + 0.032 / (2.0 * d));
+  return uWallI * lampMask(-l) * nl / d2 * D_GGX(max(dot(n, hv), 0.0), aL) * V_Smith(nv, nl, aL) * F_Schlick(f0, max(dot(l, hv), 0.0));
+}
+
+// ---- the wall: faded ochre lime-wash over brick, streaked by years of rain
+vec3 wallAlb(vec3 p, out float rough){
+  vec2 w = p.xy;
+  vec3 c = vec3(0.50, 0.42, 0.29) * (0.82 + 0.3 * fbm(w * 0.8));
+  c = mix(c, vec3(0.40, 0.40, 0.33), 0.35 * smoothstep(0.5, 0.8, fbm(w * 0.35 + 4.0)));            // patched with a greyer wash
+  // where the plaster has fallen away: brick, in staggered courses
+  float spall = smoothstep(0.79, 0.81, fbm(w * 1.3 + 3.0) + 0.08 * vnoise(w * 9.0) + 0.08 * smoothstep(1.5, -0.2, p.y));
+  if (spall > 0.0){
+    vec2 b = vec2(w.x / 0.24 + 0.5 * mod(floor(w.y / 0.065), 2.0), w.y / 0.065);
+    vec2 bf = fract(b);
+    float mortar = 1.0 - smoothstep(0.0, 0.06, min(min(bf.x, 1.0 - bf.x) * 0.27, min(bf.y, 1.0 - bf.y)));
+    vec3 brick = mix(vec3(0.20, 0.13, 0.10), vec3(0.26, 0.17, 0.13), hash12(floor(b))) * (1.0 - 0.6 * mortar) + vec3(0.25) * mortar * 0.6;
+    c = mix(c, brick, spall * 0.85);
+    c *= 1.0 - 0.25 * smoothstep(0.0, 0.5, spall) * smoothstep(1.0, 0.5, spall);        // the broken plaster edge
+  }
+  // rain streaks: water running off the sill's ends, off the AC box and off the string course, carrying grime down
+  float sk = 0.0;
+  for (int k = 0; k < 2; k++){
+    float x0 = (k == 0 ? -1.0 : 1.0) * (WIN_HW + 0.07);
+    sk = max(sk, smoothstep(0.05, 0.0, abs(p.x - x0 - 0.015 * sin(p.y * 6.0))) * step(p.y, WIN_Y0 - 0.08) * exp(-(WIN_Y0 - p.y) * 0.5));
+  }
+  sk = max(sk, smoothstep(0.06, 0.0, abs(abs(p.x - AC_C.x) - 0.36)) * step(p.y, AC_C.y - 0.3) * exp(-(AC_C.y - p.y) * 0.4));
+  sk = max(sk, smoothstep(0.55, 0.85, vnoise(vec2(p.x * 7.0, 1.0))) * smoothstep(FLOOR2 - 1.2, FLOOR2 - 0.2, p.y) * step(p.y, FLOOR2 - 0.2) * 0.7);
+  sk = max(sk, 0.6 * smoothstep(0.6, 0.0, abs(p.x - PIPE_X)) * smoothstep(1.2, -0.1, p.y - PAVE_Y) * 0.8);
+  c *= 1.0 - 0.45 * sk;
+  c *= 0.93 + 0.07 * vnoise(w * vec2(40.0, 3.0));                                     // brush marks of the lime-wash
+  c = mix(c, vec3(0.16, 0.18, 0.12), 0.5 * smoothstep(0.55, 0.9, fbm(w * 2.2 + 9.0)) * smoothstep(1.8, 0.0, p.y));   // damp, mould
+  // the blue enamel house-number plate (门牌) beside the window, and a half-torn notice pasted near the pipe
+  vec2 hp = w - vec2(-0.86, 1.98);
+  if (abs(hp.x) < 0.1 && abs(hp.y) < 0.065){
+    float rim = step(0.088, abs(hp.x)) + step(0.053, abs(hp.y));
+    vec2 g = vec2(hp.x / 0.018, (hp.y + 0.008) / 0.03);
+    float digit = step(abs(hp.y + 0.008), 0.022) * step(abs(hp.x), 0.06) * step(0.45, vnoise(g * 3.0 + floor(g.x)));
+    c = mix(vec3(0.03, 0.08, 0.22), vec3(0.62), max(sat(rim), digit));
+    c = mix(c, vec3(0.2, 0.12, 0.06), 0.4 * smoothstep(0.6, 0.85, vnoise(hp * 90.0)));   // chipped enamel, rust
+    rough = 0.2;
+    return c;
+  }
+  vec2 np = w - vec2(1.25, 1.35);
+  float torn = fbm(np * 18.0);
+  if (abs(np.x) < 0.15 && abs(np.y) < 0.2 && torn > 0.32 + 0.4 * smoothstep(-0.05, -0.2, np.y)){
+    vec3 paper = vec3(0.55, 0.52, 0.42) * (0.8 + 0.2 * vnoise(np * 200.0));
+    float text = step(0.5, vnoise(vec2(np.x * 120.0, floor(np.y / 0.018) * 7.0))) * step(fract(np.y / 0.018), 0.55) * step(abs(np.x), 0.12);
+    paper = mix(paper, vec3(0.08), text * 0.8);
+    paper = mix(paper, vec3(0.5, 0.06, 0.05), step(0.13, np.y) * step(abs(np.x), 0.1));   // a red heading
+    c = mix(c, paper * 0.85, 0.95);
+  }
+  rough = 0.75;
+  return c;
+}
+vec3 plinthAlb(vec3 p){
+  // 水刷石: grey granite chips in render, scored into blocks; splash-back keeps the bottom wet and green
+  vec2 b = vec2(p.x / 0.9 + 0.5 * mod(floor(p.y / 0.42), 2.0), p.y / 0.42);
+  vec2 bf = fract(b);
+  float joint = 1.0 - smoothstep(0.0, 0.012, min(min(bf.x, 1.0 - bf.x) * 0.9, min(bf.y, 1.0 - bf.y) * 0.42));
+  vec3 c = vec3(0.33, 0.32, 0.29) * (0.75 + 0.5 * hash12(floor(p.xy * 160.0))) * (0.9 + 0.2 * hash12(floor(b)));
+  c *= 1.0 - 0.6 * joint;
+  c = mix(c, vec3(0.08, 0.11, 0.06), 0.7 * smoothstep(0.4, 0.0, p.y - PAVE_Y) * (0.5 + 0.5 * fbm(p.xy * 6.0)));
+  return c;
+}
+
+// ---- puddles: rain rings spreading on the water (two sizes of drop), as a normal perturbation
+vec2 ripples(vec2 xz){
+  vec2 acc = vec2(0.0);
+  for (int L = 0; L < 2; L++){
+    float cs = L == 0 ? 0.32 : 0.19;
+    vec2 g = xz / cs, gi = floor(g);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+      vec2 c = gi + vec2(float(i), float(j));
+      vec3 h = hash32(c + float(L) * 37.0);
+      float per = 0.9 + 0.8 * h.z;
+      float tt = fract(uTime / per + h.z * 7.0) * per;
+      vec2 d = (xz - (c + 0.2 + 0.6 * h.xy) * cs);
+      float r = length(d), R = tt * 0.28;
+      float x = (r - R) * 70.0;
+      float ring = sin(clamp(x, -9.42, 9.42)) * exp(-x * x * 0.03) * pow(1.0 - tt / per, 2.0) * smoothstep(0.0, 0.05, tt);
+      acc += d / max(r, 1e-4) * ring * (L == 0 ? 0.11 : 0.06);
+    }
+  }
+  return acc * sat(uRain * 1.4);
+}
+// what a puddle mirrors: the wall above it (with our lit window, the lamp, the windows upstairs) or the sky
+vec3 mirrorScene(vec3 p, vec3 r){
+  if (r.z > 0.02){
+    float tw = (FAC_Z - p.z) / r.z;
+    vec3 q = p + r * tw;
+    if (q.y < 10.0){
+      if (abs(q.x - WIN_CX) < WIN_HW && abs(q.y - WIN_CY) < WIN_HH){
+        float bar = smoothstep(MW + 0.01, MW, abs(q.x)) + smoothstep(TW + 0.01, TW, abs(q.y - TRANSOM_Y));
+        return mix(uWinL * 1.3, vec3(0.004, 0.006, 0.004), sat(bar));
+      }
+      vec3 a = abs(q - UPW_C), b = abs(q - NBW_C);
+      if ((a.x < WIN_HW && a.y < WIN_HH) || (b.x < WIN_HW && b.y < WIN_HH)) return skyRad(r) * 0.25 + uCityGlow * 0.004;
+      float rr; vec3 alb = (q.y < -0.1 ? plinthAlb(q) : wallAlb(q, rr)) * 0.72;          // wet, like the wall itself
+      return alb / PI * outdoorE(q, vec3(0.0, 0.0, -1.0), 0.6 + 0.4 * smoothstep(0.0, 0.6, q.y - PAVE_Y), false);
+    }
+  }
+  return skyRad(r);
+}
+vec3 envOut(vec3 r){          // the street behind the viewer, as the glass mirrors it (rendered from the window)
+  r.z = min(r.z, -0.03); r = normalize(r);
+  return textureLod(uSharp, dirToEq(r), 0.5).rgb;
+}
+
+vec3 shadeStreet(vec3 p, vec3 n, vec3 rd, float id){
+  vec3 v = -rd;
+  float ao = aoS(p, n);
+  float rough = 0.8, wetK = 0.6; vec3 alb = vec3(0.3), emis = vec3(0.0), f0 = vec3(0.04);
+  float snowy = uSnow * smoothstep(0.6, 0.9, n.y);
+  if (id == S_WALL){ alb = wallAlb(p, rough); alb *= 0.72; }                    // wet lime-wash darkens
+  else if (id == S_PLINTH) { alb = plinthAlb(p) * 0.75; rough = 0.6; }
+  else if (id == S_STONE){ alb = vec3(0.30, 0.29, 0.27) * (0.7 + 0.4 * fbm(p.xy * 9.0 + p.z * 5.0)) * (n.y > 0.5 ? 0.6 : 0.8); rough = n.y > 0.5 ? 0.25 : 0.6; }
+  else if (id == S_PIPE){ alb = mix(vec3(0.08, 0.10, 0.09), vec3(0.22, 0.10, 0.05), smoothstep(0.5, 0.8, fbm(p.xy * vec2(30.0, 4.0)))); rough = 0.35; }
+  else if (id == S_AC){
+    vec3 q = p - AC_C;
+    alb = vec3(0.52, 0.50, 0.44) * (0.85 + 0.15 * fbm(q.xy * 20.0));
+    alb = mix(alb, vec3(0.30, 0.15, 0.07), 0.6 * smoothstep(0.55, 0.8, fbm(vec2(q.x * 25.0, q.y * 3.0))) * smoothstep(0.0, -0.25, q.y));   // rust runs
+    if (n.z < -0.7){
+      vec2 g = q.xy - vec2(0.12, 0.0); float r = length(g);
+      float grille = step(r, 0.21) * (0.5 + 0.5 * step(0.5, fract(r * 55.0)));
+      alb = mix(alb, vec3(0.03), grille * 0.85);
+      alb = mix(alb, vec3(0.04), step(abs(q.x + 0.29), 0.06) * step(abs(q.y), 0.2) * step(0.5, fract(q.y * 45.0)));   // louvres
+    }
+    rough = 0.45;
+  }
+  else if (id == S_IRON || id == S_CABLE){ alb = vec3(0.025, 0.024, 0.022); rough = 0.4; }
+  else if (id == S_ENAMEL){
+    bool inner = dot(n, normalize(p - WL_P)) < 0.0;
+    alb = inner ? vec3(0.75, 0.74, 0.70) : vec3(0.05, 0.16, 0.10); rough = 0.12;
+    if (inner) emis = uWallI * 0.75 / dot(p - WL_P, p - WL_P) * 0.75 / PI;           // the white enamel inside, lit by the bulb
+  }
+  else if (id == S_BULB){ emis = uWallI / (PI * 0.032 * 0.032) * 0.6 + vec3(0.02); alb = vec3(0.0); }
+  else if (id == S_GLASS2){
+    // the other windows: dark panes that mirror the street; one may have a lit curtain behind it
+    vec3 c = abs(p - UPW_C).y < WIN_HH + 0.01 && abs(p.x - UPW_C.x) < WIN_HW + 0.01 ? UPW_C : (p.y < 0.0 ? BSW_C : NBW_C);
+    vec2 q = p.xy - c.xy;
+    float bars = max(smoothstep(0.03, 0.02, abs(q.x)), smoothstep(0.025, 0.015, abs(q.y - 0.3))) + smoothstep(WIN_HW - 0.05, WIN_HW - 0.04, abs(q.x)) + smoothstep(WIN_HH - 0.05, WIN_HH - 0.04, abs(q.y));
+    float lit = c == BSW_C ? 0.0 : step(hash11(c.x * 3.1 + 7.0), uOcc * 1.4);
+    vec3 curtain = vec3(0.9, 0.55, 0.28) * (0.6 + 0.4 * sin(q.x * 40.0 + 2.0 * sin(q.y * 3.0))) * 0.035 * lit;
+    vec3 rr = reflect(rd, vec3(0.0, 0.0, -1.0));
+    float F = fresnel(max(dot(v, vec3(0.0, 0.0, -1.0)), 0.0), 1.0, NG);
+    vec3 glassC = envOut(rr) * F * 1.6 + curtain * (1.0 - F) + lampSpec(p, vec3(0.0, 0.0, -1.0), v, 0.01, vec3(0.04));
+    vec3 frameC = vec3(0.12, 0.10, 0.07) / PI * outdoorE(p, n, ao, false);
+    return mix(glassC, frameC, sat(bars));
+  }
+  else if (id == S_PAVE){
+    vec2 g = p.xz / 0.3, gi = floor(g), gf = fract(g);
+    float th = hash12(gi);
+    float grout = 1.0 - smoothstep(0.0, 0.035, min(min(gf.x, 1.0 - gf.x), min(gf.y, 1.0 - gf.y)));
+    alb = vec3(0.27, 0.26, 0.24) * (0.75 + 0.35 * th) * (0.85 + 0.25 * vnoise(p.xz * 30.0)) * (1.0 - 0.45 * grout) * 0.7;
+    // puddles where the pavers have sunk: by the wall under the sill drip, round the downpipe's shoe, in a few dips
+    float pud = fbm(p.xz * 0.55 + 11.0) + 0.3 * smoothstep(1.3, 0.3, length((p.xz - vec2(0.45, -6.1)) * vec2(0.8, 1.2)) + 0.25 * vnoise(p.xz * 3.0)) + 0.25 * smoothstep(0.9, 0.0, abs(p.x - PIPE_X)) * smoothstep(1.4, 0.3, abs(p.z + 0.8)) + 0.12 * smoothstep(1.5, 0.4, p.z - FAC_Z + 1.4) * smoothstep(1.2, 0.5, abs(p.x));
+    float water = smoothstep(0.56, 0.6, pud + 0.05 * (th - 0.5) - 0.04 * grout) * (1.0 - uSnow);
+    // fallen plane leaves in autumn, stuck flat to the wet paving
+    if (uSeason > 1.5 && uSeason < 2.5){
+      vec2 lg = p.xz / 0.45, li = floor(lg); vec3 lh = hash32(li + 5.0);
+      if (lh.z < 0.35){
+        vec2 lq = rot2((fract(lg) - 0.3 - 0.4 * lh.xy) * 0.45, lh.z * 40.0);
+        float a = atan(lq.y, lq.x), r = length(lq);
+        float leaf = smoothstep(0.004, 0.0, r - 0.05 * (0.65 + 0.35 * abs(cos(2.5 * a))));
+        alb = mix(alb, mix(vec3(0.42, 0.24, 0.05), vec3(0.3, 0.12, 0.04), lh.x) * 0.8, leaf * (1.0 - water * 0.5));
+      }
+    }
+    if (snowy > 0.0 || uSnow > 0.0){
+      float trod = smoothstep(0.35, 0.65, fbm(p.xz * vec2(1.6, 0.5) + 3.0));          // a trodden, slushy path along the kerb side
+      snowy = uSnow * (1.0 - 0.75 * trod);
+    }
+    vec3 nW = normalize(vec3(-ripples(p.xz).x, 1.0, -ripples(p.xz).y));
+    vec3 nn = normalize(mix(n, nW, water));
+    float cw = max(dot(nn, v), 0.0);
+    float Fw = fresnel(cw, 1.0, NW);
+    vec3 r = reflect(rd, nn);
+    vec3 E = outdoorE(p, n, ao, true);
+    vec3 dry = alb / PI * E + lampSpec(p, n, v, 0.32, vec3(0.04)) + F_Schlick(vec3(0.04), max(dot(n, v), 0.0)) * skyRad(reflect(rd, n)) * 0.4;
+    vec3 wetc = alb * 0.35 / PI * E * (1.0 - Fw) + Fw * mirrorScene(p, r) + lampSpec(p, nn, v, 0.02, vec3(0.02)) * 1.0;
+    vec3 c = mix(dry, wetc, water);
+    c = mix(c, vec3(0.75, 0.76, 0.78) / PI * E, snowy);
+    return c;
+  }
+  else if (id == M_FRAME){
+    Mat m = getMat(id, p, n); alb = m.alb * 0.8; rough = 0.45;
+  }
+  if (snowy > 0.0) alb = mix(alb, vec3(0.8, 0.81, 0.83), snowy);
+  vec3 E = outdoorE(p, n, ao, true);
+  vec3 col = emis + alb / PI * E;
+  float a = rough * rough;
+  col += lampSpec(p, n, v, max(a, 0.02), f0) * (1.0 - snowy);
+  col += F_Schlick(f0, max(dot(n, v), 0.0)) * skyRad(reflect(rd, n)) * (1.0 - rough) * 0.6 * ao;
+  return col;
+}
+
+// ---- our window from outside: drops, glass, and the room behind them
+vec3 windowOut(vec3 P, vec3 rd){
+  vec2 guv = (P.xy - vec2(WIN_X0, WIN_Y0)) / vec2(WIN_X1 - WIN_X0, WIN_Y1 - WIN_Y0);
+  vec4 st = texture(uState, guv);
+  float M = smoothstep(0.02, 0.9, st.r), Fin = min(st.b * uFogK, 1.0), rim = st.a;
+  vec2 e = 1.0 / uHTex, emm = e * uSimMM;
+  float h = texture(uHeight, guv).r / uHScale;
+  float hx = (texture(uHeight, guv + vec2(e.x, 0.0)).r - texture(uHeight, guv - vec2(e.x, 0.0)).r) / uHScale / (2.0 * emm.x);
+  float hy = (texture(uHeight, guv + vec2(0.0, e.y)).r - texture(uHeight, guv - vec2(0.0, e.y)).r) / uHScale / (2.0 * emm.y);
+  float wet = smoothstep(0.0, 0.03, h);
+  vec3 N = normalize(vec3(-hx, -hy, -1.0));                  // the drop's surface, facing the street
+  vec3 v = -rd;
+  // into the drop, through the pane, out into the room: the drop is a little lens that shows the room upside down
+  float ci = max(dot(v, N), 1e-3);
+  float Fw = fresnel(ci, 1.0, NW);
+  vec3 tw = refract(rd, N, 1.0 / NW);
+  vec2 xy = tw.xy * NW; float s2 = dot(xy, xy);
+  vec3 dDrop = s2 < 1.0 ? vec3(xy, sqrt(1.0 - s2)) : vec3(0.0, 0.0, 1.0);
+  vec3 dIn = normalize(mix(rd, dDrop, wet));
+  float Fg = fresnel(abs(rd.z), 1.0, NG);
+  // march the room
+  vec3 roomC = vec3(0.0);
+  float tr = 0.003; vec2 hr = vec2(1.0, 0.0); bool rh = false;
+  for (int i = 0; i < 100; i++){
+    hr = map(P + dIn * tr, true);
+    if (hr.x < 0.0003 * tr + 0.0001){ rh = true; break; }
+    tr += hr.x * 0.96;
+    if (tr > 6.0) break;
+  }
+  if (rh){ vec3 q = P + dIn * tr; roomC = shade(q, calcNormal(q), dIn, hr.y); }
+  vec4 sm = smokeVol(P, dIn, rh ? tr : 6.0);
+  roomC = roomC * sm.a + sm.rgb;
+  // the outside mist scatters a little of everything; the inside condensation glows with the lamp behind it
+  vec3 Lb = BULB - P; float ld2 = dot(Lb, Lb);
+  vec3 Eg = uLampI * lampEmitFactor(-Lb * inversesqrt(ld2)) * max(Lb.z * inversesqrt(ld2), 0.0) / ld2 + uAmbL;
+  vec3 Lw = WL_P - P; float lw2 = dot(Lw, Lw);
+  vec3 Eo = uWallI * lampMask(-Lw * inversesqrt(lw2)) * max(-Lw.z, 0.0) * inversesqrt(lw2) / lw2 + uCityGlow + uEVert;   // light falling on the glass from the street
+  roomC = mix(roomC, uWinL, M * 0.3) + Eo * 0.006 * M;
+  float fogA = sat(Fin * 0.85 + rim * 0.35);
+  vec3 fogC = (Eg * 0.2 + uWinL * 1.1 + Eo * 0.01) * (0.9 + 0.2 * vnoise(guv * uSimMM * 2.5));
+  vec3 through = mix(roomC, fogC, fogA);
+  // frost on the inside, lit from the room
+  if (uFrost > 0.0){
+    float yb = P.y < TRANSOM_Y ? P.y - (WIN_Y0 + FW) : P.y - (TRANSOM_Y + TW);
+    float xe = min(min(abs(P.x - (WIN_X0 + FW)), abs(P.x + MW)), min(abs(P.x - MW), abs(P.x - (WIN_X1 - FW))));
+    vec2 fq = P.xy * vec2(75.0, 60.0);
+    float fern = 0.0, amp = 0.5;
+    for (int k = 0; k < 4; k++){ fern += amp * (1.0 - abs(2.0 * vnoise(fq) - 1.0)); fq = FBM_R * fq * 1.1 + 5.3; amp *= 0.55; }
+    float corner = min(yb, xe) + 0.6 * max(yb, xe);
+    float frost = smoothstep(0.62, 0.86, fern + 0.95 - min(min(yb, xe * 1.6) * 15.0, corner * 11.0)) * (P.y < TRANSOM_Y ? 1.0 : 0.55);
+    through = mix(through, Eg * 0.06 + uWinL * 0.5 + Eo * 0.03, frost * 0.8);
+  }
+  // the paper-cuts on the inside: red paper glowing with the lamp behind it
+  float aaW = length(fwidth(P.xy)) * 0.8 + 0.0002;
+  vec2 dL = vec2(P.x - (WIN_X0 + FW), (TRANSOM_Y - TW) - P.y), dR = vec2((WIN_X1 - FW) - P.x, (TRANSOM_Y - TW) - P.y);
+  float tR = atan(dR.y, dR.x) / (PI * 0.5);
+  float keep = smoothstep(0.02, -0.02, tR - 0.6 - 0.12 * (vnoise(dR * 260.0) - 0.5));
+  float pc = max(paperCut(dL, 0.112, aaW), paperCut(dR, 0.112, aaW) * keep);
+  through = mix(through, (Eg * vec3(0.10, 0.008, 0.006) + uWinL * vec3(0.6, 0.06, 0.05)) * (0.85 + 0.3 * vnoise(P.xy * 300.0)) + Eo * vec3(0.05, 0.01, 0.01), pc);
+  // reflections: the flat pane mirrors the street behind the viewer and the lane lamp; the drops mirror it small and bright
+  vec3 Rg = reflect(rd, vec3(0.0, 0.0, -1.0));
+  vec3 dryC = through * (1.0 - Fg) * (1.0 - Fg) + (envOut(Rg) * Fg * (1.0 + 0.85 * (1.0 - M)) + lampSpec(P, vec3(0.0, 0.0, -1.0), v, 0.004 + 0.05 * M, vec3(0.04))) * (1.0 - 0.5 * M);
+  vec3 Rw = reflect(rd, N);
+  vec3 wetC = through * (1.0 - Fw) * (1.0 - Fg) * step(s2, 1.0) + envOut(Rw) * Fw + lampSpec(P, N, v, 0.01, vec3(0.02));
+  vec3 col = mix(dryC, wetC, wet);
+  // snowflakes resting on the outside, lit by the street and the lamp
+  float flake = texture(uHeight, guv).g;
+  if (flake > 0.0) col = mix(col, (Eo * 0.8 + uEVert * 0.3) / PI + Eg * 0.01, min(flake, 1.0) * 0.9);
+  // autumn: wet leaves stuck to the outside
+  for (int i = 0; i < 3; i++){
+    if (uGLeaf[i].z <= 0.0) continue;
+    float Rl = uGLeaf[i].z;
+    vec2 q = rot2(P.xy - uGLeaf[i].xy, uGLeaf[i].w);
+    float a = atan(q.x, q.y - Rl * 0.35), r = length(q - vec2(0.0, Rl * 0.35));
+    float lf = smoothstep(aaW, -aaW, r - Rl * 0.62 * (0.6 + 0.4 * abs(cos(2.5 * a)))) ;
+    if (lf <= 0.0) continue;
+    vec3 alb = mix(vec3(0.36, 0.20, 0.04), vec3(0.22, 0.10, 0.03), smoothstep(0.4, 0.8, vnoise(q * 60.0 + float(i) * 9.0)));
+    col = mix(col, alb / PI * Eo + Eg * vec3(0.02, 0.012, 0.002) + lampSpec(P, vec3(0.0, 0.0, -1.0), v, 0.15, vec3(0.03)), lf);
+  }
+  return col;
+}
+
+void main(){
+  vec2 ndc = (gl_FragCoord.xy + uJitter) / uRes * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  vec3 ro = uCamPos;
+  float tGl = 1e9;
+  if (rd.z > 0.0){
+    float tz = (GLASS_Z - ro.z) / rd.z; vec3 pg = ro + rd * tz;
+    if (abs(pg.x - WIN_CX) < WIN_HW && abs(pg.y - WIN_CY) < WIN_HH) tGl = tz;
+  }
+  float t = 0.0; vec2 h = vec2(1.0, 0.0); bool hit = false;
+  for (int i = 0; i < 110; i++){
+    h = mapStreet(ro + rd * t);
+    if (h.x < 0.0003 * t + 0.0002){ hit = true; break; }
+    t += h.x * 0.95;
+    if (t > tGl || t > 80.0) break;
+  }
+  vec3 col;
+  if (hit && t < tGl){
+    vec3 p = ro + rd * t;
+    col = shadeStreet(p, calcNormalS(p), rd, h.y);
+  } else if (tGl < 1e8){
+    t = tGl;
+    col = windowOut(ro + rd * tGl, rd);
+  } else { col = skyRad(rd); t = 80.0; }
+  oCol = vec4(max(col, 0.0), 0.0);
+  oAux = vec4(t * dot(rd, uCamFwd));
+}
+`;
+
+// after TAA: rain in the air (only where something lights it) and the glow of the lamps in the wet air
+const FS_STREETPOST = () => GLSL_HEAD() + `
+uniform vec2 uRes;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform sampler2D uSrc, uDepth;
+uniform float uTime, uRain, uWind, uSnow, uFocus, uAperture;
+uniform vec3 uWallI, uWinL, uCityGlow, uSkyH;
+out vec4 o;
+` + GLSL_STREET.replace('vec3 skyRad(vec3 d){ return mix(uSkyH, uSkyZ, sat(d.y * 1.4)); }', '') + `
+// single scattering of a point light along a ray segment [0, T] (closed form of ∫ dt / (h² + (t − tc)²))
+float airlight(vec3 ro, vec3 rd, vec3 S, float T, out vec3 cp){
+  vec3 so = S - ro; float tc = dot(so, rd);
+  float h = max(length(so - rd * tc), 0.02);
+  cp = ro + rd * clamp(tc, 0.0, T);
+  return (atan((T - tc) / h) + atan(tc / h)) / h;
+}
+// light arriving at a point in the air (for the raindrops there): the lane lamp, our window, the glow of the street
+vec3 lightAt(vec3 p, vec3 rd, out float fwd){
+  vec3 L = WL_P - p; float d2 = dot(L, L); vec3 l = L * inversesqrt(d2);
+  vec3 W = vec3(WIN_CX, WIN_CY, GLASS_Z) - p; float w2 = dot(W, W); vec3 wl = W * inversesqrt(w2);
+  vec3 E = uWallI * lampMask(-l) / max(d2, 0.04);
+  vec3 Ew = uWinL * 1.4 * max(-wl.z, 0.0) / max(w2, 0.1);
+  // drops scatter strongly forward: a drop between the eye and a light lights up
+  fwd = pow(max(dot(-l, -rd), 0.0), 6.0);
+  float fw = pow(max(dot(-wl, -rd), 0.0), 6.0);
+  return E * (0.15 + 2.2 * fwd) + Ew * (0.15 + 2.2 * fw) + uCityGlow * 0.08;
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec3 col = texture(uSrc, uv).rgb;
+  vec2 ndc = uv * 2.0 - 1.0;
+  vec3 rd = normalize(uCamFwd + ndc.x * uTan.x * uCamRight + ndc.y * uTan.y * uCamUp);
+  float zv = texture(uDepth, uv).r, cf = dot(rd, uCamFwd);
+  float T = zv / cf;
+  // glow: the lamp's light and the window's, scattered by rain and mist on the way to the eye
+  float sigma = 0.012 + 0.05 * uRain + 0.03 * uSnow;
+  vec3 cp;
+  float A = airlight(uCamPos, rd, WL_P, T, cp);
+  col += uWallI * lampMask(normalize(cp - WL_P)) * A * sigma * (0.08 + 0.5 * pow(max(dot(rd, normalize(WL_P - uCamPos)), 0.0), 40.0)) / (4.0 * PI) * 4.0;
+  float Aw = airlight(uCamPos, rd, vec3(WIN_CX, WIN_CY, GLASS_Z - 0.05), T, cp);
+  col += uWinL * 1.4 * max(normalize(vec3(WIN_CX, WIN_CY, GLASS_Z) - cp).z, 0.0) * Aw * sigma * 0.12;
+  // falling rain / snow: layers at increasing depth; each a sheet of short streaks (the shutter is open 1/50 s),
+  // blurred by the lens where it is out of focus, and dark unless a light is behind it or beside it
+  float wind = uWind * 0.6;
+  for (int k = 0; k < 7; k++){
+    float z = 0.7 * pow(1.5, float(k));
+    if (z > zv) break;
+    vec3 P = uCamPos + rd * (z / cf);
+    float coc = uAperture * abs(z - uFocus) / uFocus;                   // blur diameter in metres at that depth
+    float px = 2.0 * z * uTan.y / uRes.y;                               // one pixel in metres at that depth
+    vec2 q = vec2(dot(P - uCamPos, normalize(vec3(uCamRight.x, 0.0, uCamRight.z))), P.y);
+    float cell = max(0.045 * z, 0.06);
+    float vfall = uSnow > 0.5 ? 1.1 : 7.5, len = uSnow > 0.5 ? 0.006 : vfall / 50.0;
+    q.x -= (wind * (q.y - uTime * vfall) * (uSnow > 0.5 ? 0.6 : 0.12)) + (uSnow > 0.5 ? 0.04 * sin(uTime * 1.3 + q.y * 3.0 + float(k)) : 0.0);
+    q.y += uTime * vfall + float(k) * 3.7;
+    vec2 g = vec2(q.x / cell, q.y / (cell * 3.0)), gi = floor(g);
+    vec3 hh = hash32(gi + float(k) * 13.0);
+    if (hh.z > 0.55 * sat(uRain * 1.6 + uSnow)) continue;
+    vec2 c = (gi + 0.15 + 0.7 * hh.xy) * vec2(cell, cell * 3.0);
+    float w = max(max(coc, px * 1.2), 0.0015);
+    float dx = abs(q.x - c.x), dy = abs(q.y - c.y);
+    float shape = smoothstep(w * 0.5 + px * 0.5, w * 0.5 - px * 0.5 - 0.0005, dx) * smoothstep(len * 0.5 + w * 0.5, len * 0.5 - w * 0.2, dy);
+    if (shape <= 0.0) continue;
+    float fwd;
+    vec3 Li = lightAt(P, rd, fwd);
+    // energy of a 2 mm drop spread over the blurred width
+    // a 2 mm drop is mostly a lens (lit from behind); a 5 mm snowflake is a white scatterer, lit from every side
+    float k2 = uSnow > 0.5 ? 0.012 / w : 0.0018 / w;
+    vec3 Ls = uSnow > 0.5 ? Li * 0.4 + (uCityGlow + uWinL * 0.3) * 0.25 : Li;
+    col += Ls * shape * k2 * (0.35 + 0.65 * hh.x) * 0.2;
+  }
+  o = vec4(col, 1.0);
+}
+`;
+
+// --------------------------------------------------------------------------
+// COMPOSITE: glass over room (full resolution)
+// --------------------------------------------------------------------------
+const FS_COMPOSITE = () => GLSL_HEAD() + GLSL_LIGHT + GLSL_INTERIOR + `
+uniform vec2 uRes;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform vec2 uTan;
+uniform sampler2D uRoom, uDefocus, uSharp, uHeight, uState;
+uniform vec2 uSimMM;        // simulated glass size (mm)
+uniform vec2 uHTex;         // height texture size (texels)
+uniform float uHScale;
+uniform float uTime;
+uniform int uDbg;
+uniform float uFrost, uFogK;     // winter frost on the inside; how heavily the inside condenses this season
+uniform vec4 uGLeaf[3];          // autumn: wet leaves stuck to the outside of the glass (x, y, size, angle; size 0 = none)
+out vec4 o;
+
+vec2 rot2(vec2 v, float a){ float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+${GLSL_GLASS}
+// micro-droplets of the outside mist (too many to simulate one by one): a jittered grid of
+// tiny caps whose presence and size follow the local mist density M (sim-mm units)
 vec3 microDrops(vec2 pm, float M){
   const float CS = 0.6;
   vec2 g = pm / CS, gi = floor(g);
@@ -3198,15 +3764,26 @@ function framing(aspect) {
   const mix3 = (a, b) => a.map((v, i) => lerp(b[i], v, t));
   return { pos: mix3(L.pos, P.pos), tgt: mix3(L.tgt, P.tgt), vfov: lerp(P.vfov, L.vfov, t) };
 }
+// outside. Landscape: on the pavement 6 m from the wall, looking up at the window (a longer lens).
+// Portrait: from the kerb, the tall frame holds both the window and its reflection in a puddle on the pavement
+// (the mirror image lies ~32° below the horizon, the window ~16° above it).
+function framingOut(aspect) {
+  const L = { pos: [1.35, -0.61, -6.3], tgt: [0.05, 1.38, -0.3], vfov: 37 };
+  const P = { pos: [1.0, -0.7, -8.6], tgt: [0.15, -1.72, -0.3], vfov: 62 };
+  const t = smooth(Math.log(0.56), Math.log(1.5), Math.log(aspect));
+  const m3 = (a, b) => a.map((v, i) => lerp(b[i], v, t));
+  return { pos: m3(L.pos, P.pos), tgt: m3(L.tgt, P.tgt), vfov: lerp(P.vfov, L.vfov, t) };
+}
 function updateCamera(t, dt, aspect) {
-  const f = framing(aspect);
+  const f = VIEW.out ? framingOut(aspect) : framing(aspect);
+  const ps = VIEW.out ? 4 : 1;                       // outside there is room to lean: parallax moves the eye further
   const k = 1 - Math.exp(-dt * 2.2);
   CAM.par[0] += (CAM.parT[0] - CAM.par[0]) * k; CAM.par[1] += (CAM.parT[1] - CAM.par[1]) * k;
   const st = DBG.still ? 0 : 1;
   // 手持感：位置 ±5mm、指向 ±0.15° 的慢速漂移，叠加约 0.22Hz 的呼吸起伏
   const breath = Math.sin(t * 2 * Math.PI / 4.6) * 0.0016;
-  const pos = [f.pos[0] + st * 0.004 * drift(t * 0.21, 1) + CAM.par[0] * 0.06,
-               f.pos[1] + st * (0.003 * drift(t * 0.19, 2) + breath) + CAM.par[1] * 0.035,
+  const pos = [f.pos[0] + st * 0.004 * ps * drift(t * 0.21, 1) + CAM.par[0] * 0.06 * ps,
+               f.pos[1] + st * (0.003 * ps * drift(t * 0.19, 2) + breath) + CAM.par[1] * 0.035 * ps,
                f.pos[2] + st * 0.004 * drift(t * 0.17, 3)];
   let tgt = [f.tgt[0] + st * 0.004 * drift(t * 0.13, 4) + CAM.par[0] * 0.02, f.tgt[1] + st * 0.003 * drift(t * 0.11, 5) + CAM.par[1] * 0.012, f.tgt[2]];
   if (DBG.zoom > 1) tgt = [DBG.zx, DBG.zy, S.GLASS_Z];
@@ -3385,7 +3962,9 @@ function lightUniforms(t, dt) {
   // 眼睛的适应：由已知光照解析地估计场景的基准亮度（台灯 + 窗光），不做 GPU 回读。
   // 只部分补偿：比参考暗时补偿 85%（夜里关灯后房间仍是暗的），比参考亮时补偿 70%（白天窗户偏亮、房间仍明亮）。
   // 变暗适应 2.6 s，变亮 0.7 s。
-  const key = lv * lv + 2.0 * lum3(WORLD.U.skyWinBase) + 0.5 * lum3(cityL);
+  // outside, the reference is the lit street at dusk: the lane lamp and the lit windows, not the desk lamp
+  const key = VIEW.out ? 0.5 * (WORLD.lampsOn ? 1 : 0) + 0.12 * lv * lv + 2.0 * lum3(WORLD.U.skyWinBase) + 0.6 * lum3(cityL)
+                       : lv * lv + 2.0 * lum3(WORLD.U.skyWinBase) + 0.5 * lum3(cityL);
   const ev = Math.log2(Math.max(key, 0.12) / 1.25);                   // stops above / below the dusk-with-lamp reference
   const target = clamp(Math.pow(2, -ev * (ev > 0 ? 0.7 : 0.85)), 0.03, 7);
   const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
@@ -3450,6 +4029,23 @@ function buildPrograms() {
   P.up = makeProgram('up', VS_FULL, FS_UP());
   P.final = makeProgram('final', VS_FULL, FS_FINAL());
   P.blit = makeProgram('blit', VS_FULL, FS_BLIT());
+  if (VIEW.out || VIEW.want) ensureStreet();
+}
+// the street view is compiled only when someone first walks outside (it is a large shader)
+function ensureStreet() {
+  if (R.progs.street) return;
+  R.progs.street = makeProgram('street', VS_FULL, FS_STREET());
+  R.progs.spost = makeProgram('streetpost', VS_FULL, FS_STREETPOST());
+  R.streetOK = false;
+}
+function streetReady() {
+  const P = R.progs;
+  if (!P.street) return false;
+  if (R.streetOK) return true;
+  if (caps.parallel && ![P.street, P.spost].every(p => gl.getProgramParameter(p.p, caps.parallel.COMPLETION_STATUS_KHR))) return false;
+  try { checkProgram(P.street); checkProgram(P.spost); R.streetOK = true; }
+  catch (e) { console.error(e.message); VIEW.want = false; VIEW.failed = true; }
+  return R.streetOK;
 }
 function programsReady() {
   if (!caps.parallel) return true;
@@ -3555,12 +4151,33 @@ function drawSprites(target, mode, eye, t) {
   gl.bindVertexArray(null);
 }
 
+// the street at this hour: the lane lamp (an incandescent bulb, on with the street lamps), the sodium lamp across
+// the street whose light comes through the plane tree, the glow of the street behind the viewer, our window
+const STREET = { wallI: [0, 0, 0], far: [0, 0, 0, 0], cityGlow: [0, 0, 0], winL: [0, 0, 0] };
+function streetUpdate(Lt) {
+  const Wu = WORLD.U, on = WORLD.lampsOn ? 1 : 0;
+  STREET.wallI = mulc(bb(2500), 1.4 * on);
+  const fx = OUT.lamps.length ? OUT.lamps.reduce((a, b) => Math.abs(b - 3) < Math.abs(a - 3) ? b : a) : 3;   // (its trunk's shadow then falls clear of the window)
+  STREET.far = [fx, S.GROUND_Y + 6.4, S.CURB_Z - 0.6, 160 * Wu.lampsOut];
+  STREET.cityGlow = mulc(Wu.cityWin, Math.PI * 0.45);
+  STREET.winL = add3(add3(mulc(Lt.lampI, 0.045), mulc(Lt.ambL, 0.5)), mulc(Lt.skyL, 0.05));
+}
+function streetUniforms(pr, Lt, hScale) {
+  const Wu = WORLD.U, SE = SEASONS[WORLD.season], T = R.tg;
+  U(pr, 'uSkyZ', Wu.sky.zen); U(pr, 'uSkyH', Wu.sky.hor); U(pr, 'uEVert', Wu.eVert); U(pr, 'uEGround', Wu.eGround);
+  U(pr, 'uCityGlow', STREET.cityGlow); U(pr, 'uWallI', STREET.wallI); U(pr, 'uFarLamp', STREET.far); U(pr, 'uLampTint', Wu.lampCol); U(pr, 'uWinL', STREET.winL);
+  U(pr, 'uOcc', Wu.occ); U(pr, 'uSnow', SE.snow * 0.85); U(pr, 'uRain', SIM.rain); U(pr, 'uFrost', SE.snow ? 1 : 0); U(pr, 'uFogK', SE.fog);
+  if (pr.u.uGLeaf) gl.uniform4fv(pr.u.uGLeaf, WORLD.season === 2 ? VARY.glassLeaves : new Float32Array(12));
+  U(pr, 'uSimMM', [SIM.W, SIM.H]); U(pr, 'uHTex', [T.height.w, T.height.h]); U(pr, 'uHScale', hScale);
+  cityUniforms(pr);
+}
 function render(t, dt, rt) {
   const P = R.progs, T = R.tg;
   const hScale = caps.hdr ? 1 : 0.25;
   const Lt = lightUniforms(rt, dt);
+  streetUpdate(Lt);
   // 光圈：虚拟镜头光圈半径 30mm（大光圈，为得到明显的焦外光斑；同一光圈也决定室内景深），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
-  R.aperture = 0.030;
+  R.aperture = VIEW.out ? 0.014 : 0.030;
   R.coc = R.aperture / CAM.focus;
   const glassEye = [S.WIN_CX, S.WIN_CY, S.GLASS_Z];
 
@@ -3574,7 +4191,8 @@ function render(t, dt, rt) {
   drawSprites(T.sharp, 0, glassEye, t);
   gl.bindTexture(gl.TEXTURE_2D, T.sharp.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
 
-  // 2) outside, defocused camera view
+  // 2) outside, defocused camera view (only seen from inside)
+  if (!VIEW.out) {
   bindTarget(T.defocus);
   gl.useProgram(P.outside.p);
   camUniforms(P.outside);
@@ -3585,6 +4203,7 @@ function render(t, dt, rt) {
   buildSprites(t, CAM.pos);
   drawSprites(T.defocus, 1, CAM.pos, t);
   gl.bindTexture(gl.TEXTURE_2D, T.defocus.tex.t); gl.generateMipmap(gl.TEXTURE_2D);
+  }
 
   // 2b) drops → height field (MAX blend), with mips for the condensation blur
   bindTarget(T.height);
@@ -3607,17 +4226,22 @@ function render(t, dt, rt) {
   gl.bindTexture(gl.TEXTURE_2D, stateTex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SIM.GW, SIM.GH, gl.RGBA, gl.UNSIGNED_BYTE, SIM.tex);
 
-  // 3) room
-  bindTarget(T.room);
-  gl.useProgram(P.room.p);
-  camUniforms(P.room); lightU(P.room, Lt);
-  U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t % 900);
-  const ct = WORLD.tod;
-  U(P.room, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0); U(P.room, 'uSeason', WORLD.season);
+  // 3) room — or, outside, the street with the room seen through the window
   const hal = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
   const ji = (frame % 16) + 1;
   R.jitter = QS.has('nojitter') ? [0, 0] : [hal(ji, 2) - 0.5, hal(ji, 3) - 0.5];
-  U(P.room, 'uJitter', R.jitter);
+  const PR = VIEW.out ? P.street : P.room;
+  bindTarget(T.room);
+  gl.useProgram(PR.p);
+  camUniforms(PR); lightU(PR, Lt);
+  U(PR, 'uRes', [T.room.w, T.room.h]); U(PR, 'uTime', t % 900);
+  const ct = WORLD.tod;
+  U(PR, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(PR, 'uVar', VARY.v); U(PR, 'uSteam', 1.0); U(PR, 'uSeason', WORLD.season);
+  U(PR, 'uJitter', R.jitter);
+  if (VIEW.out) {
+    streetUniforms(PR, Lt, hScale);
+    bindTex(PR, 'uHeight', T.height.tex, 0); bindTex(PR, 'uState', stateTex, 1); bindTex(PR, 'uSharp', T.sharp.tex, 2);
+  }
   drawFull();
 
   // 3a) depth of field on the room (focus on the glass), at the raymarch resolution
@@ -3643,7 +4267,17 @@ function render(t, dt, rt) {
   R.prevCam = { pos: CAM.pos, fwd: CAM.fwd, right: CAM.right, up: CAM.up, tan: CAM.tan };
   R.roomOut = hNew;
 
-  // 4) composite
+  // 4) composite (inside) / rain and lamp glow over the street (outside)
+  if (VIEW.out) {
+    bindTarget(T.hdr);
+    gl.useProgram(P.spost.p);
+    camUniforms(P.spost);
+    U(P.spost, 'uRes', [T.hdr.w, T.hdr.h]); U(P.spost, 'uTime', t % 900); U(P.spost, 'uRain', SIM.rain); U(P.spost, 'uWind', WORLD.windNow || 0);
+    U(P.spost, 'uSnow', SEASONS[WORLD.season].snow); U(P.spost, 'uFocus', CAM.focus); U(P.spost, 'uAperture', R.aperture);
+    U(P.spost, 'uWallI', STREET.wallI); U(P.spost, 'uWinL', STREET.winL); U(P.spost, 'uCityGlow', STREET.cityGlow);
+    bindTex(P.spost, 'uSrc', R.roomOut.tex, 0); bindTex(P.spost, 'uDepth', T.room.texs[1], 1);
+    drawFull();
+  } else {
   bindTarget(T.hdr);
   gl.useProgram(P.composite.p);
   camUniforms(P.composite); lightU(P.composite, Lt);
@@ -3658,6 +4292,7 @@ function render(t, dt, rt) {
   bindTex(P.composite, 'uHeight', T.height.tex, 3);
   bindTex(P.composite, 'uState', stateTex, 4);
   drawFull();
+  }
 
   // 5) bloom chain
   gl.useProgram(P.down.p);
@@ -3739,11 +4374,22 @@ function wipe(a, b) {
 function toggleLamp() { LIGHT.on = LIGHT.on ? 0 : 1; AUDIO.click && AUDIO.click(LIGHT.on); }
 const PTR = { down: false, mode: '', last: null, moved: 0, sx: 0, sy: 0, hover: false };
 const GYRO = { base: null, on: false, asked: false };
+// outside: the window seen from the street (its opening in the wall)
+function pickWindowOut(ro, rd) {
+  if (rd[2] <= 0) return false;
+  const t = (-0.30 - ro[2]) / rd[2], x = ro[0] + rd[0] * t, y = ro[1] + rd[1] * t;
+  return Math.abs(x - S.WIN_CX) < S.WIN_HW && Math.abs(y - S.WIN_CY) < S.WIN_HH;
+}
 function onDown(e) {
   AUDIO.unlock && AUDIO.unlock();
   requestGyro();
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
+  if (VIEW.out) {
+    PTR.down = true; PTR.moved = 0; PTR.sx = e.clientX; PTR.sy = e.clientY;
+    PTR.mode = pickWindowOut(CAM.pos, rd) ? 'lamp' : 'pan';
+    UI.poke(); return;
+  }
   const tl = pickLamp(CAM.pos, rd), g = pickGlass(CAM.pos, rd);
   PTR.down = true; PTR.moved = 0; PTR.sx = e.clientX; PTR.sy = e.clientY;
   if (tl < (g ? g.t : Infinity)) PTR.mode = 'lamp';
@@ -3757,7 +4403,7 @@ function onMove(e) {
   if (!PTR.down) {
     if (e.pointerType === 'mouse') {
       CAM.parT = [clamp(nx, -1, 1) * 0.55, clamp(ny, -1, 1) * 0.45];
-      const lamp = pickLamp(CAM.pos, rd) < Infinity;
+      const lamp = VIEW.out ? pickWindowOut(CAM.pos, rd) : pickLamp(CAM.pos, rd) < Infinity;
       if (lamp !== PTR.hover) { PTR.hover = lamp; canvas.style.cursor = lamp ? 'pointer' : 'default'; }
     }
     return;
@@ -3819,6 +4465,11 @@ const UI = (() => {
   if (IS_MOBILE) panel.querySelector('.hint').innerHTML = '轻触台灯开关；在玻璃上划过可擦去雾气；倾斜手机看看。';
   // season / hour / flow
   const segS = document.getElementById('season'), todIn = document.getElementById('tod'), todLabel = document.getElementById('todLabel'), flowB = document.getElementById('flow');
+  const segV = document.getElementById('view');
+  api.showView = () => segV.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === (VIEW.want ? 1 : 0)));
+  api.setView = out => { if (VIEW.failed) out = false; VIEW.want = out; api.showView(); };
+  segV.addEventListener('click', e => { if (e.target.dataset.v !== undefined) api.setView(e.target.dataset.v === '1'); });
+  api.showView();
   const rainLbl = document.getElementById('rainLbl');
   const showSeason = () => { segS.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.s === WORLD.season)); rainLbl.textContent = SEASONS[WORLD.season].snow ? '雪势' : '雨势'; };
   const setSeason = k => {
@@ -3848,6 +4499,7 @@ const UI = (() => {
     if (e.key === 'm' || e.key === 'M') setSnd(snd.getAttribute('aria-pressed') !== 'true');
     if (e.key === 's' || e.key === 'S') api.setSeason(WORLD.season + 1);
     if (e.key === 't' || e.key === 'T') api.setFlow(!WORLD.flowing);
+    if (e.key === 'v' || e.key === 'V') api.setView(!VIEW.want);
   });
   return api;
 })();
@@ -4041,7 +4693,7 @@ Object.assign(AUDIO, (() => {
     },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     resume() { if (ctx && enabled && ctx.state === 'suspended') ctx.resume(); },
-    click(on) { if (ready) oneShot(clickBuf, 0.5, -0.45, on ? 1.0 : 0.88, 0.4); },
+    click(on) { if (ready) oneShot(clickBuf, 0.5 * (1 - 0.92 * VIEW.mix), -0.45, on ? 1.0 : 0.88, 0.4, VIEW.mix > 0.5 ? 1500 : 0); },
     // 雷声：闪电通道有几公里长，各段的声音先后到达，所以是一串此起彼伏的滚动；近雷先有一声撕裂的「咔」。
     // 空气吸收高频，越远越闷（低通截止 ∝ 1/距离）；隔着玻璃再削一点高频。延迟 = 距离 / 343 m/s。
     thunder(dist) {
@@ -4066,7 +4718,7 @@ Object.assign(AUDIO, (() => {
       for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < n; i++) d[i] /= peak; }
       const src = ctx.createBufferSource(); src.buffer = buf;
       const g = ctx.createGain(); g.gain.value = clamp(0.9 / (0.6 + dist * 0.5), 0.08, 0.7);
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = VIEW.mix > 0.5 ? 6000 : 2200;
       src.connect(lp); lp.connect(g); g.connect(master); g.connect(wet);
       src.start(ctx.currentTime + dist / 0.343 / Math.max(TIME.scale, 0.25));
     },
@@ -4082,10 +4734,14 @@ Object.assign(AUDIO, (() => {
       gustT -= dt; if (gustT <= 0) { gustT = 1.5 + rand() * 2.5; gust = clamp(gust * 0.6 + (rand() - 0.45) * 0.8, -0.4, 0.6); }
       // snow falls almost silently and the snow cover soaks up the street's echoes: the bed drops and darkens
       const SE = SEASONS[WORLD.season], snow = SE.snow, ts = Math.min(1, TIME.scale * 1.3 + 0.2);
-      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * ts * (snow ? 0.22 : 1) * (0.8 + 0.25 * Math.sqrt(SE.rainR));
+      // outside there is no glass in between: the rain is louder and brighter, the patter is the pavement and the puddles,
+      // the room's hum is gone and the drops on the window are far away
+      const out = VIEW.mix;
+      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * ts * (snow ? 0.22 : 1) * (0.8 + 0.25 * Math.sqrt(SE.rainR)) * (1 + 0.6 * out);
       bedGain.gain.setTargetAtTime(bed, now, 0.8);
-      bedLP.frequency.setTargetAtTime((2500 + 1300 * I + 600 * gust) * (snow ? 0.4 : 1), now, 0.8);
-      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust) * (snow ? 0.08 : 1), now, 0.6);
+      bedLP.frequency.setTargetAtTime((2500 + 1300 * I + 600 * gust) * (snow ? 0.4 : 1) * (1 + 1.6 * out), now, 0.8);
+      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust) * (snow ? 0.08 : 1) * (1 + 1.3 * out), now, 0.6);
+      roomGain.gain.setTargetAtTime(0.05 * (1 - out), now, 0.8);
       const wn = WORLD.windNow;
       windGain.gain.setTargetAtTime(0.16 * Math.pow(wn, 1.4) * ts, now, 0.7);
       windBP.frequency.setTargetAtTime(260 + 520 * wn + 120 * gust, now, 1.0);
@@ -4099,7 +4755,7 @@ Object.assign(AUDIO, (() => {
       for (const ev of SIM.events) {
         if (ev.type === 'hit' && ev.D > 0.9 && ticksThisSec < 9 && now - lastTick > 0.045) {
           const pan = (ev.x / SIM.W) * 2 - 1;
-          oneShot(tickBuf[(rand() * tickBuf.length) | 0], clamp(0.05 * Math.pow(ev.D, 1.5), 0.02, 0.32), pan * 0.7, 0.85 + rand() * 0.35 + (2 - ev.D) * 0.05, 0.25, 5200);
+          oneShot(tickBuf[(rand() * tickBuf.length) | 0], clamp(0.05 * Math.pow(ev.D, 1.5), 0.02, 0.32) * (1 - 0.85 * VIEW.mix), pan * 0.7, 0.85 + rand() * 0.35 + (2 - ev.D) * 0.05, 0.25, 5200);
           lastTick = now; ticksThisSec++;
         } else if (ev.type === 'drain' && rand() < 0.35) {
           oneShot(dripBuf[(rand() * dripBuf.length) | 0], 0.06 + 0.06 * rand(), (ev.x / SIM.W) * 1.4 - 0.7, 0.9 + rand() * 0.25, 0.5, 6000);
@@ -4107,7 +4763,7 @@ Object.assign(AUDIO, (() => {
       }
       SIM.events.length = 0;
       // an eave dripping onto the metal sill outside, irregular
-      dripT -= wdt; if (dripT <= 0) { dripT = 1.6 + rand() * 4.5 / (0.4 + I); oneShot(dripBuf[(rand() * dripBuf.length) | 0], 0.05 + 0.05 * I, 0.55, 0.85 + rand() * 0.3, 0.55, 5000); }
+      dripT -= wdt; if (dripT <= 0) { dripT = 1.6 + rand() * 4.5 / (0.4 + I); oneShot(dripBuf[(rand() * dripBuf.length) | 0], (0.05 + 0.05 * I) * (1 + 1.2 * VIEW.mix), 0.55, 0.85 + rand() * 0.3, 0.55, 5000); }
       // cars: loudness ~ 1/(1+(d/d0)²), pan by bearing, Doppler on the rumble
       for (let k = 0; k < cars.length; k++) {
         const ch = cars[k], c = OUT.cars[k];
@@ -4129,7 +4785,20 @@ Object.assign(AUDIO, (() => {
    Main loop
    ========================================================================== */
 let running = false, lastT = 0, simT = DBG.t0, realT = 0, frame = 0;
-R.fade = DBG.shot ? 1 : 0;
+R.fade = DBG.shot ? 1 : 0; R.fadeIn = 4.5;
+// 切换视角：先暗下（0.6 s），着色器就绪后换到另一边，再亮起（1.2 s）；眼睛在新的一边重新适应
+function viewTick(dt) {
+  if (VIEW.want !== VIEW.out) {
+    if (VIEW.want) ensureStreet();
+    R.fade = Math.max(0, R.fade - dt / 0.6);
+    if (R.fade <= 0 && (!VIEW.want || streetReady())) {
+      VIEW.out = VIEW.want; R.taaReset = 1; LIGHT.adapted = false; R.fadeIn = 1.2;
+      CAM.par = [0, 0]; CAM.parT = [0, 0];
+      UI.showView && UI.showView();
+    }
+  }
+  VIEW.mix += ((VIEW.out ? 1 : 0) - VIEW.mix) * (1 - Math.exp(-dt / 0.6));
+}
 function loop(now) {
   if (!running) return;
   if (DBG.frames && frame >= DBG.frames) { window.__done = true; return; }
@@ -4147,7 +4816,8 @@ function loop(now) {
   worldUpdate(wdt);
   updateOutside(wdt, simT);
   simAdvance(wdt);
-  if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.5);
+  viewTick(dt);
+  if (!DBG.shot && VIEW.want === VIEW.out) R.fade = Math.min(1, R.fade + dt / R.fadeIn);
   render(simT, dt, realT);
   UI.tick(dt);
   if (frame % 15 === 0) UI.syncTime();
@@ -4160,7 +4830,7 @@ function loop(now) {
     if (!DBG.shot) setTimeout(() => { UI.show(); const h = document.getElementById('hint'); h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 7000); }, 3800);
   }
 }
-if (QS.has('hooks')) window.__dbg = { AUDIO, WORLD, SIM, LIGHT };        // test harness hooks
+if (QS.has('hooks')) window.__dbg = { AUDIO, WORLD, SIM, LIGHT, VIEW, R };  // test harness hooks
 function start() {
   if (running) return;
   running = true; lastT = 0;
