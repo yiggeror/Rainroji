@@ -9,7 +9,7 @@
      dive      镜头扎进它所在的那颗雨滴；雨滴的圆从它身上张开，夏天从里面涌出来
    第二幕 · 盛夏午后
      summer    光在风里；光标就是风，按住不动风就停
-   调试：?phase=wander|window|daydrops|dive|summer &pt=秒   ?world=summer（只看世界，不放主角）
+   调试：?phase=wander|window|daydrops|dive|summer &pt=秒   ?world=summer|woodcut（只看世界，不放主角）
    ========================================================================== */
 (() => {
 'use strict';
