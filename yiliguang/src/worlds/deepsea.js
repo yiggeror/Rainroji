@@ -52,6 +52,7 @@ uniform float uTime;
 uniform vec4 uJP[3];         // creatures: centre (m), size (m)            — drawn far to near
 uniform vec4 uJU[3];         //            up axis, pulse (0 relaxed … 1 contracted)
 uniform vec4 uJK[3];         //            kind (0 moon jelly, 1 comb jelly, 2 Atolla), phase, alarm, -
+uniform vec4 uSurf;          // the surface far above: its height (world y), how bright, how much the water is tea, -
 uniform vec4 uWh;            // the whale: its eye (world), on/off
 uniform vec4 uWhF;           //            which way it swims (unit), the fin's stroke
 out vec4 o;
@@ -451,6 +452,36 @@ void main(){
     if (h.t < T){ c = c * h.tr + h.c; }
     if (uJK[k].x == 2.0 && distance(uJP[k].xyz, ro) < T) c += atollaGlow(k, ro, rd);
   }
+  // far above, the surface: a round window of warm light the size of a cup's mouth, a pale enamel rim round it,
+  // tea leaves floating dark against it
+  if (uSurf.y > 0.0 && rd.y > 0.0){
+    float ts = (uSurf.x - ro.y) / rd.y;
+    if (ts > 0.0 && ts < T){
+      vec3 hp = ro + rd * ts;
+      vec2 q = hp.xz - ro.xz * 0.0 - vec2(uEye.x, uEye.z);
+      float R = 1.25, rq = length(q);
+      vec2 w = q + 0.05 * vec2(vnoise(q * 3.0 + uTime * 0.4), vnoise(q * 3.0 + 7.0 - uTime * 0.3)) - 0.025;
+      // the light coming down through it: brightest in the middle, shimmering with the surface's ripples
+      float ripple = 0.70 + 0.35 * vnoise(w * 5.0 + uTime * 0.4) + 0.5 * pow(vnoise(w * 13.0 - uTime * 0.8), 3.0);
+      float centre = 1.0 - 0.55 * smoothstep(0.0, R, rq);
+      vec3 win = vec3(1.0, 0.74, 0.42) * ripple * centre * smoothstep(R, R * 0.95, rq) * 0.55;
+      // the cup's enamel rim, lit from within
+      float rim = smoothstep(R * 0.97, R, rq) * smoothstep(R * 1.12, R * 1.02, rq);
+      win += vec3(0.90, 0.82, 0.70) * rim * 0.35;
+      // tea leaves floating, dark, curled
+      for (int k = 0; k < 7; k++){
+        float fk = float(k);
+        vec2 lc = vec2(cos(fk * 2.4 + uTime * 0.02), sin(fk * 2.4 + uTime * 0.02)) * (0.18 + 0.13 * fk);
+        float la = fk * 1.7 + uTime * 0.05;
+        vec2 lq = q - lc; lq = mat2(cos(la), -sin(la), sin(la), cos(la)) * lq;
+        float len_ = 0.13 + 0.06 * fract(fk * 0.61);
+        float wid = 0.05 * sqrt(max(1.0 - pow(lq.x / len_, 2.0), 0.0)) * (1.0 + 0.3 * sin(lq.x * 25.0 + fk));
+        float leaf = smoothstep(0.004, -0.004, abs(lq.y + 0.02 * sin(lq.x * 12.0)) - wid) * step(abs(lq.x), len_);
+        win *= 1.0 - 0.9 * leaf;
+      }
+      c += win * uSurf.y * exp(-SIG_V * ts * 0.4);
+    }
+  }
   // the light itself: a small hot core
   vec3 lo = uL - ro; float t0 = dot(lo, rd); float hl2 = max(dot(lo, lo) - t0 * t0, 0.0);
   if (t0 > 0.0 && t0 < T + 0.05) c += uLI * exp(-SIG_V * t0) * (40.0 * exp(-hl2 / 1.6e-5) + 0.0006 / (hl2 + 0.0004));
@@ -602,7 +633,7 @@ void main(){
 /* ---------------------------------------------------------------- developing the picture */
 const FS_POST = `#version 300 es
 precision highp float;
-uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uExp, uTime, uFade;
+uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uExp, uTime, uFade, uTea, uFlash;
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
@@ -611,12 +642,14 @@ void main(){
   vec3 c = texture(uA, uv).rgb + texture(uB, uv).rgb;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(vec3(0.80, 0.98, 1.30), vec3(1.0), smoothstep(0.0, 0.04, l * uExp));
+  c = mix(c, c * vec3(1.15, 0.80, 0.48) + vec3(0.010, 0.006, 0.002), uTea);       // the water turning to tea
   c = aces(c * uExp);
   vec2 d = uv - 0.5; c *= 1.0 - 0.45 * dot(d, d);
   c = pow(c, vec3(1.0 / 2.2));
   // film grain, strongest in the dark (where it keeps the black from banding)
   float g = hash12(gl_FragCoord.xy + fract(uTime * 7.13) * 917.0) - 0.5;
   c += g * (0.018 + 0.02 * (1.0 - c.g));
+  c = mix(c, vec3(1.0, 0.93, 0.80), uFlash);
   o = vec4(max(c, 0.0) * uFade, 1.0);
 }`;
 
@@ -694,7 +727,9 @@ W.deepsea = {
     // where it wants to be: under your hand, a metre out; or, left alone, drifting about the middle
     let tgt;
     const recent = this.t - H.moved < 4;
-    if (H.aim && recent) {
+    if (this.rise > 0) {
+      tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 0.9)), [0, 0.05, 0]);
+    } else if (H.aim && recent) {
       const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, H.aim[0] * cam.tan[0]), V.mul(cam.up, H.aim[1] * cam.tan[1]))));
       tgt = V.add(cam.eye, V.mul(rd, 1.0));
     } else {
@@ -825,7 +860,10 @@ W.deepsea = {
   camera(aspect, t, still) {
     const V = YL.V;
     const eye = still ? [0, 0, 0] : [0.04 * Math.sin(t * 0.07), 0.03 * Math.sin(t * 0.05 + 1), 0.03 * Math.sin(t * 0.06 + 2)];
-    const yaw = still ? 0 : 0.05 * Math.sin(t * 0.045), pitch = still ? 0 : 0.03 * Math.sin(t * 0.038 + 0.5);
+    // at the end it rises toward the light above, and the eye goes up with it, looking up
+    const r = Math.min(1, (this.rise || 0) * 1.8), re = r * r * (3 - 2 * r);
+    eye[1] += this.riseY || 0;
+    const yaw = still ? 0 : 0.05 * Math.sin(t * 0.045) * (1 - re), pitch = (still ? 0 : 0.03 * Math.sin(t * 0.038 + 0.5)) + 1.0 * re;
     const fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
     const right = V.norm(V.cross(fwd, [0, 1, 0])), up = V.cross(right, fwd);
     const vfov = aspect < 0.9 ? 64 : 50, ty = Math.tan(vfov * Math.PI / 360);
@@ -946,6 +984,7 @@ W.deepsea = {
     const wp = this.wp = this.whalePos();
     U(this.pSea, 'uWh', wp ? [...wp.eye, 1] : [0, 0, 0, 0]);
     U(this.pSea, 'uWhF', [...this.whale.F, 0.6 * Math.sin(this.t * 0.45)]);
+    U(this.pSea, 'uSurf', [this.surfY ?? 99, this.surf || 0, this.tea || 0, 0]);
     const ff = this.fishFrame();
     U(this.pSea, 'uFishP', [...ff.c, Lr.shown]); U(this.pSea, 'uFishF', [...ff.F, Lr.gape]);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -982,6 +1021,7 @@ W.deepsea = {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     gl.useProgram(this.pPost.p);
     U(this.pPost, 'uRes', [w, h]); U(this.pPost, 'uExp', 1.6); U(this.pPost, 'uTime', this.t); U(this.pPost, 'uFade', this.fade);
+    U(this.pPost, 'uTea', this.tea || 0); U(this.pPost, 'uFlash', this.flash || 0);
     YL.bindTex(this.pPost, 'uA', A.tex, 0); YL.bindTex(this.pPost, 'uB', B.tex, 1);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

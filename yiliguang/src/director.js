@@ -21,7 +21,13 @@
    第四幕 · 深海
      deepsea   只有它照亮的那一小团水是看得见的。手牵着它走；不动，黑暗里的小生命就过来看它；
                一会儿，黑暗里出现另一粒一模一样的光
-   调试：?phase=wander|window|daydrops|dive|summer|updraft|cloud|print|woodcut|leave|tear|deepsea &pt=秒
+   转场 4→5 · 杯底
+     rise      它往上浮。头顶有一圈暖光——杯口那么大，边上一圈白搪瓷，几片茶叶的影子漂着；水越来越像茶
+   第五幕 · 回到房间
+     surface   穿出水面：是书桌上那只搪瓷杯里的茶。镜头从茶面上方慢慢拉开，雨夜的房间
+     home      它飞回台灯，钻进灯丝；灯重新亮起，房间又暖了
+     end       雨还在下。（再点一下台灯，就从头再来一遍）
+   调试：?phase=wander|window|daydrops|dive|summer|updraft|cloud|print|woodcut|leave|tear|deepsea|rise|surface &pt=秒
          ?world=summer|woodcut（只看世界，不放主角）
    ========================================================================== */
 (() => {
@@ -38,7 +44,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24;
+const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24, T_SEA = 46, T_RISE = 8, T_SURF = 4.5;
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 const D = YL.director = {
@@ -70,7 +76,8 @@ const D = YL.director = {
     }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
     if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'leave') { D.inPrint(dt); return; }
-    if (D.phase === 'tear' || D.phase === 'deepsea') { D.inSea(dt); return; }
+    if (D.phase === 'tear' || D.phase === 'deepsea' || D.phase === 'rise') { D.inSea(dt); return; }
+    if (D.phase === 'surface' || D.phase === 'home' || D.phase === 'end') { D.inRoom(dt, realT); return; }
     YL.hero.update(dt, realT);
     const L = YL.hero.routeLength(), Tw = L - 2.0;
     if (D.phase === 'wander' && D.t > L) D.go('window');
@@ -170,7 +177,65 @@ const D = YL.director = {
       if (D.pt > T_TEAR) { D.go('deepsea'); D.world = 'deepsea'; sea.vol = 1; }
     } else if (D.phase === 'deepsea') {
       if (D.pt > T_LURE && sea.lure.state === 'off') sea.startLure();
+      if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) { D.go('rise'); D.riseY0 = sea.cam ? sea.cam.eye[1] : 0; }
+    } else if (D.phase === 'rise') {
+      // up toward the light above; the water turns to tea; then the surface
+      const u = clamp(D.pt / T_RISE, 0, 1);
+      sea.rise = u; sea.riseY = 6.6 * Math.pow(u, 2.2);
+      sea.surfY = (D.riseY0 || 0) + 7.4; sea.surf = smooth(0.0, 0.2, u); sea.tea = smooth(0.25, 1.0, u);
+      sea.flash = smooth(0.86, 1.0, u);
+      sea.vol = 1 - 0.7 * smooth(0.6, 1.0, u);
+      YL.roomVol = 0.6 * smooth(0.75, 1.0, u);                                  // the rain, faintly, through the water
+      if (D.pt > T_RISE) D.surface();
     }
+  },
+  // ---- back in the room: out of the tea, home to the lamp
+  surface() {
+    const sea = YL.worlds.deepsea, S_ = YL.S, wood = YL.worlds.woodcut;
+    D.go('surface'); D.world = 'room'; YL.roomTarget = null;
+    sea.vol = 0; if (wood) wood.vol = 0; YL.roomVol = 1;
+    const tea = [S_.MUG_X, S_.DESK_TOP + S_.MUG_H * 0.70 + 0.004, S_.MUG_Z];
+    HERO.on = true; HERO.glow = 1; HERO.p = tea.slice(); YL.hero.glowTarget = 1;
+    YL.hero.setRoute([
+      { p: tea },
+      { p: [S_.MUG_X, S_.DESK_TOP + 0.17, S_.MUG_Z + 0.01], travel: 1.3, dwell: 0.9 },     // up out of the steam: it looks round — it's home
+      { p: [-0.36, 1.04, 0.27], travel: 1.9, dwell: 0.3 },
+      { p: S_.BULB, travel: 1.7, dwell: 0 },
+    ]);
+    LIGHT.on = 0; LIGHT.dip = 0;
+  },
+  inRoom(dt, realT) {
+    const aspect = YL.canvasAspect(), base = YL.framing(aspect), S_ = YL.S, h = HERO.p;
+    if (D.phase === 'surface' || D.phase === 'home') YL.hero.update(dt, realT);
+    // the shot: from just above the tea, drawing back to the room, with a lean toward the light
+    const u = ease(clamp(D.pt / T_SURF, 0, 1));
+    const close = { pos: [S_.MUG_X + 0.05, S_.DESK_TOP + 0.13, S_.MUG_Z + 0.12], tgt: [S_.MUG_X, S_.DESK_TOP + 0.075, S_.MUG_Z], vfov: 42 };
+    const follow = { pos: V.add(base.pos, V.mul(V.sub(h, base.tgt), 0.10)), tgt: base.tgt.map((v, i) => lerp(v, h[i], 0.35)), vfov: base.vfov * 0.95 };
+    const k = D.phase === 'surface' ? u : 1;
+    let pos = close.pos.map((v, i) => lerp(v, follow.pos[i], k)), tgt = close.tgt.map((v, i) => lerp(v, follow.tgt[i], k)), vfov = lerp(close.vfov, follow.vfov, k);
+    const fwd = V.norm(V.sub(tgt, pos));
+    let w = 1;
+    if (D.phase === 'end') w = 1 - smooth(0.5, 3.5, D.pt);                     // and the eye settles back where the film began
+    YL.cam = w > 0.001 ? { pos, tgt, vfov, focus: Math.max(V.dot(V.sub(h, pos), fwd), 0.05), w } : null;
+    if (D.phase === 'surface' && D.pt > T_SURF) D.go('home');
+    if (D.phase === 'home' && YL.hero.t >= YL.hero.routeLength()) {
+      // into the filament: the lamp comes back on
+      D.go('end');
+      LIGHT.on = 1; YL.hero.glowTarget = 0;
+      YL.AUDIO.click && YL.AUDIO.click(1);
+      setTimeout(() => YL.AUDIO.motif && YL.AUDIO.motif(-0.4, 0.05, 1), 300);
+    }
+    if (D.phase === 'end' && HERO.glow < 0.02) HERO.on = false;
+    if (D.phase === 'end') YL.hero.update(dt, realT);
+  },
+  // tapping the lamp at the end: the light jumps out again, and the film runs once more
+  replay() {
+    const sm = YL.worlds.summer, wd = YL.worlds.woodcut, sea = YL.worlds.deepsea;
+    if (sm) { sm.lift = 0; sm.zoom = 0; if (sm.hero) { sm.hero.fly = null; sm.hero.on = false; } sm.vol = 0; }
+    if (wd) { wd.gone = false; wd.hero.mode = 'home'; wd.show = [1, 1, 1]; wd.lanLight = 1; wd.vol = 0; }
+    if (sea) { sea.hero.on = false; sea.rise = 0; sea.riseY = 0; sea.surf = 0; sea.tea = 0; sea.flash = 0; sea.lure.state = 'off'; sea.vol = 0; }
+    YL.sharpMix = 0; YL.cam = null; D.world = 'room'; YL.roomVol = 1;
+    D.phase = 'intro'; D.escape();
   },
   tearSound() {
     const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (!b) return;
@@ -199,7 +264,7 @@ const D = YL.director = {
     summer.hero.v = [0, 0.05, 0]; summer.hero.on = true;
   },
 };
-YL.onLampTap = () => { if (D.phase === 'intro') D.escape(); return true; };   // after it has gone, the lamp is just empty
+YL.onLampTap = () => { if (D.phase === 'intro') D.escape(); else if (D.phase === 'end') D.replay(); return true; };   // while it is away, the lamp is just empty
 
 // ---- the iris: during the dive the room and the summer are both drawn into textures and composited here
 const FS_IRIS = `#version 300 es
@@ -396,6 +461,11 @@ D.renderFrame = (dt, realT) => {
     YL.drawFull();
     return true;
   }
+  if (D.phase === 'surface' && D.pt < 1.0) {
+    const I = irisTargets();
+    YL.roomTarget = I.A; D.flashFrame = { I, f: 1 - smooth(0.0, 1.0, D.pt) };
+    return false;
+  } else if (YL.roomTarget && D.phase !== 'dive') YL.roomTarget = null;
   if (D.world === 'room') return false;
   const w = YL.worlds && YL.worlds[D.world];
   if (!w) return false;
@@ -420,6 +490,16 @@ D.renderFrame = (dt, realT) => {
 };
 // called by the host right after it has drawn the room (into A during the dive)
 D.afterRoom = () => {
+  if (D.flashFrame) {
+    // out of the tea: the warm flash fading off the room
+    const { I, f } = D.flashFrame, gl = YL.gl; D.flashFrame = null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(I.p.p);
+    YL.U(I.p, 'uRes', [I.w, I.h]); YL.U(I.p, 'uC', [-10, -10]); YL.U(I.p, 'uR', 0); YL.U(I.p, 'uFlash', f);
+    YL.bindTex(I.p, 'uA', I.A.tex, 0); YL.bindTex(I.p, 'uB', I.A.tex, 1);
+    YL.drawFull();
+    return;
+  }
   const F = D.irisFrame; if (!F || D.phase !== 'dive') return;
   D.irisFrame = null;
   const { I, u } = F, gl = YL.gl, summer = YL.worlds.summer;
@@ -446,7 +526,7 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave', 'tear', 'deepsea'];
+    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave', 'tear', 'deepsea', 'rise', 'surface'];
     if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
@@ -454,7 +534,8 @@ if (QS.get('phase')) {
       else {
         // straight into the print (once the GL context exists: see renderFrame)
         D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
-        if (ph === 'deepsea') { D.world = 'deepsea'; D.jump = null; D.go('deepsea'); D.pt = pt; D.seaJump = true; }
+        if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
+        if (ph === 'surface') { D.jump = null; YL.roomVol = 1; setTimeout(() => { D.surface(); D.pt = pt; YL.hero.t = pt; if (pt > T_SURF) D.go('home'); }, 0); }
       }
     }
     else { D.go(ph); D.pt = pt; }
