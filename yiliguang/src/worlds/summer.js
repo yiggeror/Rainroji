@@ -47,6 +47,8 @@ uniform vec4 uCBox[6];        // per cloud: bounds (az min, az max, el min, el m
 uniform int uCCount[6];       // per cloud: number of billows
 uniform vec2 uWind;           // ground-plane wind (m/s, x and z)
 uniform float uGust;          // phase of the travelling gust bands
+uniform int uMode;            // 0: the camera's view; 1: an equirect panorama seen from the room's window (for its drops)
+uniform vec3 uEq;             // (azimuth range, elevation min, elevation max) of that panorama
 out vec4 o;
 
 // ---- the painter's colours (display-referred)
@@ -136,6 +138,7 @@ float ridge(float x, float seed){ float h = 0.0, a = 0.5, f = 1.0; for (int i = 
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes, ndc = uv * 2.0 - 1.0;
   vec3 rd = normalize(uFwd + ndc.x * uTan.x * uRight + ndc.y * uTan.y * uUp);
+  if (uMode == 1){ float a = ndc.x * uEq.x, e = mix(uEq.y, uEq.z, uv.y); rd = vec3(sin(a) * cos(e), sin(e), -cos(a) * cos(e)); }
   float az = atan(rd.x, -rd.z), el = asin(clamp(rd.y, -1.0, 1.0));
   vec3 col = skyCol(el, az);
   float aaE = max(fwidth(el), 1e-4) * 1.2;                         // (derivatives taken here, in uniform control flow)
@@ -235,7 +238,7 @@ uniform float uTime;
 uniform vec2 uWind;
 uniform float uGust;
 uniform vec4 uStroke[8];             // the pointer as wind: recent stroke points on the ground (x, z, strength, age)
-out vec3 vC; out float vT; out float vSide; out float vDepth; out float vShadow;
+out vec3 vC; out float vT; out float vSide; out float vDepth; out float vShadow; out vec3 vWP;
 // wind at a point of the field: the steady wind, travelling gust bands, and the pointer's stroke
 vec2 windAt(vec2 p, float t){
   vec2 wd = normalize(uWind + 1e-4);
@@ -272,7 +275,7 @@ void main(){
   float z = dot(v, uFwd);
   vec2 ndc = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
   gl_Position = z < 0.05 ? vec4(2.0, 2.0, 2.0, 1.0) : vec4(ndc, clamp(z / 80.0, 0.0, 1.0) * 2.0 - 1.0, 1.0);
-  vT = seg; vSide = side; vDepth = z;
+  vT = seg; vSide = side; vDepth = z; vWP = p;
   // facing the sun or not (by the blade's bend direction); bent blades show their paler backs
   float face = dot(normalize(vec3(dir.x, 0.6, dir.y)), normalize(vec3(-0.68, 0.6, -0.25)));
   // colour: per blade, and per clump (grass grows in patches of slightly different greens)
@@ -282,8 +285,9 @@ void main(){
   vShadow = smoothstep(0.5, 0.58, fbm3(base * 0.006 + vec2(uTime * 0.004, 0.0)));
 }`;
 const FS_GRASS = HEAD + `
-in vec3 vC; in float vT; in float vSide; in float vDepth; in float vShadow;
+in vec3 vC; in float vT; in float vSide; in float vDepth; in float vShadow; in vec3 vWP;
 uniform vec3 uSun;
+uniform vec3 uHP; uniform float uHOn;      // 一粒光 in this world: its warm light on the blades, painted in two steps
 out vec4 o;
 void main(){
   // cel steps: a dark base in the grass's own shade, a lit middle, a bright tip where the sun catches it
@@ -295,9 +299,34 @@ void main(){
   c = mix(c, tip, smoothstep(0.78, 0.86, vT + vC.z * 0.25) * 0.8);
   c = mix(c, vec3(0.72, 0.86, 0.45), vC.z * 0.45 * smoothstep(0.3, 0.9, vT));      // laid over by the wind: pale backs
   c = mix(c, mix(shade, vec3(0.20, 0.38, 0.30), 0.5), vShadow * 0.7);   // under a cloud's shadow
+  float hd = length(vWP - uHP);
+  c = mix(c, c * 1.15 + vec3(0.22, 0.16, 0.02), (1.0 - smoothstep(0.85, 0.9, hd)) * 0.55 * uHOn);
+  c = mix(c, vec3(1.0, 0.93, 0.62), (1.0 - smoothstep(0.38, 0.42, hd)) * smoothstep(0.5, 0.9, vT) * 0.8 * uHOn);
   // a little aerial perspective for the farther blades
   c = mix(c, vec3(0.74, 0.88, 0.94), sat(vDepth / 120.0) * 0.6);
   o = vec4(c, 1.0);
+}`;
+const FS_HERO = `#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
+uniform vec3 uHP; uniform float uHR, uTime, uBreath, uOn;
+out vec4 o;
+void main(){
+  vec3 v = uHP - uEye; float z = dot(v, uFwd);
+  if (z < 0.05) discard;
+  vec2 c = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
+  vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec2 d = (ndc - c) * uTan * z;                       // metres, at the light's depth
+  float r = length(d) / uHR, px = length(fwidth(d)) / uHR;
+  if (r > 14.0) discard;
+  float ang = atan(d.y, d.x), b = uBreath;
+  float core = 1.0 - smoothstep(1.0 - px, 1.0 + px, r);
+  float halo = 1.0 - smoothstep(2.3 * b - px, 2.3 * b + px, r);
+  float glow = exp(-r / (2.4 * b));
+  float rays = pow(max(cos(3.0 * (ang + uTime * 0.12)), 0.0), 24.0) * smoothstep(11.0 * b, 2.0, r) + 0.6 * pow(max(cos(3.0 * (ang - uTime * 0.07) + 0.5), 0.0), 40.0) * smoothstep(8.0 * b, 2.0, r);
+  vec3 col = vec3(1.0, 0.99, 0.94) * core + vec3(1.0, 0.80, 0.40) * halo * 0.45 * (1.0 - core) + vec3(1.0, 0.86, 0.52) * (glow * 0.35 + rays * 0.3);
+  gl_FragDepth = clamp(z / 80.0, 0.0, 1.0);
+  o = vec4(col * uOn, 1.0);
 }`;
 const FS_RESOLVE = `#version 300 es
 precision highp float;
@@ -393,9 +422,11 @@ W.summer = {
     this.pBg = YL.makeProgram('summer-bg', `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_BG);
     this.pGrass = YL.makeProgram('summer-grass', VS_GRASS, FS_GRASS);
+    this.pHero = YL.makeProgram('summer-hero', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_HERO);
     this.pRes = YL.makeProgram('summer-resolve', `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_RESOLVE);
-    [this.pBg, this.pGrass, this.pRes].forEach(YL.checkProgram);
+    [this.pBg, this.pGrass, this.pRes, this.pHero].forEach(YL.checkProgram);
     this.cl = makeClouds(YL.rnd);
     const N = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 10000 : 18000;
     const g = makeGrass(YL.rnd, N); this.nGrass = N;
@@ -474,10 +505,32 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     S.wg.gain.setTargetAtTime((0.05 + 0.08 * gust + 0.12 * Math.min(push, 1.5)) * (1 - 0.8 * calm), now, 0.3);
     S.wl.frequency.setTargetAtTime(450 + 500 * gust + 600 * Math.min(push, 1.5), now, 0.3);
   },
+  // 一粒光 here is a bit of sunlight blown about by the wind: your strokes push it, a spring keeps it near
+  hero: { on: false, p: [0.25, 0.95, -2.8], v: [0, 0, 0], anchor: [0.25, 0.95, -2.8] },
+  heroUpdate(dt) {
+    const H = this.hero; if (!H.on) return;
+    const t = this.t, calm = this.calm || 0;
+    for (const s of this.strokes) {
+      const dx = H.p[0] - s.x, dz = H.p[2] - s.z, r2 = dx * dx + dz * dz, l = Math.sqrt(r2) + 1e-3;
+      const f = s.s * Math.exp(-r2 / 2) * Math.exp(-s.age * 1.2) * 2.4 * dt;
+      H.v[0] += dx / l * f; H.v[2] += dz / l * f; H.v[1] += f * 0.5;
+    }
+    H.v[0] += 0.10 * dt * (1 - calm); H.v[2] -= 0.04 * dt * (1 - calm);          // the steady breeze
+    for (let i = 0; i < 3; i++) H.v[i] += (H.anchor[i] - H.p[i]) * 0.55 * dt;   // drawn back where it likes to be
+    const damp = Math.exp(-dt * 0.9);
+    for (let i = 0; i < 3; i++) { H.v[i] *= damp; H.p[i] += H.v[i] * dt; }
+    H.p[1] = Math.max(H.p[1], 0.35);
+    H.bob = 0.03 * Math.sin(t * 1.3) + 0.015 * Math.sin(t * 2.9 + 1);
+  },
   update(dt, still) {
     this.t += dt;
+    // pressing and holding still stops the wind
+    const P = YL.ptr, now = performance.now() / 1000;
+    const holding = YL.ptrDown && P && now - P.t > 0.5;
+    this.calm = (this.calm || 0) + ((holding ? 1 : 0) - (this.calm || 0)) * (1 - Math.exp(-dt / 1.2));
+    this.heroUpdate(dt);
     this.sound(dt);
-    this.gust += dt * 0.55;
+    this.gust += dt * 0.55 * (1 - 0.8 * this.calm);
     this.strokes.forEach(s => s.age += dt);
     this.strokes = this.strokes.filter(s => s.age < 3);
   },
@@ -490,6 +543,27 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     const vfov = aspect < 0.9 ? 68 : 52, ty = Math.tan(vfov * Math.PI / 360);
     return { eye: [0, 0.85, 0], fwd, right, up, tan: [ty * aspect, ty] };
   },
+  // the summer sky and field as the room's window would see them, for the drops' inverted images
+  renderEquirect(target) {
+    const gl = YL.gl, U = YL.U, S = YL.S;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb); gl.viewport(0, 0, target.w, target.h);
+    gl.useProgram(this.pBg.p);
+    U(this.pBg, 'uRes', [target.w, target.h]); U(this.pBg, 'uMode', YL.I(1)); U(this.pBg, 'uEq', [S.AZM, S.ELMIN, S.ELMAX]);
+    U(this.pBg, 'uFwd', [0, 0, -1]); U(this.pBg, 'uRight', [1, 0, 0]); U(this.pBg, 'uUp', [0, 1, 0]); U(this.pBg, 'uTan', [1, 1]);
+    U(this.pBg, 'uTime', this.t); U(this.pBg, 'uSun', SUN); U(this.pBg, 'uWind', [1.6, -0.6]); U(this.pBg, 'uGust', this.gust);
+    gl.uniform4fv(this.pBg.u.uLobes, new Float32Array(this.cl.lobes.flat().concat(new Array((112 - this.cl.lobes.length) * 4).fill(0))));
+    gl.uniform4fv(this.pBg.u.uClouds, new Float32Array(this.cl.clouds.flat()));
+    gl.uniform4fv(this.pBg.u.uCBox, new Float32Array(this.cl.boxes.flat()));
+    gl.uniform1iv(this.pBg.u.uCCount, new Int32Array(this.cl.counts));
+    gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  },
+  // where a point on the screen is, at a given distance in this world (to hand the light over at the same spot)
+  unproject(nx, ny, dist, aspect) {
+    const cam = this.camera(aspect, this.t, YL.DBG.still), V = YL.V;
+    const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, nx * cam.tan[0]), V.mul(cam.up, ny * cam.tan[1]))));
+    return V.add(cam.eye, V.mul(rd, dist));
+  },
   render(target, aspect) {
     const gl = YL.gl;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
@@ -501,7 +575,8 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.clearColor(0, 0, 0, 1); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.pBg.p);
     U(this.pBg, 'uRes', [w, h]); U(this.pBg, 'uFwd', cam.fwd); U(this.pBg, 'uRight', cam.right); U(this.pBg, 'uUp', cam.up); U(this.pBg, 'uTan', cam.tan);
-    U(this.pBg, 'uTime', this.t); U(this.pBg, 'uSun', SUN); U(this.pBg, 'uWind', [1.6, -0.6]); U(this.pBg, 'uGust', this.gust);
+    const wk = 1 - 0.85 * (this.calm || 0), wind = [1.6 * wk, -0.6 * wk];
+    U(this.pBg, 'uTime', this.t); U(this.pBg, 'uSun', SUN); U(this.pBg, 'uWind', wind); U(this.pBg, 'uGust', this.gust); U(this.pBg, 'uMode', YL.I(0));
     gl.uniform4fv(this.pBg.u.uLobes, new Float32Array(this.cl.lobes.flat().concat(new Array((112 - this.cl.lobes.length) * 4).fill(0))));
     gl.uniform4fv(this.pBg.u.uClouds, new Float32Array(this.cl.clouds.flat()));
     gl.uniform4fv(this.pBg.u.uCBox, new Float32Array(this.cl.boxes.flat()));
@@ -511,10 +586,22 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS);
     gl.useProgram(this.pGrass.p);
     U(this.pGrass, 'uEye', cam.eye); U(this.pGrass, 'uFwd', cam.fwd); U(this.pGrass, 'uRight', cam.right); U(this.pGrass, 'uUp', cam.up); U(this.pGrass, 'uTan', cam.tan);
-    U(this.pGrass, 'uTime', this.t); U(this.pGrass, 'uWind', [1.6, -0.6]); U(this.pGrass, 'uGust', this.gust); U(this.pGrass, 'uSun', SUN);
+    U(this.pGrass, 'uTime', this.t); U(this.pGrass, 'uWind', wind); U(this.pGrass, 'uGust', this.gust); U(this.pGrass, 'uSun', SUN);
+    const H = this.hero, hp = [H.p[0], H.p[1] + (H.bob || 0), H.p[2]];
+    U(this.pGrass, 'uHP', hp); U(this.pGrass, 'uHOn', H.on ? 1 : 0);
     const st = new Float32Array(32); this.strokes.forEach((s, i) => st.set([s.x, s.z, s.s, s.age], i * 4));
     gl.uniform4fv(this.pGrass.u.uStroke, st);
     gl.bindVertexArray(this.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 7, this.nGrass);
+    // the little light, in front of what is behind it and behind the blades in front of it
+    if (H.on) {
+      gl.useProgram(this.pHero.p);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
+      U(this.pHero, 'uRes', [w, h]); U(this.pHero, 'uEye', cam.eye); U(this.pHero, 'uFwd', cam.fwd); U(this.pHero, 'uRight', cam.right); U(this.pHero, 'uUp', cam.up); U(this.pHero, 'uTan', cam.tan);
+      const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in the room
+      U(this.pHero, 'uHP', hp); U(this.pHero, 'uHR', 0.018); U(this.pHero, 'uTime', this.t); U(this.pHero, 'uBreath', br); U(this.pHero, 'uOn', 1);
+      gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.disable(gl.BLEND); gl.depthMask(true);
+    }
     gl.disable(gl.DEPTH_TEST);
     // 3) resolve, then onto the screen (or the target)
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msFb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.res.fb);

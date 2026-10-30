@@ -2827,6 +2827,8 @@ uniform vec2 uRes;
 uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
 uniform vec2 uTan;
 uniform sampler2D uRoom, uDefocus, uSharp, uHeight, uState;
+uniform sampler2D uSharp2;       // 《一粒光》: another world, seen in the drops instead of the street
+uniform float uSharpMix, uSharpGain;
 uniform vec2 uSimMM;        // simulated glass size (mm)
 uniform vec2 uHTex;         // height texture size (texels)
 uniform float uHScale;
@@ -2904,6 +2906,7 @@ void main(){
   // drop: sharp, inverted outside image + internal reflection of the room (lamp glints, dark rims)
   vec2 euv = dirToEq(vec3(dout.xy, -dout.z));
   vec3 sharpC = textureGrad(uSharp, euv, dFdx(euv) * 0.55, dFdy(euv) * 0.55).rgb;
+  if (uSharpMix > 0.0) sharpC = mix(sharpC, textureGrad(uSharp2, euv, dFdx(euv) * 0.55, dFdy(euv) * 0.55).rgb * uSharpGain, uSharpMix);
   vec3 inner = mix(interiorRad(P, droom), (uAmbL * 0.4 + uAmbS) * 0.12 + uSkyL * 0.25, trapped);
   float Fg = fresnel(abs(rd.z), 1.0, NG);
   vec3 wetC = sharpC * (1.0 - Fw) * (1.0 - Fg) + inner * Fw * (1.0 - Fg) * 0.92;
@@ -4263,6 +4266,8 @@ function render(t, dt, rt) {
   bindTex(P.composite, 'uSharp', T.sharp.tex, 2);
   bindTex(P.composite, 'uHeight', T.height.tex, 3);
   bindTex(P.composite, 'uState', stateTex, 4);
+  bindTex(P.composite, 'uSharp2', YL.sharp2 ? YL.sharp2.tex : T.sharp.tex, 5);
+  U(P.composite, 'uSharpMix', YL.sharp2 ? (YL.sharpMix || 0) : 0); U(P.composite, 'uSharpGain', YL.sharpGain || 1);
   drawFull();
   }
 
@@ -4285,7 +4290,7 @@ function render(t, dt, rt) {
   gl.disable(gl.BLEND);
 
   // 6) final
-  bindTarget(null);
+  bindTarget(YL.roomTarget || null);                 // 《一粒光》: during a transition the room is drawn into a texture
   if (DBG.view) {
     const srcV = { room: T.room.tex, dof: T.roomDof.tex, taa: R.roomOut.tex, bloom: T.b1.tex, cov: T.room.tex, depth: T.room.texs[1], defocus: T.defocus.tex, sharp: T.sharp.tex, height: T.height.tex, state: { t: stateTex } }[DBG.view] || T.hdr.tex;
     gl.useProgram(P.blit.p);
@@ -4357,6 +4362,7 @@ function pickWindowOut(ro, rd) {
 }
 function onDown(e) {
   AUDIO.unlock && AUDIO.unlock();
+  YL.ptrDown = true; { const [nx, ny] = toNdc(e); YL.ptr = { nx, ny, t: performance.now() / 1000, speed: 0 }; }
   requestGyro();
   try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const [nx, ny] = toNdc(e), rd = camRay(nx, ny);
@@ -4395,6 +4401,7 @@ function onMove(e) {
   }
 }
 function onUp() {
+  YL.ptrDown = false;
   if (PTR.down && PTR.mode === 'lamp' && PTR.moved < 12) toggleLamp();
   if (PTR.mode === 'pan' && !GYRO.on) CAM.parT = [0, 0];
   PTR.down = false; PTR.mode = ''; PTR.last = null;
@@ -4824,7 +4831,7 @@ function loop(now) {
   simAdvance(wdt);
   viewTick(dt);
   if (!DBG.shot && VIEW.want === VIEW.out) R.fade = Math.min(1, R.fade + dt / R.fadeIn);
-  if (!(YL.director && YL.director.renderFrame && YL.director.renderFrame(dt, realT, simT))) render(simT, dt, realT);
+  if (!(YL.director && YL.director.renderFrame && YL.director.renderFrame(dt, realT, simT))) { render(simT, dt, realT); YL.director && YL.director.afterRoom && YL.director.afterRoom(); }
   UI.tick(dt);
   if (frame % 15 === 0) UI.syncTime();
   AUDIO.update && AUDIO.update(dt, wdt);
