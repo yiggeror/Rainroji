@@ -40,6 +40,11 @@
   #panel input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:#efe2cc;border:0}
   #panel button.tog{font:inherit;color:inherit;letter-spacing:.12em;background:none;border:1px solid rgba(238,226,206,.28);border-radius:10px;padding:1px 10px;cursor:pointer}
   #panel .hint{margin-top:4px;font-size:11px;opacity:.5;letter-spacing:.06em;line-height:1.7}
+  #panel .seg{display:flex;gap:2px}
+  #panel .seg button{font:inherit;color:inherit;background:none;border:0;border-bottom:1px solid transparent;padding:0 5px 1px;cursor:pointer;opacity:.45;letter-spacing:.1em}
+  #panel .seg button.on{opacity:1;border-bottom-color:rgba(238,226,206,.6)}
+  #panel .sub{opacity:.6;font-size:11px;letter-spacing:.08em}
+  #panel .row + label, #panel .row + .row{margin-top:8px}
   #hint{position:fixed;left:0;right:0;bottom:max(22px,env(safe-area-inset-bottom));text-align:center;z-index:3;pointer-events:none;
     font:300 12px/1.6 "Songti SC","Noto Serif SC",serif;letter-spacing:.42em;color:rgba(238,226,206,.55);opacity:0;transition:opacity 2.4s ease}
   #hint.show{opacity:1}
@@ -51,10 +56,13 @@
 <div id="hint">轻触台灯 · 指尖划过玻璃</div>
 <div id="ui">
   <div id="panel" role="dialog" aria-label="设置">
+    <div class="row"><span>季节</span><span class="seg" id="season"><button data-s="0">春</button><button data-s="1">夏</button><button data-s="2">秋</button><button data-s="3">冬</button></span></div>
+    <label style="margin-top:8px"><span class="row"><span>时刻</span><span class="sub" id="todLabel"></span></span><input id="tod" type="range" min="0" max="24" step="0.05"></label>
+    <div class="row" style="margin-bottom:10px"><span>时间流逝</span><button class="tog" id="flow" aria-pressed="false">停</button></div>
     <label>雨势<input id="rain" type="range" min="0" max="1" step="0.01" value="0.55"></label>
-    <label>时间流速<input id="speed" type="range" min="0.2" max="2.5" step="0.01" value="1"></label>
+    <label>流速<input id="speed" type="range" min="0.2" max="2.5" step="0.01" value="1"></label>
     <div class="row"><span>声音</span><button class="tog" id="snd" aria-pressed="true">开</button></div>
-    <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>H 隐藏 · L 台灯 · M 静音</div>
+    <div class="hint">轻触台灯开关；在玻璃上划过可擦去雾气。<br>S 季节 · T 时间流逝 · L 台灯 · M 静音 · H 隐藏</div>
   </div>
   <button id="uiBtn" aria-label="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 1.8C8 1.8 3.6 7 3.6 10a4.4 4.4 0 0 0 8.8 0C12.4 7 8 1.8 8 1.8Z"/></svg></button>
 </div>
@@ -497,7 +505,7 @@ vec2 sdPlant(vec3 p){
   res = opU(res, vec2(dr, M_RUNNER));
   return opU(res, vec2(db, M_LEAF));
 }
-// ---- an old wall clock, stopped at dusk (hands from uClock)
+// ---- an old wall clock: it shows the scene's hour, so while time stands still it is stopped at dusk
 vec2 sdClock(vec3 p){
   vec3 q = p - CLOCK_P;
   float bound = sdBox(q - vec3(0.0, 0.0, 0.022), vec3(0.125, 0.125, 0.026));
@@ -1380,17 +1388,25 @@ float busMask(vec2 l, float w){ return smoothstep(w, -w, sdBoxC(l - vec2(0.0, 1.
 const GLSL_OUTSIDE = GLSL_CITY + `
 uniform vec4 uStreetLamps[6];   // xyz, w = intensity
 uniform vec4 uCars[4];          // x, z(lane), heading(+-1), intensity
+// ---- the world at this hour (computed once per frame in JS, see WORLD) ----
+uniform vec3 uSkyZ, uSkyH;      // overcast sky radiance at the zenith / at the horizon
+uniform vec3 uGlow;             // city light reflected by the cloud base, near the horizon
+uniform vec3 uEVert, uEGround;  // sky irradiance on a facade / on the street
+uniform float uOcc;             // fraction of homes with a light on
+uniform float uLampsOut;        // street lamp output 0..1 (incl. sodium warm-up)
+uniform vec3 uLampTint;         // street lamp colour (pinkish while warming up, then sodium orange)
+uniform float uShopsLit;        // spill of shop light onto the street (shops open and the light needed)
+uniform float uDark;            // 0 by day .. 1 after dark (signboards lit)
+uniform float uTod;             // hour of the day
 vec3 skyCol(vec3 rd){
   float e = rd.y;
-  vec3 zen = vec3(0.045, 0.080, 0.150);
-  vec3 mid = vec3(0.085, 0.118, 0.165);
-  vec3 hor = vec3(0.150, 0.135, 0.130);
-  vec3 c = mix(hor, mid, smoothstep(-0.02, 0.2, e));
-  c = mix(c, zen, smoothstep(0.18, 0.75, e));
+  vec3 mid = mix(uSkyH, uSkyZ, 0.55);
+  vec3 c = mix(uSkyH, mid, smoothstep(-0.02, 0.2, e));
+  c = mix(c, uSkyZ, smoothstep(0.18, 0.75, e));
   vec2 cp = rd.xz / max(e + 0.12, 0.06) * 0.8 + vec2(uTime * 0.006, 0.0);
   float cl = fbm3(cp);
   c *= 0.8 + 0.4 * cl;
-  c += vec3(0.05, 0.028, 0.018) * exp(-max(e, 0.0) * 7.0) * (0.6 + 0.6 * cl);   // sodium skyglow on the cloud base
+  c += uGlow * exp(-max(e, 0.0) * 7.0) * (0.6 + 0.6 * cl);   // sodium skyglow on the cloud base
   return c;
 }
 float rectSoft(vec2 p, vec2 hs, vec2 w){
@@ -1405,17 +1421,20 @@ vec3 windowLight(float id, vec2 cell){
   if (k >= 0.9) I *= 0.6 + 0.4 * sin(uTime * (2.0 + 3.0 * fract(id * 5.1)) + id) * sin(uTime * 0.7 + id * 3.0);
   return c * I;
 }
+// 每个表面 = 反照率 ×（天光 + 路灯 + 商铺溢光）/ π + 自发光（灯窗、营业中的铺面、天黑后点亮的招牌）。
+// 傍晚的照度与第一期的画面定标一致；白天楼面现出颜色，夜里只剩灯。
 vec3 facade(vec3 p, vec2 bw){
   float fx = p.x, fy = p.y - GROUND_Y;
   float bi = floor(fx / 9.0);
   float bs = bi + uCity;                 // hash key of this block (the layout differs per visit)
   float hb = hash11(bs * 3.17 + 0.3);
-  vec3 wall = mix(vec3(0.011, 0.011, 0.012), vec3(0.022, 0.019, 0.017), hb);
-  // light from the street lamps and shop windows below washes up the wet facade
+  vec3 alb = mix(vec3(0.16, 0.16, 0.17), vec3(0.31, 0.28, 0.25), hb);          // wet concrete, old tiles, faded paint
+  alb *= mix(vec3(1.0), vec3(1.0, 0.92, 0.82), step(0.7, fract(hb * 7.0)));    // one block in yellowed cream paint
+  alb *= 0.85 + 0.3 * vnoise(vec2(fx * 0.6, fy * 0.25) + bs * 7.0);              // rain streaks, old repairs
   float glow = 0.0;
   for (int i = 0; i < 4; i++){ float dx = fx - uStreetLamps[i].x; glow += uStreetLamps[i].w * exp(-dx * dx * 0.012); }
-  wall *= 1.0 + (1.6 * glow + 1.2) * exp(-fy * 0.32);
-  vec3 c = wall;
+  vec3 E = uEVert + (uLampTint * 0.28 * glow * uLampsOut + vec3(1.0, 0.82, 0.62) * 0.21 * uShopsLit) * exp(-fy * 0.32);
+  vec3 c = alb * E / PI;
   float wx = fx - bi * 9.0;
   // upper floors: 3 windows per block, 3 m floors
   if (fy > 3.6){
@@ -1425,16 +1444,15 @@ vec3 facade(vec3 p, vec2 bw){
     float id = hash12(vec2(bs * 5.0 + colI, row + 11.0));
     vec2 hs = vec2(0.58 + 0.12 * hb, 0.68);
     float m = rectSoft(lc, hs, bw + 0.03);
-    // somebody comes home, somebody goes to bed: a few windows switch on and off over the minutes
-    if (fract(id * 53.1) < 0.2){
-      bool on = fract(uTime / (50.0 + 110.0 * fract(id * 7.7)) + id * 5.0) < 0.6;
-      id = on ? 0.396 * fract(id * 31.0) : 0.5 + 0.5 * id;     // (ids below 0.4 are lit; the value also picks the light's colour)
-    }
-    vec3 wc = id < 0.4 ? windowLight(id, lc) : vec3(0.006, 0.008, 0.012) + skyCol(vec3(0.0, 0.25, -1.0)) * 0.25;
+    // a home's light is on when its hash falls under the hour's occupancy; a few also switch on and off over the minutes
+    bool lit = id < uOcc;
+    if (fract(id * 53.1) < 0.2) lit = lit ^^ (fract(uTime / (50.0 + 110.0 * fract(id * 7.7)) + id * 5.0) > 0.7);
+    float cid = fract(id * 7.31) * 0.4;
+    vec3 wc = lit ? windowLight(cid, lc) : uEVert * 0.012 + skyCol(vec3(0.0, 0.25, -1.0)) * 0.25;
     // curtains / blinds inside lit windows: break up the flat rectangles
-    if (id < 0.4) wc *= 0.7 + 0.3 * smoothstep(-0.4, 0.4, sin(lc.x * 2.2 + id * 40.0) + (fract(id * 9.0) - 0.5) * 2.0);
+    if (lit) wc *= 0.7 + 0.3 * smoothstep(-0.4, 0.4, sin(lc.x * 2.2 + cid * 40.0) + (fract(cid * 9.0) - 0.5) * 2.0);
     c = mix(c, wc, m);
-    c += (id < 0.4 ? wc : vec3(0.0)) * 0.06 * rectSoft(lc, hs, bw + 0.6);   // rain-scattered glow
+    if (lit) c += wc * 0.06 * rectSoft(lc, hs, bw + 0.6);                      // rain-scattered glow
   }
   // ground floor: shopfronts with signboards
   float shop = hash11(bs * 1.93 + 4.0);
@@ -1442,19 +1460,27 @@ vec3 facade(vec3 p, vec2 bw){
     float si = floor(wx / 4.5);
     float sh2 = hash11(bs * 7.7 + si * 3.1);
     vec2 sc = vec2(fract(wx / 4.5) * 4.5 - 2.25, fy - 1.5);
-    float m = rectSoft(sc, vec2(1.75, 1.15), bw + 0.03) * step(0.3, sh2);
-    float shutter = step(0.55, fract(sh2 * 3.3)) * smoothstep(-0.1, 0.1, sc.y - (1.0 - 1.9 * fract(sh2 * 7.7)));
-    vec3 lit = (sh2 > 0.45 ? vec3(1.0, 0.74, 0.46) : vec3(0.78, 0.92, 0.88)) * (0.14 + 0.22 * fract(sh2 * 31.0));
+    float has = step(0.3, sh2);
+    float m = rectSoft(sc, vec2(1.75, 1.15), bw + 0.03) * has;
+    // each shop keeps its own hours; when closed the corrugated shutter comes all the way down
+    float openT = 7.0 + 2.5 * fract(sh2 * 5.1), closeT = 20.0 + 3.5 * fract(sh2 * 9.7);
+    float open = step(openT, uTod) * step(uTod, closeT);
+    float level = open > 0.5 ? (fract(sh2 * 3.3) > 0.75 ? 0.3 : 1.4) : -1.3;
+    float shutter = smoothstep(-0.1, 0.1, sc.y - level);
+    vec3 lit = (sh2 > 0.45 ? vec3(1.0, 0.74, 0.46) : vec3(0.78, 0.92, 0.88)) * (0.14 + 0.22 * fract(sh2 * 31.0)) * open;
     lit *= 0.7 + 0.3 * smoothstep(-1.2, 1.0, sc.y) * (0.8 + 0.2 * sin(sc.x * 1.7 + sh2 * 9.0));   // ceiling lights, depth
     lit *= 1.0 - 0.55 * smoothstep(0.35, 0.05, abs(sc.x - 0.6 * fract(sh2 * 17.0))) * smoothstep(0.3, -0.6, sc.y) * step(0.5, fract(sh2 * 13.0)); // a figure
-    vec3 shut = vec3(0.022, 0.022, 0.024);
+    lit += uEVert * 0.02;
+    vec3 shut = vec3(0.30, 0.30, 0.32) * E / PI * (0.85 + 0.15 * sin(sc.y * 55.0));
     c = mix(c, mix(lit, shut, shutter), m);
     vec2 sb = vec2(wx - 4.5, fy - 3.15);
     float ms = rectSoft(sb, vec2(3.9, 0.32), bw + 0.02);
-    vec3 boardC = (fract(shop * 5.3) < 0.5 ? vec3(0.55, 0.06, 0.04) : fract(shop * 5.3) < 0.8 ? vec3(0.05, 0.16, 0.42) : vec3(0.6, 0.45, 0.08)) * 0.6;
+    vec3 boardA = fract(shop * 5.3) < 0.5 ? vec3(0.50, 0.06, 0.05) : fract(shop * 5.3) < 0.8 ? vec3(0.06, 0.17, 0.45) : vec3(0.62, 0.47, 0.09);
     float chars = 0.6 + 0.4 * smoothstep(0.2, 0.8, sin(sb.x * 5.0 + shop * 20.0) * sin(sb.y * 14.0));
-    c = mix(c, boardC * chars * 0.8, ms);
-    c += (lit * 0.06 * step(0.3, sh2) + boardC * 0.04) * rectSoft(sc, vec2(1.75, 1.15), bw + 1.2);
+    float signOn = uDark * step(7.0, uTod) * step(uTod, 23.0);                  // lit from dusk until the street sleeps
+    vec3 boardE = boardA * 0.55 * chars * signOn;
+    c = mix(c, boardA * chars * E / PI + boardE, ms);
+    c += (lit * 0.06 * has + boardE * 0.06) * rectSoft(sc, vec2(1.75, 1.15), bw + 1.2);
   }
   return c;
 }
@@ -1462,15 +1488,15 @@ vec3 farCity(vec3 p, float bw){
   float i = floor(p.x / 26.0);
   float top = GROUND_Y + farTop(p.x);
   float m = smoothstep(bw, -bw, p.y - top);
-  vec3 c = vec3(0.018, 0.024, 0.034);
+  vec3 c = vec3(0.22, 0.23, 0.25) * uEVert / PI;
   // sparse lit windows statistically averaged once defocused
   vec2 g = vec2(p.x / 2.6, (p.y - GROUND_Y) / 3.2);
-  float on = step(0.82, hash12(floor(g) + i * 31.0));
+  float on = step(1.0 - 0.45 * uOcc, hash12(floor(g) + i * 31.0));
   float dotM = rectSoft(fract(g) - 0.5, vec2(0.22, 0.2), vec2(bw / 2.6, bw / 3.2) + 0.02);
-  float avg = 0.18 * 0.18 * 0.35;
+  float avg = 0.18 * 0.18 * 0.35 * uOcc / 0.4;
   float lights = mix(on * dotM, avg * 4.0, smoothstep(0.4, 2.0, bw));
   c += vec3(1.0, 0.72, 0.42) * 0.22 * lights;
-  return c * m + vec3(0.0) * (1.0 - m);
+  return c * m;
 }
 // everything that is not the ground plane
 vec3 aboveGround(vec3 ro, vec3 rd, float blur, out float dist){
@@ -1521,7 +1547,7 @@ vec4 pedestrians(vec3 ro, vec3 rd, float blur, float tLimit){
     body = max(body, smoothstep(w, -w, sdSegC(ub, vec2(0.12, 1.2), vec2(0.0, 1.93)) - 0.012));
     float glow = 0.0;
     for (int k = 0; k < 4; k++){ float dx = pd.x - uStreetLamps[k].x; glow += exp(-dx * dx * 0.01); }
-    vec3 Lt = vec3(1.0, 0.62, 0.3) * (0.05 + 0.18 * glow) + vec3(0.04, 0.05, 0.06);
+    vec3 Lt = uLampTint * (0.05 + 0.18 * glow) * uLampsOut + uEVert * 0.25 + vec3(0.03, 0.025, 0.02) * uShopsLit;
     float kind = pd.z;
     bool clear = kind > 1.5 && kind < 2.5;
     vec3 uc = kind < 0.5 ? vec3(0.03) : kind < 1.5 ? vec3(0.55, 0.05, 0.04) : clear ? vec3(0.62, 0.62, 0.60) : kind < 3.5 ? vec3(0.06, 0.08, 0.20) : vec3(0.60, 0.42, 0.10);
@@ -1544,8 +1570,9 @@ vec4 busLayer(vec3 ro, vec3 rd, float blur){
   float m = busMask(l, w);
   if (m <= 0.0) return vec4(0.0);
   float wx = l.x * uBus.z;                                   // along the direction of travel
-  vec3 col = vec3(0.012, 0.03, 0.028) * (1.0 + 0.6 * smoothstep(1.2, 0.4, l.y));
-  col = mix(col, vec3(0.25, 0.04, 0.03), smoothstep(w, -w, abs(l.y - 1.2) - 0.05));     // the route-colour stripe
+  vec3 Eb = uEVert + uLampTint * 0.12 * uLampsOut;
+  vec3 col = vec3(0.15, 0.42, 0.38) * Eb / PI * (1.0 + 0.6 * smoothstep(1.2, 0.4, l.y));
+  col = mix(col, vec3(0.6, 0.08, 0.06) * Eb / PI + vec3(0.1, 0.015, 0.01) * uDark, smoothstep(w, -w, abs(l.y - 1.2) - 0.05));   // the route-colour stripe
   float win = smoothstep(w, -w, abs(l.y - 1.95) - 0.55) * smoothstep(w, -w, abs(wx + 0.4) - 4.4);
   float cell = floor(wx / 1.15 + 0.5);
   float pillar = smoothstep(0.07 + w, 0.07 - w, abs(fract(wx / 1.15 + 0.5) - 0.5) * 1.15);
@@ -1561,12 +1588,13 @@ vec4 busLayer(vec3 ro, vec3 rd, float blur){
 }
 vec3 treeCol(vec2 pt){
   // dark foliage against the dusk; only the undersides nearest the sodium lamp (just left of the view) catch its light
-  vec3 c = vec3(0.006, 0.009, 0.006);
   float under = smoothstep(GROUND_Y + 7.4, GROUND_Y + 5.2, pt.y);
   vec2 dl = pt - vec2(-4.6, GROUND_Y + 6.0);
   float cluster = smoothstep(0.35, 0.75, vnoise(pt * 2.6 + 1.7));
-  c += vec3(0.75, 0.58, 0.20) * 0.022 * under * cluster / (1.0 + dot(dl, dl) * 0.15);
-  c += vec3(0.20, 0.24, 0.14) * 0.004 * under;
+  vec3 alb = vec3(0.07, 0.12, 0.06) * (0.7 + 0.6 * cluster);
+  vec3 c = alb * uEVert / PI * (1.0 - 0.4 * under);
+  c += vec3(0.75, 0.58, 0.20) * 0.022 * under * cluster / (1.0 + dot(dl, dl) * 0.15) * uLampsOut;
+  c += vec3(0.20, 0.24, 0.14) * 0.004 * under * uDark;
   return c;
 }
 
@@ -1580,11 +1608,11 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     float tb = (FACADE_Z - ro.z) / rd.z;
     // street: wet asphalt, far sidewalk, light pools; mirror reflection of the facades
     float side = smoothstep(CURB_Z + 0.1, CURB_Z - 0.1, pg.z);
-    vec3 base = mix(vec3(0.006, 0.006, 0.007), vec3(0.016, 0.015, 0.014), side);
+    vec3 alb = mix(vec3(0.06, 0.06, 0.07), vec3(0.16, 0.15, 0.14), side);       // wet asphalt / paving
     vec3 E = vec3(0.0);
     for (int i = 0; i < 6; i++){
       vec2 dd = pg.xz - uStreetLamps[i].xz;
-      E += vec3(1.0, 0.55, 0.18) * uStreetLamps[i].w * 9.0 / (dot(dd, dd) + 40.0);
+      E += uLampTint * uLampsOut * uStreetLamps[i].w * 9.0 / (dot(dd, dd) + 40.0);
     }
     for (int i = 0; i < 4; i++){
       if (uCars[i].w <= 0.0) continue;
@@ -1600,7 +1628,7 @@ vec3 outside(vec3 ro, vec3 rd, float blur){
     tGround = tg;
     float fres = 0.02 + 0.98 * pow(1.0 - min(-rd.y * 1.0, 1.0), 5.0);
     float puddle = smoothstep(0.42, 0.62, fbm3(pg.xz * vec2(0.18, 0.5)));
-    vec3 gc = base * (1.0 + E * 6.0) + refl * fres * mix(0.45, 0.95, puddle);
+    vec3 gc = alb / PI * (uEGround + 1.86 * E) + refl * fres * mix(0.45, 0.95, puddle);
     float m = smoothstep(-blur * tb, blur * tb, (ro.y + rd.y * tb) - GROUND_Y);
     gc = mix(gc, skyCol(vec3(rd.x, 0.02, rd.z)) * 0.7, 1.0 - exp(-tg * 0.012));
     c = mix(gc, c, m);
@@ -1978,7 +2006,8 @@ void main(){
   vec3 Lb = BULB - P; float ld2 = dot(Lb, Lb);
   vec3 Eg = uLampI * lampEmitFactor(-Lb * inversesqrt(ld2)) * max(Lb.z * inversesqrt(ld2), 0.0) / ld2 + uSkyL * 1.2 + uAmbL;
   float fogA = sat(Fin * 0.85 + rim * 0.35);
-  vec3 fogC = (Eg * 0.075 + uSkyL * 0.35 + avgC * 0.55) * (0.9 + 0.2 * vnoise(pm * 2.5)) * (1.0 + 0.6 * rim);
+  // condensation droplets: lit from the room side (lamp, room ambient) plus the light they forward-scatter from outside
+  vec3 fogC = (Eg * 0.075 + uSkyL * 0.15 + avgC * 0.68) * (0.9 + 0.2 * vnoise(pm * 2.5)) * (1.0 + 0.6 * rim);
   vec3 glass = (through * (1.0 - fogA) + fogC * fogA) + refl;
   glass += Eg * 0.0025 * M * (1.0 - Fin);                                   // mist droplets lit from inside
   // grease on the inside face: round the latch where the window gets pushed open, and in arcs from old wipes;
@@ -2294,16 +2323,17 @@ function buildOutside() {
   for (const x of OUT.lamps) add({ p: [x, GY + 6.4, S.CURB_Z - 0.6], c: bb(2050), E: 0.010, core: 0.22, refl: 1, halo: 0.32, haloR: 0.05, kind: 1 });
   for (const x of [-15, 13]) add({ p: [x, GY + 6.4, -4.2], c: bb(2100), E: 0.016, core: 0.22, refl: 1, halo: 0.32, haloR: 0.05, kind: 1 });
   // neon / lightboxes on the shopfronts: tubes are many overlapping sprites so their bokeh smears into a bar
-  const tube = (x0, y0, x1, y1, n, c, E, kind = 2) => { for (let i = 0; i < n; i++) { const t = n === 1 ? 0.5 : i / (n - 1); add({ p: [lerp(x0, x1, t), GY + lerp(y0, y1, t), F + 0.5], c, E: E / n, core: 0.06, refl: 1, halo: 0.25, haloR: 0.03, kind }); } };
-  tube(-6.2, 3.3, -6.2, 6.6, 12, [1.0, 0.13, 0.22], 0.0042);           // vertical red-pink sign
-  tube(2.2, 3.85, 5.6, 3.85, 11, [0.25, 0.92, 1.0], 0.0032, 3);         // cyan tube (old, flickers)
-  tube(8.6, 4.2, 8.6, 5.7, 6, [0.22, 1.0, 0.42], 0.0018);               // green pharmacy cross
-  tube(7.85, 4.95, 9.35, 4.95, 6, [0.22, 1.0, 0.42], 0.0018);
-  tube(-14.5, 3.6, -10.5, 3.6, 10, bb(2500), 0.0034);                   // warm lightbox
+  // signs keep their shop's hours (the pharmacy cross never goes out)
+  const tube = (x0, y0, x1, y1, n, c, E, kind, hours) => { for (let i = 0; i < n; i++) { const t = n === 1 ? 0.5 : i / (n - 1); add({ p: [lerp(x0, x1, t), GY + lerp(y0, y1, t), F + 0.5], c, E: E / n, core: 0.06, refl: 1, halo: 0.25, haloR: 0.03, kind, hours }); } };
+  tube(-6.2, 3.3, -6.2, 6.6, 12, [1.0, 0.13, 0.22], 0.0042, 2, [10, 23.5]);   // vertical red-pink sign
+  tube(2.2, 3.85, 5.6, 3.85, 11, [0.25, 0.92, 1.0], 0.0032, 3, [8, 22]);     // cyan tube (old, flickers)
+  tube(8.6, 4.2, 8.6, 5.7, 6, [0.22, 1.0, 0.42], 0.0018, 2, [0, 24]);        // green pharmacy cross
+  tube(7.85, 4.95, 9.35, 4.95, 6, [0.22, 1.0, 0.42], 0.0018, 2, [0, 24]);
+  tube(-14.5, 3.6, -10.5, 3.6, 10, bb(2500), 0.0034, 2, [7, 21.5]);         // warm lightbox
   // red lanterns hanging at a small restaurant, swaying a little in the wind
-  for (let i = 0; i < 3; i++) add({ p: [-2.6 + i * 1.1, GY + 3.2, F + 1.4], c: [1.0, 0.22, 0.07], E: 0.0011, core: 0.18, refl: 1, halo: 0.3, haloR: 0.035, kind: 7 });
+  for (let i = 0; i < 3; i++) add({ p: [-2.6 + i * 1.1, GY + 3.2, F + 1.4], c: [1.0, 0.22, 0.07], E: 0.0011, core: 0.18, refl: 1, halo: 0.3, haloR: 0.035, kind: 7, hours: [10, 23] });
   // a couple of bare bulbs in windows / under awnings
-  for (const [x, y] of [[0.6, 7.6], [6.2, 4.6], [-9.4, 7.9]]) add({ p: [x, GY + y, F + 0.3], c: bb(2500), E: 0.0006, core: 0.05, refl: 1, halo: 0.2, haloR: 0.02 });
+  for (const [x, y] of [[0.6, 7.6], [6.2, 4.6], [-9.4, 7.9]]) add({ p: [x, GY + y, F + 0.3], c: bb(2500), E: 0.0006, core: 0.05, refl: 1, halo: 0.2, haloR: 0.02, kind: 8 });
   // traffic light at the junction (cycles red / green)
   add({ p: [7.6, GY + 5.0, S.CURB_Z + 1.2], c: [1, 0.08, 0.04], E: 0.0011, core: 0.12, refl: 1, halo: 0.3, haloR: 0.03, kind: 4 });
   add({ p: [7.6, GY + 4.6, S.CURB_Z + 1.2], c: [0.15, 1.0, 0.65], E: 0.0011, core: 0.12, refl: 1, halo: 0.3, haloR: 0.03, kind: 5 });
@@ -2320,7 +2350,7 @@ function spawnCar() {
   const dir = rnd() < 0.5 ? 1 : -1;
   const lane = dir > 0 ? -21.5 - rnd() * 0.8 : -17.0 - rnd() * 0.8;   // far lanes: visible through the lower panes
   const near = rnd() < 0.3;
-  const bus = !near && rnd() < 0.2 && !OUT.cars.some(c => c.bus);
+  const bus = !near && rnd() < 0.2 && !OUT.cars.some(c => c.bus) && WORLD.tod > 6 && WORLD.tod < 22;   // buses run 6:00–22:00
   OUT.cars.push({ x: -dir * 75, z: near ? (dir > 0 ? -9.5 : -6) : lane, dir, v: bus ? 3.6 + rnd() : 4.2 + rnd() * 2.6, I: 0.8 + rnd() * 0.4, age: 0, bus });
 }
 // 雨里打伞走过对街的人
@@ -2330,11 +2360,11 @@ function spawnPed(x) {
 }
 function updateOutside(dt, t) {
   OUT.nextPed -= dt;
-  if (OUT.nextPed < 0 && OUT.peds.length < 5) { spawnPed(); OUT.nextPed = 5 + rnd() * 12; }
+  if (OUT.nextPed < 0 && OUT.peds.length < 5) { spawnPed(); OUT.nextPed = (5 + rnd() * 12) / Math.max(curve(WALKERS, WORLD.tod), 0.04); }
   for (const p of OUT.peds) { p.x += p.dir * p.v * dt; p.ph += dt * p.v * 5.5; }
   OUT.peds = OUT.peds.filter(p => Math.abs(p.x) < 36);
   OUT.nextCar -= dt;
-  if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = 9 + rnd() * 24; }
+  if (OUT.nextCar < 0) { spawnCar(); OUT.nextCar = (9 + rnd() * 24) / Math.max(curve(TRAFFIC, WORLD.tod), 0.05); }
   for (const c of OUT.cars) { c.x += c.dir * c.v * dt; c.age += dt; }
   OUT.cars = OUT.cars.filter(c => Math.abs(c.x) < 80);
 }
@@ -2357,8 +2387,14 @@ function buildSprites(t, eye) {
       pushSprite(n++, pr, mulc(c, E * 0.32), 5.5, l.core, l.halo * 0.6, l.haloR);
     }
   };
+  const Wu = WORLD.U, tod = WORLD.tod;
   for (const l of OUT.lights) {
     let E = l.E;
+    let c = l.c;
+    if (l.kind === 1) { E *= Wu.lampsOut; c = mix3(c, mulc(Wu.lampCol, 1 / Math.max(lum3(Wu.lampCol), 1e-3)), 1 - WORLD.lampWarm); }
+    if (l.hours && !(tod >= l.hours[0] && tod <= l.hours[1])) continue;
+    if (l.kind === 8 && l.ph / 10 > Wu.occ * 2.2) continue;
+    if (l.flags === 1) E *= 0.3 + 1.7 * Wu.occ;
     if (l.kind === 3) E *= (Math.sin(t * 31 + l.ph) > -0.97 ? 1 : 0.25) * (0.94 + 0.06 * Math.sin(t * 2.3 + l.ph));
     if (l.kind === 2) E *= 0.96 + 0.04 * Math.sin(t * 1.7 + l.ph);
     if (l.kind === 4 || l.kind === 5) { const ph = (t % 46) / 46; const red = ph < 0.55; E *= (l.kind === 4) === red ? 1 : 0.03; }
@@ -2366,7 +2402,8 @@ function buildSprites(t, eye) {
     if (E <= 1e-7) continue;
     let p = l.p;
     if (l.kind === 7) p = [p[0] + 0.06 * Math.sin(t * 1.3 + l.ph) + 0.03 * Math.sin(t * 2.9 + l.ph * 2), p[1], p[2]];
-    emit(p, l.c, E, l);
+    if (E <= 1e-7) continue;
+    emit(p, c, E, l);
   }
   // cars: headlights brighten as the car faces us, taillights glow red from behind
   const head = bb(4300, 0.8), tail = [1, 0.06, 0.03];
@@ -2744,12 +2781,85 @@ function camRay(ndcX, ndcY) {
 /* ============================================================================
    Lighting state
    ========================================================================== */
-// 每次打开都略有不同：暖水瓶的漆色、挂历的画、钟停住的分钟、对街的天际线
+// 每次打开都略有不同：暖水瓶的漆色、挂历的画、对街的天际线
 const VARY = { v: [rnd(), rnd(), rnd(), rnd()], city: Math.floor(rnd() * 97) };
-// 钟停在傍晚 18:3x–18:5x（「永远停在傍晚」）
-VARY.clock = (() => { const m = 32 + Math.floor(VARY.v[3] * 22), sec = Math.floor(rnd() * 60), h = 6 + m / 60;
-  return [h / 12 * 2 * Math.PI, (m + sec / 60) / 60 * 2 * Math.PI, sec / 60 * 2 * Math.PI, 0]; })();
-const LIGHT = { on: DBG.lamp ? 1 : 0, level: DBG.lamp ? 1 : 0, flick: 1, exposure: 1, expoAdapt: DBG.lamp ? 1 : 2.2 };
+
+/* ============================================================================
+   WORLD — season and hour. Everything that depends on them is derived here,
+   once per frame, and handed to the shaders as uniforms.
+   ========================================================================== */
+const lum3 = c => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+const mix3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+// piecewise-linear daily curve [[hour, value], …], periodic over 24 h
+const curve = (pts, h) => { h = ((h % 24) + 24) % 24; for (let i = 1; i < pts.length; i++) if (h <= pts[i][0]) { const a = pts[i - 1], b = pts[i]; return lerp(a[1], b[1], (h - a[0]) / (b[0] - a[0])); } return pts[pts.length - 1][1]; };
+// 太阳高度角（北纬 31°，上海一带）：sin h = sinφ sinδ + cosφ cosδ cos H，赤纬取各季节的典型值
+const LAT = 31 * Math.PI / 180, DECL = [6, 23, -8, -22];
+function sunElev(tod, season) {
+  const d = DECL[season] * Math.PI / 180, H = (tod - 12) * Math.PI / 12;
+  return Math.asin(Math.sin(LAT) * Math.sin(d) + Math.cos(LAT) * Math.cos(d) * Math.cos(H)) * 180 / Math.PI;
+}
+// 「傍晚」= 日落后、太阳在地平线下约 4° 的蓝调时刻：夏天约 19:30，冬天约 17:20
+function duskTime(season) { let t = 14; while (t < 22 && sunElev(t, season) > -4) t += 0.005; return t; }
+// 阴雨天的天空。白天天顶亮度随太阳高度变化，地平线约为天顶的 0.45（CIE 阴天 1/3，加上雨雾）；
+// 日落后每下降约 3.5° 暗一个数量级（民用→航海暮光），蓝调时地平线反而更亮；
+// 天黑后云底被城市灯光从下面照亮：一层与太阳无关的暗橙色底光。以 h = −4° 对准第一期的傍晚画面。
+function skyAt(h) {
+  const Lday = 18;
+  const Lz = h >= 0 ? Lday * (0.06 + 0.94 * Math.pow(Math.sin(h * Math.PI / 180), 0.9)) : Lday * 0.06 * Math.pow(10, h / 3.5);
+  const twi = smooth(3, -1.5, h);
+  const zc = mix3([0.92, 1.0, 1.08], [0.58, 1.03, 1.92], twi), hc = mix3([0.98, 1.0, 1.0], [1.09, 0.99, 0.95], twi);
+  const sunset = Math.exp(-((h - 0.5) ** 2) / 8);                 // a faint warm band where the sun goes down behind the cloud
+  const hcw = [hc[0] * (1 + 0.18 * sunset), hc[1], hc[2] * (1 - 0.15 * sunset)];
+  const zen = add3(mulc(zc, Lz), [0.0055, 0.0038, 0.0024]);
+  const hor = add3(mulc(hcw, Lz * lerp(0.45, 1.75, twi)), [0.009, 0.0058, 0.0034]);
+  return { zen, hor };
+}
+const WORLD = {
+  season: QS.has('season') ? clamp(+QS.get('season') | 0, 0, 3) : [3, 3, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3][new Date().getMonth()],
+  tod: 0, atDusk: !QS.has('tod'), flowing: QS.has('flow'), dayMinutes: 20,
+  h: -4, lampsOn: false, lampWarm: 1, U: {},
+};
+WORLD.tod = QS.has('tod') ? +QS.get('tod') : duskTime(WORLD.season);
+// households awake and at home, by hour; windows light up when that meets the dark
+const HOME = [[0, 0.3], [1.5, 0.12], [4, 0.05], [6, 0.35], [7.5, 0.6], [9, 0.32], [12, 0.38], [16.5, 0.45], [18, 0.75], [20, 0.9], [22.5, 0.75], [23.5, 0.45], [24, 0.3]];
+const TRAFFIC = [[0, 0.35], [1, 0.15], [4.5, 0.1], [6, 0.6], [7.5, 1.6], [9, 1.1], [12, 1.0], [16.5, 1.2], [18, 1.6], [19.5, 1.0], [22, 0.6], [24, 0.35]];
+const WALKERS = [[0, 0.15], [2, 0.05], [6, 0.45], [8, 1.0], [12, 0.9], [18, 1.15], [21, 0.7], [23, 0.3], [24, 0.15]];
+function worldUpdate(wdt) {
+  const W = WORLD;
+  if (W.flowing) W.tod = (W.tod + wdt * 24 / (W.dayMinutes * 60) + 24) % 24;
+  const h = W.h = sunElev(W.tod, W.season);
+  // 高压钠灯：天黑（h < −2°）光控开灯，约 4 分钟内从暗粉色升到橙色；天亮（h > −1°）关灯
+  const dh = wdt * 24 / (W.dayMinutes * 60) * (W.flowing ? 1 : 0);
+  if (!W.lampsOn && h < -2) { W.lampsOn = true; W.lampWarm = W.started ? 0 : 1; }
+  if (W.lampsOn && h > -1) W.lampsOn = false;
+  if (W.lampsOn) W.lampWarm = Math.min(1, W.lampWarm + dh / 0.07);
+  W.started = true;
+  const warm = smooth(0, 1, W.lampWarm);
+  const lampsOut = W.lampsOn ? 0.15 + 0.85 * warm * warm : 0;
+  const lampCol = mix3([0.85, 0.55, 0.75], [1.0, 0.55, 0.18], warm);
+  const sky = skyAt(h);
+  const dark = smooth(4, -3, h);
+  const occ = curve(HOME, W.tod) * (0.12 + 0.88 * dark) * 0.5;
+  const shops = smooth(7, 8, W.tod) * (1 - smooth(21, 23, W.tod));
+  const skyWin = add3(mulc(sky.hor, 0.6), mulc(sky.zen, 0.4));            // what the upper window shows on average
+  const eVert = mulc(skyWin, Math.PI * 0.5);
+  const eGround = mulc(add3(mulc(sky.zen, 0.75), mulc(sky.hor, 0.25)), Math.PI);
+  const cityLights = 0.6 * lampsOut + 0.8 * occ + 0.4 * shops * dark;
+  const cityWin = add3(mulc(eVert, 0.2 / Math.PI), mulc([1.0, 0.72, 0.45], 0.028 * cityLights / 0.76));
+  W.U = { sky, skyWin, cityWin, eVert, eGround, occ, lampsOut, lampCol, shops, dark,
+          glow: mulc([0.05, 0.028, 0.018], 0.3 + 0.7 * lampsOut), shopsLit: shops * (0.3 + 0.7 * dark) };
+}
+function periodName(tod, h) {
+  if (h > 6) return tod < 11 ? '上午' : tod < 13.5 ? '中午' : '下午';
+  if (h > -1) return tod < 12 ? '清晨' : '黄昏';
+  if (h > -9) return tod < 12 ? '黎明' : '傍晚';
+  return (tod >= 22 || tod < 4.5) ? '深夜' : tod < 12 ? '凌晨' : '夜晚';
+}
+const fmtTod = t => { const m = Math.floor(((t % 24) + 24) % 24 * 60); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+worldUpdate(0);
+const LIGHT = { on: (QS.has('lamp') ? DBG.lamp : WORLD.h < 3) ? 1 : 0, level: 0, flick: 1, exposure: 1, expoAdapt: 1 };
+LIGHT.level = LIGHT.on;
 function lightUniforms(t, dt) {
   // 白炽灯丝的热惯性：开灯 τ≈0.12s，关灯 τ≈0.35s（冷却更慢）；色温随灯丝亮度降低而变红。
   const tau = LIGHT.on ? 0.12 : 0.35;
@@ -2761,13 +2871,18 @@ function lightUniforms(t, dt) {
   const T = 1800 + 900 * Math.sqrt(lv);
   const lampI = mulc(bb(T), 2.3 * lv * lv * fl);
   const tau3 = [0.20, 0.14, 0.075];       // cream fabric: transmits red/yellow better than blue
-  const skyL = mulc(bb(9500, 0.62), 0.11);
-  const cityL = mulc(bb(3400, 0.5), 0.042);
+  const skyL = WORLD.U.skyWin;
+  const cityL = WORLD.U.cityWin;
   const ambL = mulc(lampI, 0.075).map((v, i) => v * [1.0, 0.92, 0.75][i]);
   const ambS = mulc(skyL, 0.8);
-  // eye adaptation: exposure follows the scene key slowly (dark-adapt 2.6 s, light-adapt 0.7 s)
-  const target = lerp(4.6, 1.0, smooth(0, 1, lv));
+  // 眼睛的适应：由已知光照解析地估计场景的基准亮度（台灯 + 窗光），不做 GPU 回读。
+  // 只部分补偿：比参考暗时补偿 85%（夜里关灯后房间仍是暗的），比参考亮时补偿 70%（白天窗户偏亮、房间仍明亮）。
+  // 变暗适应 2.6 s，变亮 0.7 s。
+  const key = lv * lv + 2.0 * lum3(skyL) + 0.5 * lum3(cityL);
+  const ev = Math.log2(Math.max(key, 0.12) / 1.25);                   // stops above / below the dusk-with-lamp reference
+  const target = clamp(Math.pow(2, -ev * (ev > 0 ? 0.7 : 0.85)), 0.03, 7);
   const at = target > LIGHT.expoAdapt ? 2.6 : 0.7;
+  if (!LIGHT.adapted || DBG.shot) { LIGHT.expoAdapt = target; LIGHT.adapted = true; }   // open the eyes already adapted
   LIGHT.expoAdapt += (target - LIGHT.expoAdapt) * (1 - Math.exp(-dt / at));
   return { lampI, tau3, skyL, cityL, ambL, ambS };
 }
@@ -2901,6 +3016,11 @@ function outsideUniforms(pr, t) {
   OUT.peds.slice(0, 5).forEach((p, i) => peds.set([p.x, p.z, p.kind, p.ph], i * 4));
   if (pr.u.uPeds) gl.uniform4fv(pr.u.uPeds, peds);
   cityUniforms(pr);
+  const Wu = WORLD.U;
+  U(pr, 'uSkyZ', Wu.sky.zen); U(pr, 'uSkyH', Wu.sky.hor); U(pr, 'uGlow', Wu.glow);
+  U(pr, 'uEVert', Wu.eVert); U(pr, 'uEGround', Wu.eGround);
+  U(pr, 'uOcc', Wu.occ); U(pr, 'uLampsOut', Wu.lampsOut); U(pr, 'uLampTint', Wu.lampCol);
+  U(pr, 'uShopsLit', Wu.shopsLit); U(pr, 'uDark', Wu.dark); U(pr, 'uTod', WORLD.tod);
 }
 
 function cityUniforms(pr) {
@@ -2980,7 +3100,8 @@ function render(t, dt, rt) {
   gl.useProgram(P.room.p);
   camUniforms(P.room); lightU(P.room, Lt);
   U(P.room, 'uRes', [T.room.w, T.room.h]); U(P.room, 'uTime', t % 900);
-  U(P.room, 'uClock', VARY.clock); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0);
+  const ct = WORLD.tod;
+  U(P.room, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(P.room, 'uVar', VARY.v); U(P.room, 'uSteam', 1.0);
   const hal = (i, b) => { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; };
   const ji = (frame % 16) + 1;
   R.jitter = QS.has('nojitter') ? [0, 0] : [hal(ji, 2) - 0.5, hal(ji, 3) - 0.5];
@@ -3181,6 +3302,25 @@ const UI = (() => {
   ui.addEventListener('pointermove', () => api.poke());
   canvas.addEventListener('pointerdown', () => panel.classList.remove('open'));
   if (IS_MOBILE) panel.querySelector('.hint').innerHTML = '轻触台灯开关；在玻璃上划过可擦去雾气；倾斜手机看看。';
+  // season / hour / flow
+  const segS = document.getElementById('season'), todIn = document.getElementById('tod'), todLabel = document.getElementById('todLabel'), flowB = document.getElementById('flow');
+  const showSeason = () => segS.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.s === WORLD.season));
+  const setSeason = k => {
+    WORLD.season = (k + 4) % 4;
+    if (WORLD.atDusk) WORLD.tod = duskTime(WORLD.season);         // "dusk" stays dusk: summer's is later than winter's
+    showSeason(); api.syncTime(true);
+  };
+  segS.addEventListener('click', e => { if (e.target.dataset.s !== undefined) setSeason(+e.target.dataset.s); });
+  todIn.addEventListener('input', () => { WORLD.tod = +todIn.value; WORLD.atDusk = false; api.syncTime(true); });
+  const setFlow = on => { WORLD.flowing = on; if (on) WORLD.atDusk = false; flowB.textContent = on ? '流逝' : '停'; flowB.setAttribute('aria-pressed', on); };
+  flowB.addEventListener('click', () => setFlow(!WORLD.flowing));
+  let lastLabel = '';
+  api.syncTime = (force) => {
+    const txt = fmtTod(WORLD.tod) + ' · ' + periodName(WORLD.tod, WORLD.h);
+    if (txt !== lastLabel || force) { todLabel.textContent = txt; lastLabel = txt; if (document.activeElement !== todIn) todIn.value = WORLD.tod; }
+  };
+  showSeason(); setFlow(WORLD.flowing); api.syncTime(true);
+  api.setSeason = setSeason; api.setFlow = setFlow;
   rain.addEventListener('input', () => { SIM.rainBase = +rain.value; });
   speed.addEventListener('input', () => { TIME.scale = +speed.value; });
   const setSnd = on => { snd.textContent = on ? '开' : '关'; snd.setAttribute('aria-pressed', on); AUDIO.setEnabled && AUDIO.setEnabled(on); };
@@ -3190,6 +3330,8 @@ const UI = (() => {
     if (e.key === 'h' || e.key === 'H') api.toggleHidden();
     if (e.key === 'l' || e.key === 'L') toggleLamp();
     if (e.key === 'm' || e.key === 'M') setSnd(snd.getAttribute('aria-pressed') !== 'true');
+    if (e.key === 's' || e.key === 'S') api.setSeason(WORLD.season + 1);
+    if (e.key === 't' || e.key === 'T') api.setFlow(!WORLD.flowing);
   });
   return api;
 })();
@@ -3422,11 +3564,13 @@ function loop(now) {
   updateCamera(realT, dt, canvas.clientWidth / Math.max(1, canvas.clientHeight));
   adaptQuality(dt);
   resize();
+  worldUpdate(wdt);
   updateOutside(wdt, simT);
   simAdvance(wdt);
   if (!DBG.shot) R.fade = Math.min(1, R.fade + dt / 4.5);
   render(simT, dt, realT);
   UI.tick(dt);
+  if (frame % 15 === 0) UI.syncTime();
   AUDIO.update && AUDIO.update(dt, wdt);
   frame++;
   if (DBG.shot) gl.finish();                     // screenshots: count frames the GPU has actually finished
@@ -3461,7 +3605,7 @@ function whenProgramsReady(then) {
   wait();
 }
 function boot() {
-  if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, OUT, pickGlass, camRay, simAdvance, simStats, spawnCar, updateOutside };
+  if (DBG.shot) window.__dbg = { SIM, CAM, PTR, LIGHT, R, OUT, WORLD, worldUpdate, pickGlass, camRay, simAdvance, simStats, spawnCar, updateOutside };
   if (!initGL()) { fail('no webgl2'); return; }
   buildOutside();
   for (let i = 0; i < 3; i++) spawnCar(), OUT.cars[i].x = (rnd() - 0.5) * 120;
