@@ -16,7 +16,12 @@
      print     这张纸被印上去：先靛版，再墨版，最后朱版——世界一块版一块版地出现；它随着雪落下来
      woodcut   它找到那盏黑着的灯笼，钻进去，灯亮了；你在黑处划一刀，它就沿着你的刀痕走
      leave     最后它从灯笼里出来，自己刻出一条路，走到冰窟窿，沉进黑水里
-   调试：?phase=wander|window|daydrops|dive|summer|updraft|cloud|print|woodcut|leave &pt=秒
+   转场 3→4 · 冰窟窿
+     tear      冰窟窿里的黑水变成了真的水；纸从洞口撕开，越撕越大，我们掉进去
+   第四幕 · 深海
+     deepsea   只有它照亮的那一小团水是看得见的。手牵着它走；不动，黑暗里的小生命就过来看它；
+               一会儿，黑暗里出现另一粒一模一样的光
+   调试：?phase=wander|window|daydrops|dive|summer|updraft|cloud|print|woodcut|leave|tear|deepsea &pt=秒
          ?world=summer|woodcut（只看世界，不放主角）
    ========================================================================== */
 (() => {
@@ -33,7 +38,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50;
+const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24;
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 const D = YL.director = {
@@ -65,6 +70,7 @@ const D = YL.director = {
     }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
     if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'leave') { D.inPrint(dt); return; }
+    if (D.phase === 'tear' || D.phase === 'deepsea') { D.inSea(dt); return; }
     YL.hero.update(dt, realT);
     const L = YL.hero.routeLength(), Tw = L - 2.0;
     if (D.phase === 'wander' && D.t > L) D.go('window');
@@ -149,7 +155,39 @@ const D = YL.director = {
         if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
       }
       if (D.pt > T_WOOD && wood.hero.mode === 'home') { wood.leave(); D.go('leave'); }
+    } else if (D.phase === 'leave') {
+      const sea = YL.worlds.deepsea;
+      if (!sea.ready) sea.init();                                                // ready the water while it walks
+      if (wood.gone) { D.go('tear'); D.tearSound(); }
     }
+  },
+  // ---- through the ice: the print tears open onto the deep, and then there is only the deep
+  inSea(dt) {
+    const sea = YL.worlds.deepsea, wood = YL.worlds.woodcut;
+    if (D.phase === 'tear') {
+      const u = clamp(D.pt / T_TEAR, 0, 1);
+      wood.vol = 1 - ease(clamp(u / 0.6, 0, 1)); sea.vol = ease(clamp((u - 0.2) / 0.8, 0, 1));
+      if (D.pt > T_TEAR) { D.go('deepsea'); D.world = 'deepsea'; sea.vol = 1; }
+    } else if (D.phase === 'deepsea') {
+      if (D.pt > T_LURE && sea.lure.state === 'off') sea.startLure();
+    }
+  },
+  tearSound() {
+    const b = YL.AUDIO.bus && YL.AUDIO.bus(); if (!b) return;
+    const { ctx, out } = b, t0 = ctx.currentTime + 0.05;
+    // paper tearing: a dry crackle that runs on for a second
+    const n = Math.floor(ctx.sampleRate * 1.6), buf = ctx.createBuffer(1, n, ctx.sampleRate), d = buf.getChannelData(0);
+    let env = 0;
+    for (let i = 0; i < n; i++) { if (Math.random() < 0.004) env = 0.4 + Math.random() * 0.6; env *= 0.9985; d[i] = (Math.random() * 2 - 1) * env * Math.min(1, i / 2000) * (1 - i / n); }
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2400; bp.Q.value = 0.7;
+    const g = ctx.createGain(); g.gain.value = 0.14;
+    src.connect(bp); bp.connect(g); g.connect(out); src.start(t0 + 0.4);
+    // and the plunge: a low, heavy hush
+    const nb = ctx.createBufferSource(); nb.buffer = buf;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(600, t0 + 1.6); lp.frequency.exponentialRampToValueAtTime(70, t0 + 3.6);
+    const g2 = ctx.createGain(); g2.gain.setValueAtTime(0, t0 + 1.6); g2.gain.linearRampToValueAtTime(0.5, t0 + 2.2); g2.gain.exponentialRampToValueAtTime(1e-4, t0 + 4.2);
+    nb.playbackRate.value = 0.5; nb.connect(lp); lp.connect(g2); g2.connect(out); nb.start(t0 + 1.6);
   },
   placeLight() {
     const summer = YL.worlds.summer;
@@ -243,6 +281,52 @@ void main(){
   c = mix(c, texture(uB, uv).rgb, uPaper);
   o = vec4(c, 1.0);
 }`;
+// ---- the print tearing open onto the deep
+const FS_TEAR = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform vec2 uRes, uC, uR0; uniform float uU, uZoom;
+out vec4 o;
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+float anoise(float a, float f, float s){ return vnoise(vec2(cos(a), sin(a)) * f + s); }   // noise round a circle, seamless
+void main(){
+  vec2 p = gl_FragCoord.xy, uv = p / uRes, d = p - uC;
+  float ang = atan(d.y, d.x);
+  // the hole: first just the ice hole's ellipse, then rounder and larger, past the corners
+  float open = smoothstep(0.18, 1.0, uU);
+  float big = length(uRes) * 1.25;
+  vec2 rr = mix(uR0, vec2(big), pow(open, 2.2));
+  rr = mix(rr, vec2(max(rr.x, rr.y)), smoothstep(0.2, 0.6, uU));
+  float e = length(d / rr);
+  // its torn edge, ragged at every scale
+  float rag = (anoise(ang, 1.6, 1.0) - 0.5) * 0.30 + (anoise(ang, 6.0, 5.0) - 0.5) * 0.12 + (anoise(ang, 24.0, 9.0) - 0.5) * 0.05;
+  e *= 1.0 + rag * smoothstep(0.15, 0.35, uU);
+  float edgePx = (e - 1.0) * max(rr.x, rr.y);                            // pixels outside the tear (negative inside)
+  // inside: the deep, at first far down the hole, then rising up to fill it
+  vec2 uvB = (uC + d / uZoom) / uRes;
+  vec3 sea = texture(uB, clamp(uvB, 0.0, 1.0)).rgb;
+  sea *= 1.0 - 0.55 * smoothstep(-12.0, 0.0, edgePx) * smoothstep(0.15, 0.3, uU);      // the paper's shadow on the water
+  vec3 print_ = texture(uA, uv).rgb;
+  // before it tears, the black water in the hole simply becomes water
+  float seep = smoothstep(0.0, 0.18, uU);
+  // the paper near the tear lifts a little (darker), and its torn edge shows white fibres
+  float lift = smoothstep(40.0, 0.0, edgePx) * smoothstep(0.15, 0.4, uU);
+  print_ *= 1.0 - 0.22 * lift;
+  float fib = smoothstep(0.35, 0.8, vnoise(vec2(ang * 260.0, edgePx * 0.25))) * smoothstep(9.0, 0.0, edgePx) * step(0.0, edgePx);
+  vec3 paper = vec3(0.95, 0.93, 0.87);
+  print_ = mix(print_, paper, fib * smoothstep(0.15, 0.3, uU));
+  float inside = (1.0 - smoothstep(-1.0, 1.0, edgePx)) * mix(seep, 1.0, step(0.18, uU));
+  o = vec4(mix(print_, sea, inside), 1.0);
+}`;
+let tearP = null;
+function tear() {
+  if (tearP) return tearP;
+  tearP = YL.makeProgram('tear', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_TEAR);
+  YL.checkProgram(tearP);
+  return tearP;
+}
 let drainP = null;
 function drain() {
   if (drainP) return drainP;
@@ -295,17 +379,36 @@ D.renderFrame = (dt, realT) => {
     YL.drawFull();
     return true;
   }
+  if (D.phase === 'tear') {
+    const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, sea = YL.worlds.deepsea, aspect = YL.canvasAspect();
+    const u = clamp(D.pt / T_TEAR, 0, 1);
+    if (!sea.ready) sea.init();
+    const hole = wood.holeOnScreen(aspect, I.h);
+    if (!sea.hero.on) sea.arrive(hole.nx, hole.ny, aspect);                     // the light is down there, where it sank
+    wood.update(dt); wood.render(I.A, aspect);
+    sea.update(dt); sea.render(I.B, aspect);
+    const p = tear();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uC', [(hole.nx * 0.5 + 0.5) * I.w, (hole.ny * 0.5 + 0.5) * I.h]); YL.U(p, 'uR0', [hole.rx, hole.ry]);
+    YL.U(p, 'uU', u); YL.U(p, 'uZoom', 0.35 + 0.65 * ease(clamp((u - 0.15) / 0.85, 0, 1)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
   if (D.world === 'room') return false;
   const w = YL.worlds && YL.worlds[D.world];
   if (!w) return false;
   if (!w.ready) w.init();
   if (D.placeHero && D.world === 'summer') { D.placeHero = false; D.placeLight(); }
+  if (D.seaJump && D.world === 'deepsea') { D.seaJump = false; w.arrive(0, 0, YL.canvasAspect()); }
   if (D.jump && D.world === 'woodcut') {
     const { ph, pt } = D.jump; D.jump = null;
     w.arrive(0.1, 0.6, YL.canvasAspect());
-    D.go(ph === 'leave' ? 'woodcut' : ph);
+    D.go(ph === 'leave' || ph === 'tear' ? 'woodcut' : ph);
     if (ph === 'print') { w.show = [0, 0, 0]; D.pt = pt; }
     else { w.show = [1, 1, 1]; w.vol = 1; w.hero.mode = 'home'; w.lanLight = 1; w.lit = w.litBase.slice(); w.lightsOn = true; D.pt = ph === 'leave' ? T_WOOD + 1 : pt; }
+    if (ph === 'tear') { w.hero.mode = 'gone'; w.gone = true; w.lanLight = 0.12; D.go('tear'); D.pt = pt; YL.worlds.deepsea.init(); }
   }
   const P = YL.ptr;
   if (P && P !== lastPtr && w.pointer) w.pointer(P.nx, P.ny, P.speed);
@@ -343,7 +446,7 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave'];
+    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'leave', 'tear', 'deepsea'];
     if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
@@ -351,6 +454,7 @@ if (QS.get('phase')) {
       else {
         // straight into the print (once the GL context exists: see renderFrame)
         D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
+        if (ph === 'deepsea') { D.world = 'deepsea'; D.jump = null; D.go('deepsea'); D.pt = pt; D.seaJump = true; }
       }
     }
     else { D.go(ph); D.pt = pt; }

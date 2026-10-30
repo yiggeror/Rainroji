@@ -22,14 +22,21 @@ const COMMON = `
 #define PI 3.14159265359
 uniform vec3 uL;             // the light
 uniform vec3 uLI;            // its intensity
-const vec3 SIG_T = vec3(0.70, 0.15, 0.07);      // what a metre of this water takes away from the light: the red first, then the green
-const vec3 SIG_V = vec3(0.16, 0.07, 0.045);      // … and on the way back to the eye (kept lighter: what the light touches keeps its warmth)
+uniform vec3 uL2;            // another light, just like it, out in the dark (an anglerfish's lure)
+uniform vec3 uLI2;
+const vec3 SIG_T = vec3(0.45, 0.13, 0.07);      // what a metre of this water takes away from the light: the red first, then the green
+const vec3 SIG_V = vec3(0.10, 0.06, 0.045);      // … and on the way back to the eye (kept lighter: what the light touches keeps its warmth)
 const float SIG_M = 0.030;                       // the coarse particles scatter every colour alike, mostly forward …
 const vec3 SIG_R = vec3(0.004, 0.018, 0.075);    // … the fine stuff scatters blue most, every way
 float sat(float x){ return clamp(x, 0.0, 1.0); }
 float HG(float c, float g){ float g2 = g * g; return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5)); }
 // light arriving at x: inverse square, the water eating the red on the way
-vec3 lightAt(vec3 x){ vec3 d = uL - x; float r2 = dot(d, d); return uLI * exp(-SIG_T * sqrt(r2)) / (r2 + 0.0009); }
+vec3 lightAt(vec3 x){
+  vec3 d = uL - x; float r2 = dot(d, d);
+  vec3 e = uLI * exp(-SIG_T * sqrt(r2)) / (r2 + 0.0009);
+  if (uLI2.r > 0.0){ vec3 d2 = uL2 - x; float q2 = dot(d2, d2); e += uLI2 * exp(-SIG_T * sqrt(q2)) / (q2 + 0.0009); }
+  return e;
+}
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -50,18 +57,23 @@ uniform vec4 uWhF;           //            which way it swims (unit), the fin's 
 out vec4 o;
 ` + COMMON + `
 // ---- the light scattered toward the eye along [0, T]: equi-angular samples about the closest approach
-vec3 inscatter(vec3 ro, vec3 rd, float T){
-  vec3 lo = uL - ro; float t0 = dot(lo, rd); float h = sqrt(max(dot(lo, lo) - t0 * t0, 1e-7));
+vec3 inscatterFrom(vec3 L, vec3 LI, vec3 ro, vec3 rd, float T){
+  vec3 lo = L - ro; float t0 = dot(lo, rd); float h = sqrt(max(dot(lo, lo) - t0 * t0, 1e-7));
   float ta = atan(-t0 / h), tb = atan((T - t0) / h);
   vec3 sum = vec3(0.0);
   for (int i = 0; i < 12; i++){
     float th = mix(ta, tb, (float(i) + 0.5) / 12.0);
     float t = t0 + h * tan(th);
-    vec3 lx = ro + rd * t - uL; float r = length(lx);
+    vec3 lx = ro + rd * t - L; float r = length(lx);
     float c = dot(lx / r, -rd);
     sum += exp(-SIG_T * r - SIG_V * t) * (SIG_M * HG(c, 0.85) + SIG_R * HG(c, 0.25));
   }
-  return uLI * sum / 12.0 * (tb - ta) / h;
+  return LI * sum / 12.0 * (tb - ta) / h;
+}
+vec3 inscatter(vec3 ro, vec3 rd, float T){
+  vec3 c = inscatterFrom(uL, uLI, ro, rd, T);
+  if (uLI2.r > 0.0) c += inscatterFrom(uL2, uLI2, ro, rd, T);
+  return c;
 }
 // ---- ray against an axis-aligned ellipsoid (radii r) at the origin: entry, exit
 vec2 ellip(vec3 ro, vec3 rd, vec3 r){
@@ -229,7 +241,7 @@ float bodyR(float x){
   // the head narrows to the snout ahead of the eye; the body swells behind it and tapers away to the tail
   float f = sqrt(max(1.0 - pow((x + 3.0) / 5.8, 2.0), 0.0));
   float b = 1.0 - 0.75 * pow(sat((-x - 3.0) / 8.0), 1.4);
-  return 1.45 * (x > -3.0 ? f : b);
+  return 2.0 * (x > -3.0 ? f : b);
 }
 vec3 finLocal(vec3 p, float stroke, out float s){
   // the flipper: from behind the eye, swept back, down and out toward us; it beats slowly
@@ -249,9 +261,9 @@ float whaleSDF(vec3 p, float stroke, out float part){
   if (x > 2.8) body = length(p - vec3(2.8, -0.15, 0.0)) - 0.02;
   // the eye sits in a shallow socket; around it, folds of skin
   vec3 ep = p - vec3(0.0, -0.22, bodyR(0.0) * 0.98);
-  float sock = length(ep * vec3(1.0, 1.4, 1.0)) - 0.10;
+  float sock = length(ep * vec3(0.85, 1.7, 1.0)) - 0.085;
   body = max(body, -sock * 0.6 - 0.012);
-  float eye = length(ep - vec3(0.0, 0.0, -0.03)) - 0.050;
+  float eye = length(ep - vec3(0.0, 0.0, -0.012)) - 0.044;
   // the flipper
   float s;
   vec3 f = finLocal(p, stroke, s);
@@ -261,8 +273,8 @@ float whaleSDF(vec3 p, float stroke, out float part){
   float thick = mix(0.10, 0.03, u);
   float fin = (length(vec2(f.x / chord, f.y / thick)) - 1.0) * min(chord, thick) * 0.8;
   fin = max(fin, max(-s, s - L));
-  float d = smin(body, fin, 0.12);
-  part = fin < body ? 1.0 : 0.0;
+  float d = body;
+  part = 0.0;
   if (eye < d){ d = eye; part = 2.0; }
   return d;
 }
@@ -303,17 +315,18 @@ vec3 whale(vec3 ro, vec3 rd, inout float T){
   vec3 p = o + d * t;
   vec3 n = whaleN(p, stroke);
   // the skin's surface: fine wrinkles running round the body (across its length), pores, and folds round the eye
-  float er = length((p - vec3(0.0, -0.22, bodyR(0.0) * 0.98)).xy);
+  float er = length((p - vec3(0.0, -0.22, bodyR(0.0) * 0.98)).xy * vec2(0.8, 1.9));    // the folds lie long and low, like lids
   float wr = sin(p.x * 70.0 + 6.0 * vnoise(p.yz * 6.0)) * 0.5 + 0.5;
-  float fold = sin(er * 95.0) * smoothstep(0.32, 0.10, er) * smoothstep(0.05, 0.08, er);
-  vec2 bump = vec2(cos(p.x * 70.0 + 6.0 * vnoise(p.yz * 6.0)) * 0.10 + (vnoise(p.xy * 90.0) - 0.5) * 0.12 + fold * 0.18, (vnoise(p.yx * 85.0) - 0.5) * 0.12);
+  float fold = sin(er * 80.0 + 1.5) * smoothstep(0.36, 0.10, er) * smoothstep(0.06, 0.09, er);
+  vec2 bump = vec2((vnoise(p.xy * 90.0) - 0.5) * 0.14 + (vnoise(p.xy * 23.0) - 0.5) * 0.10 + fold * 0.10, (vnoise(p.yx * 85.0) - 0.5) * 0.14 + fold * 0.55 + (vnoise(p.yx * 19.0 + 4.0) - 0.5) * 0.10);
   n = normalize(n + vec3(bump.x, bump.y, 0.0) * (part == 2.0 ? 0.0 : 1.0));
   // colour: dark slate above, paler below, with crisp-edged pale patches; scars; barnacles round the chin; the throat's grooves
   float under = smoothstep(-0.2, -0.9, p.y / max(bodyR(p.x), 0.3));
   float mott = vnoise(p.xy * 1.6 + p.z) * 0.6 + vnoise(p.xz * 4.0 + 3.0) * 0.4;
-  float patch_ = smoothstep(0.60, 0.63, mott + 0.25 * under);
-  vec3 alb = mix(vec3(0.090, 0.095, 0.105), vec3(0.34, 0.34, 0.33), patch_);
-  alb *= 0.85 + 0.2 * wr;
+  float patch_ = smoothstep(0.60, 0.63, mott) * under;                      // the pale patches are on its belly
+  vec3 alb = mix(vec3(0.085, 0.088, 0.095), vec3(0.34, 0.34, 0.33), patch_);
+  alb *= 0.80 + 0.35 * vnoise(p.xy * 6.0 + p.z) + 0.15 * (vnoise(p.xy * 40.0) - 0.5);
+  alb *= 1.0 - 0.45 * smoothstep(0.22, 0.05, er);                          // the skin darkens round the eye
   float groove = smoothstep(0.75, 1.0, sin(atan(p.y, p.z) * 70.0)) * under * step(p.x, 1.5);
   alb *= 1.0 - 0.45 * groove;
   // old scars: a few thin wandering pale lines, here and there
@@ -330,7 +343,7 @@ vec3 whale(vec3 ro, vec3 rd, inout float T){
     alb *= 0.85 + 0.25 * vnoise(fl.xz * 14.0);
   }
   float spec = 0.25;
-  if (part == 2.0){ alb = vec3(0.012, 0.010, 0.010); spec = 1.6; }
+  if (part == 2.0){ alb = vec3(0.030, 0.018, 0.012); spec = 1.6; }           // a wet, dark brown eye
   // world point, light
   vec3 xw = ro + rd * t;
   vec3 E = lightAt(xw), Ld = normalize(uL - xw);
@@ -342,12 +355,96 @@ vec3 whale(vec3 ro, vec3 rd, inout float T){
   T = t;
   return col * exp(-SIG_V * t);
 }
+
+/* ---- the anglerfish behind the lure: a dark head, a great open mouth ringed with needle teeth, one eye that shines back.
+   Local frame: x toward the light it is hunting, y up. Only what our light reaches is seen. */
+uniform vec4 uFishP;         // head centre, shown (0/1)
+uniform vec4 uFishF;         // facing (unit), mouth open (0 shut … 1 gaping)
+float sdCone(vec3 p, vec3 a, vec3 b, float ra, float rb){
+  vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
+}
+float fishSDF(vec3 p, float gape, out float part){
+  float head = length(p / vec3(0.22, 0.17, 0.16)) * 0.16 - 0.16;
+  float body = length((p - vec3(-0.28, -0.02, 0.0)) / vec3(0.32, 0.15, 0.12)) * 0.12 - 0.12;
+  float d = smin(head, body, 0.06);
+  // the mouth: a big cavity opening forward and down
+  vec3 mc = vec3(0.17, -0.035, 0.0);
+  float mouth = length((p - mc) / vec3(0.12, 0.035 + 0.05 * gape, 0.115)) * 0.035 - 0.035;
+  d = max(d, -mouth);
+  part = 0.0;
+  // fangs: a row along the upper jaw pointing down, a row along the lower pointing up, crossing like a cage;
+  // long at the front, shorter toward the corners of the mouth
+  float tooth = 1e9;
+  float gh = 0.035 + 0.05 * gape;
+  for (int k = 0; k < 11; k++){
+    float th = (float(k) / 10.0 - 0.5) * 2.6;
+    float front = cos(th);
+    float h1 = hash12(vec2(float(k), 3.0)), h2 = hash12(vec2(float(k), 7.0));
+    vec3 ru = mc + vec3(0.055 * front + 0.015, gh * 0.92, 0.105 * sin(th));
+    float lu = (0.015 + 0.045 * front * front * h1 + 0.012 * h2) * (0.55 + 0.6 * gape);
+    vec3 tu = ru + vec3(0.010 + 0.012 * (h2 - 0.5), -lu, (h1 - 0.5) * 0.02 - 0.010 * sin(th));
+    tooth = min(tooth, sdCone(p, ru, tu, 0.0012 + 0.0016 * h1, 0.0002));
+    // the lower jaw juts out past the upper (an underbite), its fangs the longest
+    vec3 rl = mc + vec3(0.06 * front + 0.035, -gh * 0.92, 0.10 * sin(th + 0.12));
+    float ll = (0.02 + 0.06 * front * front * h2 + 0.012 * h1) * (0.55 + 0.6 * gape);
+    vec3 tl = rl + vec3(0.004 + 0.016 * (h1 - 0.3), ll, (h2 - 0.5) * 0.02 - 0.010 * sin(th));
+    tooth = min(tooth, sdCone(p, rl, tl, 0.0014 + 0.0018 * h2, 0.0002));
+  }
+  if (tooth < d){ d = tooth; part = 1.0; }
+  // the eye
+  float eye = length(p - vec3(0.09, 0.085, 0.115)) - 0.016;
+  if (eye < d){ d = eye; part = 2.0; }
+  // the stalk that holds out the lure
+  float stalk = min(sdCone(p, vec3(0.10, 0.15, 0.0), vec3(0.24, 0.24, 0.0), 0.005, 0.0035), sdCone(p, vec3(0.24, 0.24, 0.0), vec3(0.40, 0.18, 0.0), 0.0035, 0.002));
+  if (stalk < d){ d = stalk; part = 3.0; }
+  return d;
+}
+vec3 fish(vec3 ro, vec3 rd, inout float T){
+  if (uFishP.w <= 0.0) return vec3(0.0);
+  vec3 F = uFishF.xyz, Up0 = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up0)), Up = cross(Z, F);
+  vec3 rl = ro - uFishP.xyz;
+  vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
+  float b = dot(o, d), c = dot(o, o) - 0.62 * 0.62, h = b * b - c;
+  if (h < 0.0) return vec3(0.0);
+  float t = max(-b - sqrt(h), 0.0), tEnd = min(-b + sqrt(h), T);
+  float part = 0.0, gape = uFishF.w; bool hit = false;
+  for (int i = 0; i < 64; i++){
+    float dd = fishSDF(o + d * t, gape, part);
+    if (dd < 0.0004 * t + 0.0002){ hit = true; break; }
+    t += dd * 0.8;
+    if (t > tEnd) break;
+  }
+  if (!hit) return vec3(0.0);
+  vec3 p = o + d * t; float pp;
+  vec2 e = vec2(0.0015, 0.0);
+  vec3 n = normalize(vec3(fishSDF(p + e.xyy, gape, pp) - fishSDF(p - e.xyy, gape, pp), fishSDF(p + e.yxy, gape, pp) - fishSDF(p - e.yxy, gape, pp), fishSDF(p + e.yyx, gape, pp) - fishSDF(p - e.yyx, gape, pp)));
+  vec3 nw = normalize(F * n.x + Up * n.y + Z * n.z);
+  vec3 xw = ro + rd * t;
+  // lit by our light only (its own lure doesn't light its face)
+  vec3 Ld = normalize(uL - xw); float r2 = dot(uL - xw, uL - xw);
+  vec3 E = uLI * exp(-SIG_T * sqrt(r2)) / (r2 + 0.0009);
+  float diff = max(dot(nw, Ld), 0.0);
+  vec3 hv = normalize(Ld - rd);
+  vec3 alb = vec3(0.10, 0.075, 0.065) * (0.65 + 0.7 * vnoise(p.xy * 90.0 + p.z * 40.0));
+  float sh = 45.0, ks = 0.35;                                              // wet, slightly glossy skin
+  bool inMouth = length((p - vec3(0.17, -0.035, 0.0)) / vec3(0.13, 0.045 + 0.05 * gape, 0.125)) < 1.0;
+  if (part == 0.0 && inMouth) alb *= 0.25;                                  // the dark inside of it
+  if (part == 1.0){ alb = vec3(0.75, 0.74, 0.68); sh = 80.0; ks = 0.9; }     // teeth: glassy, catching the light
+  if (part == 2.0){ alb = vec3(0.02); sh = 400.0; ks = 4.0; }               // the eye shines back
+  if (part == 3.0){ alb = vec3(0.10, 0.08, 0.07); }
+  vec3 col = E * (alb * (diff * 0.85 + 0.15) + ks * pow(max(dot(nw, hv), 0.0), sh));
+  T = t;
+  return col * exp(-SIG_V * t) * uFishP.w;
+}
 void main(){
   vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
   vec3 rd = normalize(uFwd + uRight * ndc.x * uTan.x + uUp * ndc.y * uTan.y), ro = uEye;
   float T = 40.0;
   // the whale, if it is passing, is the far wall of everything
   vec3 c = whale(ro, rd, T);
+  float Tf = T; vec3 cf = fish(ro, rd, Tf);
+  if (Tf < T){ c = cf; T = Tf; }
   // the creatures, composited far to near (JS sends them in that order); what is behind the whale is hidden
   for (int k = 0; k < 3; k++){
     Hit h = creature(k, ro, rd);
@@ -356,7 +453,12 @@ void main(){
   }
   // the light itself: a small hot core
   vec3 lo = uL - ro; float t0 = dot(lo, rd); float hl2 = max(dot(lo, lo) - t0 * t0, 0.0);
-  if (t0 > 0.0) c += uLI * exp(-SIG_V * t0) * (40.0 * exp(-hl2 / 1.6e-5) + 0.0006 / (hl2 + 0.0004));
+  if (t0 > 0.0 && t0 < T + 0.05) c += uLI * exp(-SIG_V * t0) * (40.0 * exp(-hl2 / 1.6e-5) + 0.0006 / (hl2 + 0.0004));
+  // the lure has a core just like it
+  if (uLI2.r > 0.0){
+    vec3 l2 = uL2 - ro; float s0 = dot(l2, rd), q2 = max(dot(l2, l2) - s0 * s0, 0.0);
+    if (s0 > 0.0 && s0 < T + 0.05) c += uLI2 * exp(-SIG_V * s0) * (40.0 * exp(-q2 / 1.6e-5) + 0.0006 / (q2 + 0.0004));
+  }
   // and the water between, lit; light scattered many times fills a wide, soft, cold sphere round it
   c += inscatter(ro, rd, T);
   if (t0 > 0.0) c += uLI.r * (vec3(0.0, 0.06, 0.20) * 0.010 / (hl2 + 0.10) + vec3(0.0, 0.03, 0.12) * 0.004 / (hl2 + 0.7)) * exp(-0.25 * t0);
@@ -416,7 +518,7 @@ const VS_SNOW = `#version 300 es
 precision highp float;
 layout(location = 0) in vec4 aP;      // where it started (in a 4 m box), and a seed
 uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan; uniform vec2 uRes;
-uniform float uTime, uFocus, uAperture;
+uniform float uTime, uFocus, uAperture, uSink;
 uniform sampler2D uDepth;            // the sea pass: alpha is how far the ray went before something solid
 out vec2 vUV; out vec3 vC; out float vSharp; out float vSeed;
 ` + COMMON + `
@@ -427,6 +529,7 @@ void main(){
   // slowly sinking, turning in the current
   vec3 p = aP.xyz + vec3(0.03 * sin(uTime * 0.11 + h * 40.0), -0.010 - 0.012 * fract(h * 17.0), 0.03 * cos(uTime * 0.09 + h * 30.0)) * uTime * 0.5
          + vec3(sin(uTime * 0.6 + h * 9.0), 0.0, cos(uTime * 0.5 + h * 7.0)) * 0.004;
+  p.y += uSink;                                                      // as the light goes deeper, the snow seems to rise past
   p = uEye + mod(p - uEye + 2.0, 4.0) - 2.0;
   vec3 v = p - uEye; float z = dot(v, uFwd);
   if (z < 0.06){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
@@ -466,6 +569,34 @@ void main(){
   float edge = mix(1.0, lump, vSharp);
   float m = smoothstep(edge, edge * 0.82, r) * (1.0 + 0.25 * (1.0 - vSharp) * smoothstep(0.5, 0.9, r));
   o = vec4(vC * m, 1.0);
+}`;
+
+/* ---------------------------------------------------------------- small lit lives: rows of blue photophores */
+const VS_GLOW = `#version 300 es
+precision highp float;
+layout(location = 0) in vec4 aG;      // a photophore: position, brightness
+uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan; uniform vec2 uRes;
+out vec2 vUV; out float vI; out float vR;
+const vec3 SIG_V = vec3(0.10, 0.06, 0.045);
+void main(){
+  vec2 cq = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0;
+  vec3 v = aG.xyz - uEye; float z = dot(v, uFwd);
+  if (z < 0.05 || aG.w <= 0.001){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 ndc = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
+  float px = 0.010 / (z * uTan.y) * uRes.y * 0.5 + 3.0;                   // its glow, in pixels
+  vI = aG.w * exp(-0.06 * z) / (z * z + 0.3);
+  vR = px;
+  vUV = cq * px;
+  gl_Position = vec4(ndc + cq * px / uRes * 2.0, 0.5, 1.0);
+}`;
+const FS_GLOW = `#version 300 es
+precision highp float;
+in vec2 vUV; in float vI; in float vR;
+out vec4 o;
+void main(){
+  float r = length(vUV);
+  float g = exp(-r * r / 1.2) * 1.4 + exp(-r / (vR * 0.35)) * 0.12;
+  o = vec4(vec3(0.10, 0.62, 1.0) * g * vI * 0.6, 1.0);
 }`;
 
 /* ---------------------------------------------------------------- developing the picture */
@@ -519,9 +650,160 @@ W.deepsea = {
       { kind: 2, p: [0.55, -0.40, -2.5], s: 0.11, up: [-0.25, 1, 0.35], ph: 2.0, period: 2.6, v: [-0.006, 0.002, 0.004], alarm: 0 },
     ];
     // the whale: once in a long while it goes by, left to right, just beyond the light
-    this.whale = { E0: [0.0, -0.02, -2.72], F: YL.V.norm([1, 0, -0.06]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null };
+    // its near side slides by a hand's breadth behind the light: all we see is skin, and once, the eye
+    this.whale = { E0: [0.0, 0.12, -3.33], F: YL.V.norm([1, 0, -0.02]), speed: 0.55, cycle: 80, at: YL.QS.has('whale') ? +YL.QS.get('whale') : null };
+    // small lives in the dark: each a little fish with a row of blue lights along its side
+    this.glow = [];
+    for (let i = 0; i < 16; i++) {
+      const a = rnd() * 6.283, e = (rnd() - 0.5) * 1.2, r = 1.6 + 2.0 * rnd();
+      const home = [Math.cos(a) * Math.cos(e) * r, Math.sin(e) * r * 0.7, -1.0 + Math.sin(a) * Math.cos(e) * r];
+      this.glow.push({ home, p: home.slice(), v: [0, 0, 0], ph: rnd() * 6.283, lit: 0.5 + 0.5 * rnd(), orbit: 0.22 + 0.30 * rnd(), tilt: rnd() * 6.283, shy: 0.6 + 0.8 * rnd(), flash: 0 });
+    }
+    this.glowBuf = new Float32Array(16 * 4 * 4);
+    this.gvao = gl.createVertexArray(); gl.bindVertexArray(this.gvao);
+    this.gbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.gbuf); gl.bufferData(gl.ARRAY_BUFFER, this.glowBuf.byteLength, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(0, 1);
+    gl.bindVertexArray(null);
+    this.pGlow = YL.makeProgram('sea-glow', VS_GLOW, FS_GLOW); YL.checkProgram(this.pGlow);
     this.t = +(YL.QS.get('wt') || 0);
+    // debug: &calm=s — the light has been left alone for s seconds (the small lives have come close)
+    if (YL.QS.has('lure')) {
+      this.hero.on = true; const V = YL.V, cam = this.camera(YL.canvasAspect(), this.t, true);
+      const Lr = this.lure, d = +YL.QS.get('lure');
+      Lr.state = d < 0.65 ? 'reveal' : 'approach'; Lr.k = 1; Lr.shown = d < 0.65 ? 1 : 0;
+      Lr.p = V.add(this.hero.p, V.mul(V.norm([-1, -0.10, -0.15]), d)); Lr.dir = V.norm(V.sub(this.hero.p, Lr.p));
+    }
+    if (YL.QS.has('calm')) { this.hero.on = true; this.L = this.hero.p; for (let k = 0, n = +YL.QS.get('calm') * 30; k < n; k++) { this.t += 1 / 30; this.creaturesUpdate(1 / 30); } }
+    // debug: &scare=s — then the hand moved, s seconds ago
+    if (YL.QS.has('scare')) { this.hero.speed = 2.5; this.hero.moved = this.t; for (let k = 0, n = +YL.QS.get('scare') * 30; k < n; k++) { this.t += 1 / 30; this.hero.speed *= Math.exp(-0.1); this.creaturesUpdate(1 / 30); } }
     this.ready = true;
+  },
+  /* ---------------------------------------------------------------- 一粒光 in the deep
+     Here it is the only light there is: what it reaches is all that can be seen. Your hand leads it; left alone it
+     drifts. Keep still, and the small lit lives come out of the dark one by one to look at it; move, and they flash
+     once and go dark and scatter (and the Atolla sets off its blue alarm). */
+  hero: { on: false, p: [0, -0.02, -1.0], v: [0, 0, 0], aim: null, moved: -99, speed: 0, glow: 1, sink: 0 },
+  pointer(nx, ny, speed) {
+    const H = this.hero;
+    H.aim = [Math.max(-0.8, Math.min(0.8, nx)), Math.max(-0.75, Math.min(0.75, ny))];
+    if (speed > 0.25) { H.moved = this.t; H.speed = Math.max(H.speed, speed); }
+  },
+  heroUpdate(dt) {
+    const H = this.hero, V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
+    if (!H.on) return;
+    // where it wants to be: under your hand, a metre out; or, left alone, drifting about the middle
+    let tgt;
+    const recent = this.t - H.moved < 4;
+    if (H.aim && recent) {
+      const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, H.aim[0] * cam.tan[0]), V.mul(cam.up, H.aim[1] * cam.tan[1]))));
+      tgt = V.add(cam.eye, V.mul(rd, 1.0));
+    } else {
+      const t = this.t;
+      tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 1.0)), [0.10 * Math.sin(t * 0.19), -0.02 + 0.07 * Math.sin(t * 0.15 + 1), 0.06 * Math.sin(t * 0.11 + 2)]);
+    }
+    for (let i = 0; i < 3; i++) { H.v[i] += (tgt[i] - H.p[i]) * 2.2 * dt; H.v[i] *= Math.exp(-dt * 2.6); H.p[i] += H.v[i] * dt; }
+    H.speed *= Math.exp(-dt * 3);
+    H.fear = Math.max(0, (H.fear || 0) - dt / 3);
+    H.sink += dt * 0.02;                                                     // it is going down, slowly
+  },
+  creaturesUpdate(dt) {
+    const H = this.hero, V = YL.V, L = this.L || H.p;
+    const still = this.t - H.moved;                                         // how long your hand has been still
+    const scared = H.on && H.speed > 1.0;
+    for (const g of this.glow) {
+      g.ph += dt;
+      if (scared && g.mode !== 'flee') { g.mode = 'flee'; g.flash = 1; }
+      if (g.mode === 'flee') {
+        // one bright flash, then dark, and away from the light
+        const away = V.norm(V.sub(g.p, L));
+        for (let i = 0; i < 3; i++) g.v[i] += away[i] * 1.6 * dt;
+        g.lit += (0 - g.lit) * Math.min(1, dt * 3);
+        if (Math.hypot(...V.sub(g.p, L)) > 2.6 && H.speed < 0.3) g.mode = 'roam';
+      } else if (H.on && still > 2.0 + g.shy * 3.0) {
+        // curious: one by one they come close and circle it, keeping their distance
+        const a = g.ph * (0.25 + 0.1 * g.shy) + g.tilt;
+        const off = [Math.cos(a) * g.orbit, Math.sin(a * 0.7 + g.tilt) * g.orbit * 0.5, Math.sin(a) * g.orbit];
+        const tgt = V.add(L, off);
+        for (let i = 0; i < 3; i++) g.v[i] += (tgt[i] - g.p[i]) * 0.35 * dt;
+        g.lit += (1 - g.lit) * Math.min(1, dt * 0.8);
+        g.mode = 'near';
+      } else {
+        // roaming in the dark, far off
+        g.mode = 'roam';
+        const tgt = V.add(g.home, [0.3 * Math.sin(g.ph * 0.2 + g.tilt), 0.2 * Math.sin(g.ph * 0.15), 0.3 * Math.cos(g.ph * 0.17 + g.tilt)]);
+        for (let i = 0; i < 3; i++) g.v[i] += (tgt[i] - g.p[i]) * 0.15 * dt;
+        g.lit += (0.55 - g.lit) * Math.min(1, dt * 0.5);
+      }
+      const damp = Math.exp(-dt * (g.mode === 'flee' ? 0.8 : 1.6));
+      for (let i = 0; i < 3; i++) { g.v[i] *= damp; g.p[i] += g.v[i] * dt; }
+      g.flash = Math.max(0, g.flash - dt * 2.5);
+    }
+    // the Atolla's alarm: a fast bright spinning ring, dying away
+    const at = this.jel.find(j => j.kind === 2);
+    if (at) at.alarm = scared ? 1 : Math.max(0, (at.alarm || 0) - dt / 4);
+  },
+  /* ---------------------------------------------------------------- the other light
+     Out in the dark, a light just like ours: same warmth, the same breathing. It comes closer. When our light
+     reaches what is behind it, there is a mouth. Ours shrinks back; the mouth snaps shut on nothing, the lure goes
+     out, and the fish sinks back into the dark.                                                                 */
+  lure: { state: 'off', t: 0, p: [0, 0, 0], k: 0, gape: 1, shown: 0 },
+  startLure() {
+    const Lr = this.lure, H = this.hero, V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
+    Lr.state = 'appear'; Lr.t = 0; Lr.k = 0; Lr.gape = 1; Lr.shown = 0;
+    // from far off to the left, level with ours, so that when it comes close we see it side-on
+    Lr.p = V.add(V.add(cam.eye, V.mul(cam.fwd, 1.5)), V.add(V.mul(cam.right, -2.6), V.mul(cam.up, -0.15)));
+  },
+  lureUpdate(dt) {
+    const Lr = this.lure, H = this.hero, V = YL.V;
+    if (Lr.state === 'off') return;
+    Lr.t += dt;
+    const L = H.p, toHero = V.sub(L, Lr.p), dist = Math.hypot(...toHero), dir = V.mul(toHero, 1 / Math.max(dist, 1e-4));
+    Lr.dir = dir;
+    if (Lr.state === 'appear') { Lr.k = Math.min(1, Lr.t / 2.5); if (Lr.t > 2.5) { Lr.state = 'approach'; Lr.t = 0; } }
+    else if (Lr.state === 'approach') {
+      // drifting closer the way ours drifts: unhurried, a little wavering
+      const sp = 0.16 * Math.min(1, (dist - 0.5) / 0.6 + 0.3);
+      Lr.p = V.add(Lr.p, V.add(V.mul(dir, sp * dt), [0.03 * Math.sin(Lr.t * 1.1) * dt, 0.02 * Math.sin(Lr.t * 0.8) * dt, 0]));
+      if (dist < 0.62) { Lr.state = 'reveal'; Lr.t = 0; this.fishSound(); }
+    } else if (Lr.state === 'reveal') {
+      // what is behind it comes into our light; ours shrinks and backs away
+      Lr.shown = Math.min(1, Lr.shown + dt / 0.5);
+      H.fear = 1;
+      for (let i = 0; i < 3; i++) H.v[i] += -dir[i] * 0.5 * dt;
+      if (Lr.t > 1.6) { Lr.state = 'snap'; Lr.t = 0; this.snapSound(); }
+    } else if (Lr.state === 'snap') {
+      Lr.gape = Math.max(0, 1 - Lr.t / 0.12);
+      Lr.k = Lr.t < 0.1 ? 1 : 0;                                              // the lure goes out
+      if (Lr.t > 0.5) { Lr.state = 'retreat'; Lr.t = 0; }
+    } else if (Lr.state === 'retreat') {
+      Lr.p = V.add(Lr.p, V.mul(dir, -0.7 * dt));
+      Lr.shown = Math.max(0, Lr.shown - dt / 1.5);
+      if (Lr.shown <= 0) Lr.state = 'gone';
+    }
+  },
+  // the fish's head sits behind and below its lure, facing our light
+  fishFrame() {
+    const Lr = this.lure, V = YL.V, F = Lr.dir || [1, 0, 0];
+    const Z = V.norm(V.cross(F, [0, 1, 0])), Up = V.cross(Z, F);
+    // the lure is at local (0.40, 0.18, 0) from the head
+    return { c: V.sub(V.sub(Lr.p, V.mul(F, 0.40)), V.mul(Up, 0.18)), F };
+  },
+  fishSound() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.02;
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(55, t0); o.frequency.linearRampToValueAtTime(48, t0 + 1.6);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.10, t0 + 0.8); g.gain.linearRampToValueAtTime(0, t0 + 1.8);
+    o.connect(g); g.connect(S.bus); g.connect(S.wet); o.start(t0); o.stop(t0 + 2);
+  },
+  snapSound() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.01;
+    const b = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.3), ctx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.03));
+    const src = ctx.createBufferSource(); src.buffer = b;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+    const g = ctx.createGain(); g.gain.value = 0.35;
+    src.connect(lp); lp.connect(g); g.connect(S.bus); g.connect(S.wet); src.start(t0);
   },
   // where the whale's eye is (how far along its pass), or null when it isn't near
   whalePos() {
@@ -549,8 +831,18 @@ W.deepsea = {
     const vfov = aspect < 0.9 ? 64 : 50, ty = Math.tan(vfov * Math.PI / 360);
     return { eye, fwd, right, up, tan: [ty * aspect, ty] };
   },
+  // a point on the screen, a given distance into this water (to hand the light over at the same spot)
+  unproject(nx, ny, dist, aspect) {
+    const cam = this.camera(aspect, this.t, YL.DBG.still), V = YL.V;
+    const rd = V.norm(V.add(cam.fwd, V.add(V.mul(cam.right, nx * cam.tan[0]), V.mul(cam.up, ny * cam.tan[1]))));
+    return V.add(cam.eye, V.mul(rd, dist));
+  },
+  arrive(nx, ny, aspect) {
+    this.hero.on = true; this.hero.p = this.unproject(nx, ny, 1.4, aspect); this.hero.v = [0, 0.06, 0]; this.hero.moved = -99;
+  },
   // (world only) the light that will be 一粒光: a metre in front, drifting
   lightPos(t, cam) {
+    if (this.hero.on) return this.hero.p.slice();
     const V = YL.V, still = YL.DBG.still;
     const off = still ? [0, -0.02, 0] : [0.07 * Math.sin(t * 0.21), -0.02 + 0.05 * Math.sin(t * 0.17 + 1), 0.05 * Math.sin(t * 0.13 + 2)];
     return V.add(V.add(cam.eye, V.mul(cam.fwd, 1.0)), off);
@@ -616,6 +908,9 @@ W.deepsea = {
   update(dt) {
     this.t += dt;
     this.sound(dt);
+    this.heroUpdate(dt);
+    this.lureUpdate(dt);
+    this.creaturesUpdate(dt);
     for (const j of this.jel) {
       // the moon jelly swims in pulses: a quick contraction, a long slow relaxing; it rises a little after each
       if (j.period) {
@@ -634,12 +929,14 @@ W.deepsea = {
     const cam = this.cam = this.camera(aspect, this.t, still);
     const L = this.L = this.lightPos(this.t, cam);
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);       // the same breathing as in every world
-    const LI = YL.mulc(YL.bb(2500), 0.30 * br * (this.light ?? 1));
+    const LI = YL.mulc(YL.bb(2500), 0.30 * br * (this.light ?? 1) * (1 - 0.6 * (this.hero.fear || 0)));
+    const Lr = this.lure, br2 = 1 + 0.07 * Math.sin(this.t * 2.1 + 0.9) + 0.03 * Math.sin(this.t * 5.3 + 2);
+    const LI2 = Lr.state !== 'off' && Lr.state !== 'gone' ? YL.mulc(YL.bb(2500), 0.30 * br2 * Lr.k) : [0, 0, 0];
     // the creatures, far to near
     const V = YL.V, J = this.jel.slice().sort((a, b) => V.dot(V.sub(b.p, cam.eye), cam.fwd) - V.dot(V.sub(a.p, cam.eye), cam.fwd));
     const jp = new Float32Array(12), ju = new Float32Array(12), jk = new Float32Array(12);
     J.forEach((j, i) => { jp.set([...j.p, j.s], i * 4); ju.set([...V.norm(j.up), j.pulse || 0], i * 4); jk.set([j.kind, j.ph, j.alarm || 0, 0], i * 4); });
-    const camU = (p) => { U(p, 'uEye', cam.eye); U(p, 'uFwd', cam.fwd); U(p, 'uRight', cam.right); U(p, 'uUp', cam.up); U(p, 'uTan', cam.tan); U(p, 'uL', L); U(p, 'uLI', LI); U(p, 'uTime', this.t); };
+    const camU = (p) => { U(p, 'uEye', cam.eye); U(p, 'uFwd', cam.fwd); U(p, 'uRight', cam.right); U(p, 'uUp', cam.up); U(p, 'uTan', cam.tan); U(p, 'uL', L); U(p, 'uLI', LI); U(p, 'uL2', Lr.p); U(p, 'uLI2', LI2); U(p, 'uTime', this.t); };
     // 1) the water and what swims in it
     gl.bindFramebuffer(gl.FRAMEBUFFER, A.fb); gl.viewport(0, 0, A.w, A.h);
     gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
@@ -649,6 +946,8 @@ W.deepsea = {
     const wp = this.wp = this.whalePos();
     U(this.pSea, 'uWh', wp ? [...wp.eye, 1] : [0, 0, 0, 0]);
     U(this.pSea, 'uWhF', [...this.whale.F, 0.6 * Math.sin(this.t * 0.45)]);
+    const ff = this.fishFrame();
+    U(this.pSea, 'uFishP', [...ff.c, Lr.shown]); U(this.pSea, 'uFishF', [...ff.F, Lr.gape]);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2) the tentacles, added on
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
@@ -662,7 +961,22 @@ W.deepsea = {
     gl.useProgram(this.pSnow.p); camU(this.pSnow);
     U(this.pSnow, 'uRes', [B.w, B.h]); U(this.pSnow, 'uFocus', V.dot(V.sub(L, cam.eye), cam.fwd)); U(this.pSnow, 'uAperture', 0.018);
     YL.bindTex(this.pSnow, 'uDepth', A.tex, 0);
+    U(this.pSnow, 'uSink', this.hero.sink % 4);
     gl.bindVertexArray(this.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nSnow);
+    // the small lives: four photophores each, along the way it swims, twinkling
+    const gb = this.glowBuf;
+    this.glow.forEach((g, i) => {
+      const sp = Math.hypot(...g.v), dir = sp > 1e-4 ? V.mul(g.v, 1 / sp) : [1, 0, 0];
+      for (let k = 0; k < 4; k++) {
+        const q = V.add(g.p, V.mul(dir, (k - 1.5) * 0.012));
+        const tw = 0.8 + 0.2 * Math.sin(this.t * 3 + i + k * 1.7);
+        gb.set([...q, (g.lit * tw + g.flash * 3) * (k === 0 ? 1.4 : 1)], (i * 4 + k) * 4);
+      }
+    });
+    gl.useProgram(this.pGlow.p);
+    U(this.pGlow, 'uEye', cam.eye); U(this.pGlow, 'uFwd', cam.fwd); U(this.pGlow, 'uRight', cam.right); U(this.pGlow, 'uUp', cam.up); U(this.pGlow, 'uTan', cam.tan); U(this.pGlow, 'uRes', [B.w, B.h]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gbuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, gb);
+    gl.bindVertexArray(this.gvao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 64);
     gl.disable(gl.BLEND);
     // 4) develop it
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);

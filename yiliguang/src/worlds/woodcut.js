@@ -1035,6 +1035,13 @@ W.woodcut = {
     }
     this.puffSound();
   },
+  // where the ice hole is on the screen (ndc), and its half-size there (pixels), for the way out
+  holeOnScreen(aspect, h) {
+    const v = this.view(aspect, (this.shown > 0 ? this.shown : 0) / FPS);
+    const nx = (HOLE[0] - v[0]) / (v[2] * aspect) * 2, ny = (HOLE[1] - v[1]) / v[2] * 2;
+    const r = 0.060 / v[2] * h;
+    return { nx, ny, rx: r, ry: r / 2.6 };
+  },
   // the end of this world: it leaves the lantern and cuts its way down across the ice to the hole
   leave() {
     const H = this.hero, L = this.lantern(this.t);
