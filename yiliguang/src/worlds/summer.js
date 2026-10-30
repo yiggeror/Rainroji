@@ -439,13 +439,14 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 16, 0); gl.vertexAttribDivisor(1, 1);
     gl.bindVertexArray(null);
     this.empty = gl.createVertexArray();
-    this.t = +(YL.QS.get('wt') || 0); this.gust = this.t * 0.55;      // (screenshots: start at a given moment)
+    if (!this.inited) { this.t = +(YL.QS.get('wt') || 0); this.gust = this.t * 0.55; }      // (screenshots: start at a given moment)
+    this.inited = true;
     this.ready = true;
   },
   // multisampled colour + depth → resolved texture
   targets(w, h) {
     const gl = YL.gl;
-    if (this.tw === w && this.th === h) return;
+    if (this.tw === w && this.th === h && this.res) return;
     this.tw = w; this.th = h;
     const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
     this.msFb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, this.msFb);

@@ -4811,13 +4811,14 @@ function viewTick(dt) {
   }
   VIEW.mix += ((VIEW.out ? 1 : 0) - VIEW.mix) * (1 - Math.exp(-dt / 0.6));
 }
+const FAST = Math.max(1, +(QS.get('fast') || 1));
 function loop(now) {
   if (!running) return;
   if (DBG.frames && frame >= DBG.frames) { window.__done = true; return; }
   requestAnimationFrame(loop);
   if (window.__hold) { lastT = 0; window.__holdAck = (window.__holdAck || 0) + 1; return; }   // debug: freeze for screenshots
   const t = now / 1000;
-  const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t)));
+  const dt = Math.min(0.05, Math.max(0.001, t - (lastT || t))) * FAST;      // (&fast=k: run k times faster, for testing the whole film)
   lastT = t;
   realT += dt;
   const wdt = dt * TIME.scale;                 // world time (rain, street) follows the time-flow slider
@@ -4892,6 +4893,7 @@ canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); stop(); }
 canvas.addEventListener('webglcontextrestored', () => {
   R.tg = {}; R.progs = {};
   createResources(); buildPrograms();
+  YL.onContextRestored && YL.onContextRestored();
   whenProgramsReady(() => { canvas.width = 1; resize(); start(); });
 });
 // 《一粒光》: what the director, the hero and the other worlds need from the host

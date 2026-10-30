@@ -895,10 +895,13 @@ W.woodcut = {
     this.carve = YL.makeTarget(CARVE_W, CARVE_H, ['rgba8']);
     this.clearCarve();
     this.trail = []; this.puff = []; this.queue = []; this.stroke = null;
-    this.t = +(YL.QS.get('wt') || 0);
+    if (!this.inited) this.t = +(YL.QS.get('wt') || 0);
+    this.inited = true;
     // debug: &wh=x,y shows the flame out of its lantern at that point of the print
     const wh = YL.QS.get('wh');
     if (wh) { this.hero.mode = 'fall'; this.hero.p = wh.split(',').map(Number); this.lanLight = 0.25; }
+    // debug: &moon shows the new moon it carves when nobody else has cut anything
+    if (YL.QS.has('moon')) { this.carveMoon(); for (const P of this.queue) for (let i = 1; i < P.length; i++) this.carveSeg(P[i - 1], P[i], P.carve, P.carve); this.queue = []; }
     // debug: &shiver=s shows the lantern s seconds after it has shaken the snow off
     if (YL.QS.get('shiver')) { this.shiver(); for (let k = 0, n = Math.round(+YL.QS.get('shiver') * 60); k < n; k++) for (const f of this.puff) { f.v[1] -= 0.10 / 60; f.p[0] += f.v[0] / 60; f.p[1] += f.v[1] / 60; } }
     this.ready = true;
@@ -988,8 +991,11 @@ W.woodcut = {
       moving = true;
       if (H.leg === 'to') { if (this.steer(H.path[0], 0.55, dt) < 0.006) { H.leg = 'along'; H.s = 0; } }
       else if (H.leg === 'along') {
-        H.s += 0.30 * dt;
+        const s0 = H.s;
+        H.s += (H.path.carve ? 0.16 : 0.30) * dt;
         H.p = pointAt(H.path, H.s); H.v = [0, 0];
+        // a path of its own (the moon): it is the knife, and cuts as it goes
+        if (H.path.carve) { const a = pointAt(H.path, Math.max(s0 - 0.003, 0)); this.carveSeg(a, H.p, H.path.carve, H.path.carve); }
         if (H.s >= H.pathL) { H.leg = 'back'; if (this.queue.length) { H.path = this.queue.shift(); H.leg = 'to'; } }
       } else if (this.steer(core, 0.55, dt) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
     } else if (H.mode === 'leave') {
@@ -1042,6 +1048,26 @@ W.woodcut = {
     const r = 0.060 / v[2] * h;
     return { nx, ny, rx: r, ry: r / 2.6 };
   },
+  // if nobody has cut anything yet, it shows how: it goes up into the dark and carves a new moon, then comes home
+  carveMoon() {
+    if (this.moonDone) return; this.moonDone = true;
+    // a waxing crescent: the outer edge is the moon's own circle; the inner, a larger circle through its two horns
+    const c = [0.87, 0.875], R = 0.052, out = [], inn = [], hatch = [];
+    const t0 = 0.62 * Math.PI, t1 = 1.38 * Math.PI;
+    for (let i = 0; i <= 24; i++) { const a = t0 + (t1 - t0) * i / 24; out.push([c[0] + Math.cos(a) * R, c[1] + Math.sin(a) * R]); }
+    const d = 0.45 * R, hx = Math.cos(t1) * R - d, hy = Math.sin(t1) * R, rho = Math.hypot(hx, hy);
+    const a2 = Math.atan2(hy, hx) + 2 * Math.PI, a1 = 2 * Math.PI - a2;          // from the lower horn back up to the upper, round the inside
+    for (let i = 1; i <= 24; i++) { const a = a2 + (a1 - a2) * i / 24; inn.push([c[0] + d + Math.cos(a) * rho, c[1] + Math.sin(a) * rho]); }
+    const pts = out.concat(inn);
+    pts.carve = 0.0020; pts.L = pathLength(pts);
+    // and two cuts inside it, following its curve (the way a carver shades a crescent)
+    for (let k = 1; k <= 2; k++) {
+      const h = [], r = R * (1 - 0.075 * k), span = 0.30 - 0.05 * k;
+      for (let i = 0; i <= 16; i++) { const a = Math.PI * (1 - span + 2 * span * i / 16); h.push([c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r]); }
+      h.carve = 0.0011; h.L = pathLength(h); hatch.push(h);
+    }
+    this.queue.push(pts, ...hatch);
+  },
   // the end of this world: it leaves the lantern and cuts its way down across the ice to the hole
   leave() {
     const H = this.hero, L = this.lantern(this.t);
@@ -1085,7 +1111,7 @@ W.woodcut = {
     this.carveSeg(a, tail, S.r, 0);
     S.pts.push(tail);
     if (S.len > 0.04 && this.queue.length < 2 && ['home', 'out', 'enter'].includes(this.hero.mode)) {
-      const pts = S.pts; this.queue.push(pts); pts.L = pathLength(pts);
+      const pts = S.pts; this.queue.push(pts); pts.L = pathLength(pts); this.userCut = true;
     }
   },
 
@@ -1195,7 +1221,7 @@ W.woodcut = {
     gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.SCISSOR_TEST); gl.scissor(0, y0, w, y1 - y0);
     gl.useProgram(pS.p);
-    U(pS, 'uRes', [w, h]); U(pS, 'uView', view); U(pS, 'uPx', view[2] / h); U(pS, 'uBoil', f % 4); U(pS, 'uTime', tq);
+    U(pS, 'uRes', [w, h]); U(pS, 'uView', view); U(pS, 'uPx', view[2] / h); U(pS, 'uBoil', YL.reduced ? 0 : f % 4); U(pS, 'uTime', tq);
     gl.uniform4fv(pS.u.uBr, this.trBuf); gl.uniform4fv(pS.u.uBrR, this.trR); gl.uniform1i(pS.u.uBrN, this.tree.length); U(pS, 'uTreeBox', this.treeBox);
     this.lit.forEach((v, i) => { this.hB[i * 4 + 2] = v; });
     gl.uniform4fv(pS.u.uHA, this.hA); gl.uniform4fv(pS.u.uHB, this.hB);
@@ -1231,8 +1257,8 @@ W.woodcut = {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     const pP = this.pPrint;
     gl.useProgram(pP.p);
-    U(pP, 'uRes', [w, h]); U(pP, 'uView', view); U(pP, 'uBoil', this.shown % 4); U(pP, 'uFade', this.fade); U(pP, 'uPx', view[2] / h); U(pP, 'uTime', this.t);
-    const j = (k) => 0.00025 * (((this.shown * 7 + k * 13) % 5) / 2 - 1);       // each printing lands a hair differently
+    U(pP, 'uRes', [w, h]); U(pP, 'uView', view); U(pP, 'uBoil', YL.reduced ? 0 : this.shown % 4); U(pP, 'uFade', this.fade); U(pP, 'uPx', view[2] / h); U(pP, 'uTime', this.t);
+    const j = (k) => YL.reduced ? 0 : 0.00025 * (((this.shown * 7 + k * 13) % 5) / 2 - 1);       // each printing lands a hair differently
     const reg = (dx, dy) => [(dx + j(1)) / (view[2] * w / h), (dy + j(2)) / view[2]];
     U(pP, 'uRegB', reg(0.0014, -0.0010)); U(pP, 'uRegR', reg(-0.0011, 0.0013));
     const sz = Math.min(0.075 * h, 0.09 * w);

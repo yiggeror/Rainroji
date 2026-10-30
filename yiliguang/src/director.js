@@ -47,6 +47,8 @@ const T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
 const T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_TEAR = 4.4, T_LURE = 24, T_SEA = 46, T_RISE = 8, T_SURF = 4.5;
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
+// someone who has asked their system for less motion: the print stops 'boiling' between printings
+YL.reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 const D = YL.director = {
   phase: 'intro', t: 0, pt: 0,
   go(ph) { D.phase = ph; D.pt = 0; },
@@ -161,6 +163,8 @@ const D = YL.director = {
         const h = document.getElementById('hint');
         if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
       }
+      // nobody has cut anything: it shows how, carving a new moon into the night
+      if (D.pt > 20 && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
       if (D.pt > T_WOOD && wood.hero.mode === 'home') { wood.leave(); D.go('leave'); }
     } else if (D.phase === 'leave') {
       const sea = YL.worlds.deepsea;
@@ -410,6 +414,7 @@ function project(p) {
 D.world = QS.get('world') || 'room';
 let lastPtr = null;
 D.renderFrame = (dt, realT) => {
+  if (YL.gl.isContextLost()) return true;          // (the loss is reported a frame late: draw nothing meanwhile)
   const summer = YL.worlds.summer;
   // drops showing the summer: keep its panorama fresh
   if ((D.phase === 'daydrops' || D.phase === 'dive') && !summer.ready) summer.init();
@@ -516,6 +521,14 @@ D.afterRoom = () => {
   YL.drawFull();
 };
 if (D.world !== 'room') YL.roomVol = 0;
+// a lost and restored GL context: everything the worlds and the transitions made belongs to the old one
+YL.onContextRestored = () => {
+  iris = null; tearP = null; drainP = null; YL.sharp2 = null; YL.roomTarget = null;
+  for (const w of Object.values(YL.worlds || {})) {
+    w.ready = false;
+    w.res = null; w.tw = 0; w.inks = null; w.A = null; w.B = null;
+  }
+};
 
 // ---- screenshots: jump straight to a moment
 if (QS.get('phase')) {

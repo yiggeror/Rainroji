@@ -698,7 +698,8 @@ W.deepsea = {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(0, 1);
     gl.bindVertexArray(null);
     this.pGlow = YL.makeProgram('sea-glow', VS_GLOW, FS_GLOW); YL.checkProgram(this.pGlow);
-    this.t = +(YL.QS.get('wt') || 0);
+    if (!this.inited) this.t = +(YL.QS.get('wt') || 0);
+    this.inited = true;
     // debug: &calm=s — the light has been left alone for s seconds (the small lives have come close)
     if (YL.QS.has('lure')) {
       this.hero.on = true; const V = YL.V, cam = this.camera(YL.canvasAspect(), this.t, true);
@@ -736,7 +737,14 @@ W.deepsea = {
       const t = this.t;
       tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 1.0)), [0.10 * Math.sin(t * 0.19), -0.02 + 0.07 * Math.sin(t * 0.15 + 1), 0.06 * Math.sin(t * 0.11 + 2)]);
     }
-    for (let i = 0; i < 3; i++) { H.v[i] += (tgt[i] - H.p[i]) * 2.2 * dt; H.v[i] *= Math.exp(-dt * 2.6); H.p[i] += H.v[i] * dt; }
+    const k = this.rise > 0 ? 7 : 2.2, c = this.rise > 0 ? 5 : 2.6;              // rising, it keeps up with the eye
+    for (let i = 0; i < 3; i++) { H.v[i] += (tgt[i] - H.p[i]) * k * dt; H.v[i] *= Math.exp(-dt * c); H.p[i] += H.v[i] * dt; }
+    // the eye follows only when the light nears the edge of the picture
+    const v = V.sub(H.p, cam.eye), z = Math.max(V.dot(v, cam.fwd), 0.1);
+    const nx = V.dot(v, cam.right) / (z * cam.tan[0]), ny = V.dot(v, cam.up) / (z * cam.tan[1]);
+    const push = (x) => Math.sign(x) * Math.max(Math.abs(x) - 0.5, 0);
+    this.yawOff = (this.yawOff || 0) + push(nx) * 0.9 * dt;
+    this.pitchOff = Math.max(-0.6, Math.min(0.6, (this.pitchOff || 0) + push(ny) * 0.7 * dt));
     H.speed *= Math.exp(-dt * 3);
     H.fear = Math.max(0, (H.fear || 0) - dt / 3);
     H.sink += dt * 0.02;                                                     // it is going down, slowly
@@ -863,7 +871,8 @@ W.deepsea = {
     // at the end it rises toward the light above, and the eye goes up with it, looking up
     const r = Math.min(1, (this.rise || 0) * 1.8), re = r * r * (3 - 2 * r);
     eye[1] += this.riseY || 0;
-    const yaw = still ? 0 : 0.05 * Math.sin(t * 0.045) * (1 - re), pitch = (still ? 0 : 0.03 * Math.sin(t * 0.038 + 0.5)) + 1.0 * re;
+    // (yawOff, pitchOff: the eye turning, slowly, to keep the light in the picture)
+    const yaw = (still ? 0 : 0.05 * Math.sin(t * 0.045)) * (1 - re) + (this.yawOff || 0) * (1 - re), pitch = (still ? 0 : 0.03 * Math.sin(t * 0.038 + 0.5)) + 1.0 * re + (this.pitchOff || 0) * (1 - re);
     const fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
     const right = V.norm(V.cross(fwd, [0, 1, 0])), up = V.cross(right, fwd);
     const vfov = aspect < 0.9 ? 64 : 50, ty = Math.tan(vfov * Math.PI / 360);
