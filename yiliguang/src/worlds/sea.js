@@ -368,6 +368,22 @@ void bigEye(vec2 p, vec2 c, float r, float lid, vec2 pearl, inout vec3 K){
   float fold = abs(fract(lev * 1.3 + 0.12 * fbm3(q * 1.3)) - 0.5);
   float folds = smoothstep(0.07, 0.0, fold - 0.015) * smoothstep(1.1, 1.6, lev) * smoothstep(5.5, 2.5, lev);
   K += INDI * folds * 0.30 * (0.6 + 0.4 * vnoise(q * 2.0));
+  // the skin round the eye a shade darker, laid wet so it melts out into the rest
+  K += (INDI * 0.30 + VIOL * 0.08) * smoothstep(4.8, 1.3, lev + 0.6 * (fbm3(q * 0.8) - 0.5));
+  // a few barnacles below and behind it: pale rings with a dark crescent, in a cluster
+  vec2 bq = q - vec2(2.6, -2.4);
+  if (dot(bq, bq) < 9.0){
+    vec2 bg = bq * 1.6, bi = floor(bg), bf = fract(bg) - 0.5;
+    float bh = hash12(bi + 31.0);
+    if (bh < 0.55 * smoothstep(3.0, 0.8, length(bq))){
+      vec2 bo = (hash22(bi + 2.0) - 0.5) * 0.4;
+      float br = 0.16 + 0.14 * hash12(bi + 5.0);
+      float bd = length(bf - bo) - br;
+      K *= 1.0 - 0.55 * smoothstep(0.03, -0.02, bd);
+      K += INDI * 0.9 * smoothstep(0.05, 0.0, abs(bd + 0.03)) * smoothstep(-0.1, 0.2, (bf - bo).y);
+      K += INDI * 0.6 * smoothstep(0.06, 0.0, length(bf - bo) - br * 0.3);
+    }
+  }
   // the heavy lid line and a shadow under the upper lid
   float rim = smoothstep(0.10, 0.0, abs(almond)) ;
   K += INDI * rim * 0.9;
