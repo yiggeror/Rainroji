@@ -73,6 +73,10 @@ uniform vec4 uTreeBox;       // its bounds
 uniform vec4 uHA[8];         // houses: x, base y, half width, wall height
 uniform vec4 uHB[8];         //         roof height, type (0 long side to us, 1 gable end), lit windows (bits), seed
 uniform vec4 uLan;           // the lantern: centre x, y; its light; sway
+uniform vec4 uFig[3];        // people going home: x, foot y, walk phase (sign: which way), their lantern lit
+uniform vec4 uDog;           // the dog: x, foot y, trot phase (sign: which way), shown
+uniform vec4 uCrow;          // the crow: x, y, wing phase, shown
+uniform vec4 uEave[8];       // a paper lantern under each house's eaves: lit (0 … 1), -, -, -
 out vec4 o;
 
 vec3 ink;                    // coverage of the key (black) block, the indigo block's strength, the vermilion block
@@ -343,6 +347,65 @@ void main(){
     lay(fill(dDr) * step(abs(q.x), hw + 0.006), vec3(0.0, 0.12, 0.0));
   }
 
+  // ---------------- under each house's eaves, a little paper lantern: dark until the light comes to it
+  for (int i = 0; i < 8; i++){
+    vec4 H = uHA[i], HB = uHB[i];
+    if (H.z <= 0.0) continue;
+    float sc = H.w / 0.034;
+    vec2 lc = P - (H.xy + vec2((H.z + H.z * 0.20 * 0.55) * (hash11(HB.w * 3.3) < 0.5 ? -1.0 : 1.0), H.w - 0.0150 * sc));
+    if (abs(lc.x) > 0.012 || abs(lc.y) > 0.02) continue;
+    float on = uEave[i].x;
+    lc.x -= 0.0010 * sin(t * 1.3 + HB.w) * (lc.y + 0.008) / 0.01;
+    float string_ = fill(max(abs(lc.x) - 0.00035, max(lc.y - 0.0085, -lc.y)));
+    float body = length(lc * vec2(1.0, 0.82)) - 0.0034;
+    float caps = fill(sdBox(lc - vec2(0.0, 0.0040), vec2(0.0015, 0.0006))) + fill(sdBox(lc + vec2(0.0, 0.0040), vec2(0.0013, 0.0006)));
+    lay(string_, vec3(1.0, 0.6, 0.0));
+    lay(fill(body), vec3(0.0, 0.0, mix(0.35, 1.0, on)));               // unlit, the paper is only a ghost of red
+    lay(fill(abs(body) - 0.00045), vec3(1.0, 0.0, 0.0));
+    lay(sat(caps), vec3(1.0, 0.5, 0.0));
+    lay(fill(length(lc * vec2(1.4, 1.0)) - 0.0013 * on), vec3(0.0, 0.0, 0.0));   // lit: a white heart of flame
+    lay(fill(abs(fract(atan(lc.y, lc.x) / 6.2832 * 6.0) - 0.5) * length(lc) * 6.0 - 0.0004) * step(length(lc), 0.0034) * step(0.0012, length(lc)) * on, vec3(0.0, 0.0, 0.55));
+  }
+
+  // ---------------- people going home along the bank, each with a paper lantern on a pole; the coat flares, the legs scissor
+  for (int i = 0; i < 3; i++){
+    vec4 F = uFig[i];
+    if (F.x < -0.5) continue;
+    vec2 q = P - F.xy;
+    if (abs(q.x) > 0.026 || q.y < -0.004 || q.y > 0.034) continue;
+    float ph = abs(F.z); q.x *= F.z < 0.0 ? -1.0 : 1.0;
+    float bob = 0.00055 * abs(sin(ph));
+    float coat = sdTrap(q - vec2(0.0, 0.0098 + bob), 0.0058, 0.0033, 0.0068);
+    float head = length(q - vec2(0.0006, 0.0190 + bob)) - 0.0023;
+    vec2 hq = q - vec2(0.0006, 0.0205 + bob);
+    float hat = max(abs(hq.x) * 0.42 + hq.y - 0.0017, -hq.y);
+    float lx = 0.0021 * sin(ph);
+    float legs = min(sdSeg(q, vec2(-0.0011, 0.0034 + bob), vec2(-0.0011 + lx, 0.0)), sdSeg(q, vec2(0.0011, 0.0034 + bob), vec2(0.0011 - lx, 0.0))) - 0.00075;
+    float pole = sdSeg(q, vec2(0.0028, 0.0125 + bob), vec2(0.0112, 0.0188 + bob)) - 0.0004;
+    vec2 lc = q - vec2(0.0115, 0.0145 + bob + 0.0005 * sin(ph * 2.0));
+    float lan = length(lc * vec2(1.0, 0.8)) - 0.0025;
+    float cord = sdSeg(q, vec2(0.0112, 0.0188 + bob), vec2(0.0115, 0.0175 + bob + 0.0005 * sin(ph * 2.0))) - 0.0003;
+    lay(fill(min(min(coat, head), min(min(hat, legs), min(pole, cord)))), vec3(1.0, 0.75, 0.0));
+    lay(fill(abs(coat + 0.0012) - 0.00035) * step(0.004, q.y) * step(q.y, 0.014), vec3(0.0, 0.75, 0.0));   // a padded hem, cut
+    lay(fill(lan), vec3(0.0, 0.0, 1.0));
+    lay(fill(abs(lan) - 0.0004), vec3(1.0, 0.0, 0.0));
+    lay(fill(length(lc * vec2(1.4, 1.0)) - 0.0011 * F.w), vec3(0.0, 0.0, 0.0));
+  }
+  // ---------------- the ice fisherman by the hole, hunched on his stool, his line down into the black water
+  {
+    vec2 q = P - (HOLE + vec2(0.072, -0.004));
+    if (abs(q.x) < 0.03 && q.y > -0.006 && q.y < 0.03){
+      float b = 0.0003 * sin(t * 0.8);
+      float body = length((q - vec2(0.0, 0.0085 + b)) / vec2(0.0062, 0.0075)) - 1.0;
+      float head = length(q - vec2(-0.0032, 0.0168 + b)) - 0.0024;
+      vec2 hq = q - vec2(-0.0032, 0.0180 + b);
+      float hat = max(abs(hq.x) * 0.40 + hq.y - 0.0016, -hq.y);
+      float stool = sdBox(q - vec2(0.0012, 0.0012), vec2(0.0032, 0.0012));
+      float rod = sdSeg(q, vec2(-0.0050, 0.0110 + b), vec2(-0.0220, 0.0190 + b)) - 0.00035;
+      float line_ = sdSeg(q, vec2(-0.0220, 0.0190 + b), vec2(-0.0235, -0.0030)) - 0.00018;
+      lay(fill(min(min(body * 0.006, head), min(hat, min(stool, min(rod, line_))))), vec3(1.0, 0.7, 0.0));
+    }
+  }
   // ---------------- the far bank: a lip of snow, the dark face under it
   float bF = bankFar(P.x);
   {
@@ -620,6 +683,42 @@ void main(){
     lay(tas, vec3(lines(q.x, 1.0, q.y, 0.0012, 0.55, 123.0), 0.0, 1.0));
   }
 
+  // ---------------- a dog trotting along the near bank, its tail up
+  if (uDog.w > 0.0){
+    vec2 q = P - uDog.xy;
+    if (abs(q.x) < 0.03 && q.y > -0.004 && q.y < 0.024){
+      float ph = abs(uDog.z); q.x *= uDog.z < 0.0 ? -1.0 : 1.0;
+      float bob = 0.0005 * abs(sin(ph * 2.0));
+      float body = length((q - vec2(0.0, 0.0080 + bob)) / vec2(0.0085, 0.0034)) - 1.0;
+      float neck = sdSeg(q, vec2(0.0060, 0.0090 + bob), vec2(0.0095, 0.0130 + bob)) - 0.0018;
+      float head = length((q - vec2(0.0110, 0.0135 + bob)) / vec2(0.0030, 0.0021)) - 1.0;
+      float ear = max(abs(q.x - 0.0102) - 0.0008 + (q.y - 0.0150 - bob) * 0.3, max(0.0150 + bob - q.y, q.y - 0.0172 - bob));
+      float tail = sdSeg(q, vec2(-0.0080, 0.0095 + bob), vec2(-0.0110, 0.0150 + bob + 0.001 * sin(ph * 3.0))) - 0.0007;
+      float a = 0.0018 * sin(ph);
+      float legs = min(min(sdSeg(q, vec2(0.0055, 0.0060), vec2(0.0055 + a, 0.0)), sdSeg(q, vec2(0.0042, 0.0060), vec2(0.0042 - a, 0.0))),
+                       min(sdSeg(q, vec2(-0.0055, 0.0060), vec2(-0.0055 - a, 0.0)), sdSeg(q, vec2(-0.0068, 0.0060), vec2(-0.0068 + a, 0.0)))) - 0.0007;
+      float d = min(min(body * 0.003, neck), min(min(head * 0.002, ear), min(tail, legs)));
+      lay(fill(d), vec3(1.0, 0.7, 0.0));
+    }
+  }
+  // ---------------- a crow going over, black against the snow of the peaks (on the black sky only its edge shows)
+  if (uCrow.w > 0.0){
+    vec2 q = P - uCrow.xy;
+    if (length(q) < 0.03){
+      float f = sin(uCrow.z);
+      vec2 w = vec2(abs(q.x), q.y);
+      float wing = sdSeg(w, vec2(0.0010, 0.0), vec2(0.0120, 0.0045 * f + 0.0010)) - mix(0.0016, 0.0005, sat(w.x / 0.012));
+      float wing2 = sdSeg(w, vec2(0.0120, 0.0045 * f + 0.0010), vec2(0.0175, 0.0060 * f - 0.0010)) - 0.0005;
+      float body = length(q / vec2(0.0042, 0.0016)) - 1.0;
+      float d = min(min(wing, wing2), body * 0.0016);
+      float bg = ink.x;
+      lay(fill(d), vec3(1.0, 0.8, 0.0));
+      // against the black sky the carver cuts a thin white line round it, so it shows
+      float rim = fill(abs(d - 0.0008) - 0.00035) * step(0.5, bg);
+      ink.x = mix(ink.x, 0.0, rim); ink.y *= 1.0 - rim;
+    }
+  }
+
   // ---------------- snow falling: flakes carved out of the dark (on the white snow they vanish, as in a print)
   {
     float st = t;
@@ -833,6 +932,7 @@ function makeSeal() {
 }
 
 YL.makeSeal = makeSeal;                 // (the ink painting stamps the same seal)
+function hashJS(p) { p = (p * 0.1031) % 1; if (p < 0) p += 1; p *= p + 33.33; p *= p + p; return p % 1; }
 const FPS = 8;                          // the print's own frame rate: the world is re-printed eight times a second
 const CARVE_W = 1536, CARVE_H = 960;    // the knife's mask, over the whole 1.6 × 1 sheet
 const HOLE = [0.950, 0.285];
@@ -926,6 +1026,7 @@ W.woodcut = {
     const pan = still ? 0 : 0.016 * Math.sin(t * 0.05);
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
     const v = [0.80 - 0.06 * narrow + pan, 0.5, s];
+    if (this.panX !== undefined) { v[0] = this.panX; v[2] = s * 0.84; v[1] = 0.50 - 0.01; }
     // the way out: the eye goes into the lantern until its lit paper is all there is
     const z = this.zoomIn || 0;
     if (z > 0) {
@@ -974,7 +1075,19 @@ W.woodcut = {
     const H = this.hero, L = this.lantern(this.t), core = [L[0], L[1] - 0.003];
     const breath = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in every world
     let moving = false;
-    if (H.mode === 'fall') {
+    if (H.mode === 'hop') {
+      moving = true;
+      this.lanLight += (0.35 - this.lanLight) * Math.min(1, dt * 3);
+      if (this.hops && this.hops.length) {
+        const i = this.hops[0], e = this.eavePos(i), tgt = [e[0], e[1] + 0.002];
+        if (this.steer(tgt, 0.62, dt, 5) < 0.007) {
+          this.hops.shift();
+          (this.eaveOn = this.eaveOn || [])[i] = 1;
+          if (!this.lit[i]) { this.lit[i] = this.litBase[i] || 1; }
+          this.hopNote && this.hopNote(this.hops.length);
+        }
+      } else if (this.steer(core, 0.62, dt, 5) < 0.012) { H.mode = 'enter'; H.k = 0.4; }
+    } else if (H.mode === 'fall') {
       // drifting down like the snow, but it knows where it's going
       const d = this.steer([core[0] + 0.02 * Math.sin(this.t * 1.3), core[1] + 0.012], 0.085 * (this.pace || 1), dt, 1.2);
       moving = true;
@@ -1184,6 +1297,17 @@ W.woodcut = {
     n.start(t0, Math.random()); n.stop(t0 + 0.4);
   },
   // 一粒光的动机，这里是木头的声音：三声敲在木琴的音板上，短而温暖
+  // a lantern catching: one wooden note, rising a step with each lantern (the pentatonic A C# E F# A)
+  hopNote(left) {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t = ctx.currentTime + 0.02, f = [1760, 1479.98, 1318.5, 1108.7][Math.min(left, 3)];
+    const g = ctx.createGain(); g.gain.value = 0.05; g.connect(S.bus); g.connect(S.wet);
+    [[1, 0.9, 0.5], [3.93, 0.25, 0.07]].forEach(([r, a, dec]) => {
+      const o = ctx.createOscillator(); o.frequency.value = f * r;
+      const e = ctx.createGain(); e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(a, t + 0.003); e.gain.exponentialRampToValueAtTime(1e-4, t + dec);
+      o.connect(e); e.connect(g); o.start(t); o.stop(t + dec + 0.05);
+    });
+  },
   motif(rate = 1, gain = 0.07) {
     if (!this.snd) return;
     const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.03;
@@ -1214,8 +1338,40 @@ W.woodcut = {
     if ((S.nextBell -= dt) <= 0) { this.bell(); S.nextBell = 24 + Math.random() * 14; }
     if ((S.nextSlide -= dt) <= 0) { this.slide(); S.nextSlide = 18 + Math.random() * 20; }
   },
+  /* ---- the village's evening (in print units; stepped at the print's own rate when drawn) */
+  life(t) {
+    const bankY = (x) => 0.428 + 0.003 * Math.sin(x * 4.0 + 1.0);
+    const figs = [[0.42, 0.020, 1], [1.46, 0.016, -1], [0.78, 0.013, 1]].map(([x0, v, d], i) => {
+      const x = x0 + d * v * t, ph = (v * t) / 0.0042 * Math.PI;
+      return [x, bankY(x), d * (ph + 0.3 + i), 1];
+    });
+    const dx = 0.22 + 0.045 * t, dog = [dx, 0.152 + 0.010 * Math.sin(dx * 3.0), (0.045 * t / 0.0050) * Math.PI + 0.2, dx < 1.7 ? 1 : 0];
+    const ct = t - (this.crowAt ?? 3.5), cu = Math.min(1, Math.max(0, ct / 4.5));
+    const crow = [0.56 + 0.72 * cu, 0.60 + 0.20 * cu + 0.03 * Math.sin(cu * 6.0), ct * 13.0, ct > 0 && ct < 4.5 ? 1 : 0];
+    return { figs, dog, crow };
+  },
+  // where the lantern under house i's eaves hangs (as drawn in the scene)
+  eavePos(i) {
+    const h = this.houses[i], sc = h[3] / 0.034, side = hashJS(h[7] * 3.3) < 0.5 ? -1 : 1;
+    return [h[0] + side * (h[2] + h[2] * 0.20 * 0.55), h[1] + h[3] - 0.0150 * sc];
+  },
+  // the way out of the lantern that wakes the village: from eave to eave it goes, lighting each little lantern
+  lightVillage() {
+    if (this.villageDone) return; this.villageDone = true;
+    const L = this.lantern(this.t);
+    this.hops = this.houses.map((h, i) => i).sort((a, b) => Math.abs(this.eavePos(a)[0] - L[0]) - Math.abs(this.eavePos(b)[0] - L[0])).slice(0, 4);
+    this.hero.mode = 'hop'; this.hero.v = [0, 0];
+  },
   update(dt) {
     this.t += dt;
+    if (!this.eave) this.eave = new Float32Array(32);
+    for (let i = 0; i < 8; i++) if (this.eaveOn && this.eaveOn[i]) this.eave[i * 4] = Math.min(1, this.eave[i * 4] + dt / 0.35);
+    // the eye follows the light across the print (the film): it never jumps; it leans after it
+    if (this.panX !== undefined) {
+      const tgt = Math.max(0.68, Math.min(1.12, this.hero.p[0] * 0.65 + 0.90 * 0.35));
+      this.panX += (tgt - this.panX) * (1 - Math.exp(-dt * 0.9));
+      this.whole = true;
+    }
     if (this.stroke && !YL.ptrDown) this.endStroke();
     if (this.hero.path && !this.hero.pathL) this.hero.pathL = this.hero.path.L || pathLength(this.hero.path);
     if (this.hero.mode === 'out' && this.hero.path && this.hero.path.L) this.hero.pathL = this.hero.path.L;
@@ -1235,6 +1391,10 @@ W.woodcut = {
     this.lit.forEach((v, i) => { this.hB[i * 4 + 2] = v; });
     gl.uniform4fv(pS.u.uHA, this.hA); gl.uniform4fv(pS.u.uHB, this.hB);
     U(pS, 'uLan', this.lantern(tq));
+    const lf = this.life(tq), fg = new Float32Array(12);
+    lf.figs.forEach((q, i) => fg.set(q, i * 4));
+    gl.uniform4fv(pS.u.uFig, fg); U(pS, 'uDog', lf.dog); U(pS, 'uCrow', lf.crow);
+    gl.uniform4fv(pS.u.uEave, this.eave || new Float32Array(32));
     YL.drawFull();
     gl.disable(gl.SCISSOR_TEST);
   },
@@ -1273,7 +1433,7 @@ W.woodcut = {
     const sz = Math.min(0.075 * h, 0.09 * w);
     U(pP, 'uSealBox', [1 - (sz + 0.03 * h) / w, 0.035, sz / w, sz / h]);
     U(pP, 'uShow', this.show);
-    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
+    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' || H.mode === 'hop' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
     U(pP, 'uHero', [H.p[0], H.p[1], H.size * br * (H.mode === 'sink' ? 1 - 0.7 * H.k : 1), vis]);
     const tr = new Float32Array(64).fill(-1);

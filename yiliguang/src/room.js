@@ -213,6 +213,7 @@ uniform vec2 uJitter;                 // sub-pixel offset (Halton), accumulated 
 uniform vec4 uClock;                  // stopped wall clock: hand angles (rad, clockwise from 12)
 uniform vec4 uVar;                    // per-visit variation: thermos paint, calendar print, …
 uniform float uSteam;                 // tea warmth
+uniform vec4 uLife;                   // the room stirring: how hard the light has just brushed the spider plant, the curtain's draught
 uniform float uSeason;                // 0 spring, 1 summer, 2 autumn, 3 winter: what stands on the sill and the desk
 layout(location = 0) out vec4 oCol;   // rgb: room radiance (premultiplied by 1-coverage), a: glass coverage
 layout(location = 1) out vec4 oAux;   // r: view depth
@@ -416,6 +417,7 @@ vec2 sdPlant(vec3 p){
       float fi = float(i);
       float h1 = hash11(fi * 7.31 + 1.1), h2 = hash11(fi * 3.17 + 5.2), h3 = hash11(fi * 11.7 + 2.9);
       float phi = -0.55 + fract(fi * 0.618 + 0.3 * h1) * 4.25;  // golden-ratio spread round the crown, never into the glass
+      phi += uLife.x * 0.10 * sin(uTime * 5.3 + fi * 1.9) * (0.6 + 0.4 * h2);
       float sz = sin(phi);
       vec3 D = vec3(cos(phi), 0.0, sz < 0.0 ? sz * 0.3 : sz);
       vec3 W = normalize(vec3(-D.z, 0.0, D.x));                 // the ribbon's width lies across the arch
@@ -424,7 +426,7 @@ vec2 sdPlant(vec3 p){
       // a leaf follows a fountain-like arc (up·L·(a·s − b·s²) + D·L·s), curling a little sideways; 7 short segments
       // leaves reaching into the room droop over the sill's edge; sideways ones stay above the sill
       float A = mix(2.0 + 0.8 * h3, 4.5, young), B = mix(2.3 + (0.6 + 1.0 * h1) * (0.4 + 0.4 * max(D.z, 0.0)), 3.0, young);
-      vec3 C = W * (h3 - 0.5) * 0.45;
+      vec3 C = W * (h3 - 0.5 + uLife.x * 0.25 * sin(uTime * 4.1 + fi * 2.7)) * 0.45;
       // cheap reject: this leaf lies inside a sphere of radius ≈ 0.75 L around its middle
       vec3 mid = vec3(0.0, 0.072, 0.0) + D * 0.5 * L + vec3(0.0, L * (A * 0.5 - B * 0.25) * 0.7, 0.0);
       if (length(q - mid) - 0.8 * L > dl) continue;
@@ -568,8 +570,8 @@ vec2 sdWiring(vec3 p){
 float curtainZ(vec3 p){
   float bunch = smoothstep(1.15, 0.78, p.y);
   float a = 0.021 + 0.011 * bunch;
-  float ph = p.x * 57.0 + 1.3 * sin(p.x * 19.0 + p.y * 1.6) + 0.5 * sin(p.y * 2.9);
-  return CURT_Z + a * sin(ph);
+  float ph = p.x * 57.0 + 1.3 * sin(p.x * 19.0 + p.y * 1.6) + 0.5 * sin(p.y * 2.9) + uLife.y * 0.35 * sin(uTime * 0.55 + p.y * 1.3);
+  return CURT_Z + a * sin(ph) + uLife.y * 0.006 * sin(uTime * 0.7 - p.y * 2.0 + p.x * 3.0) * smoothstep(1.0, 2.2, p.y);
 }
 vec2 sdCurtain(vec3 p){
   float bound = sdBox(p - vec3((CURT_X0 + CURT_X1) * 0.5, 1.8, CURT_Z), vec3((CURT_X1 - CURT_X0) * 0.5 + 0.03, 1.05, 0.065));
@@ -1504,12 +1506,15 @@ vec4 steamVol(vec3 ro, vec3 rd, float tEnd){
   vec3 Ewin = uSkyL * 1.1 + uCityL * 0.6;
   for (int i = 0; i < 12; i++){
     vec3 p = ro + rd * (t0 + (float(i) + jit) * dt);
+    vec3 hdl = p - uHeroP; float hn = exp(-dot(hdl, hdl) / 0.0030);
+    vec3 pq = p - normalize(hdl + vec3(1e-4)) * 0.035 * hn;          // (sample where the steam came from: it is pushed aside)
+    p = vec3(pq.x, p.y, pq.z);
     float h = (p.y - c.y) / HMAX;
     vec2 ctr = c.xz + vec2(0.03 * h * sin(h * 4.0 + uTime * 0.35) + 0.035 * h * h, 0.018 * h * cos(h * 5.0 - uTime * 0.27));
     vec2 dd = p.xz - ctr;
     float rr = length(dd) / (0.014 + 0.065 * h);
     float ang = atan(dd.y, dd.x);
-    float f1 = vnoise(vec2(ang * 1.6 + h * 6.0 + 7.0, h * 9.0 - uTime * 0.7));
+    float f1 = vnoise(vec2(ang * 1.6 + h * 6.0 + 7.0 + 3.0 * hn, h * 9.0 - uTime * 0.7));
     float f2 = vnoise(vec2(ang * 3.2 - h * 4.0, h * 21.0 - uTime * 1.3 + 3.0));
     float wisp = smoothstep(0.42, 0.85, f1 * 0.65 + f2 * 0.45);
     float sigma = 10.0 * uSteam * wisp * exp(-rr * rr * 1.6) * smoothstep(0.0, 0.07, h) * (1.0 - h) * (1.0 - h);
@@ -4153,7 +4158,8 @@ function render(t, dt, rt) {
   const Lt = lightUniforms(rt, dt);
   streetUpdate(Lt);
   // 光圈：虚拟镜头光圈半径 30mm（大光圈，为得到明显的焦外光斑；同一光圈也决定室内景深），对焦在玻璃上。背景（无穷远）弥散圆角半径 = A / z_f
-  R.aperture = VIEW.out ? 0.014 : 0.030;
+  // (stopped down on a long lens: the blur stays in proportion to the frame instead of swallowing it)
+  R.aperture = (VIEW.out ? 0.014 : 0.030) * clamp(CAM.tan[1] / Math.tan(15 * Math.PI / 180), 0.12, 1);
   R.coc = R.aperture / CAM.focus;
   const glassEye = [S.WIN_CX, S.WIN_CY, S.GLASS_Z];
 
@@ -4212,6 +4218,12 @@ function render(t, dt, rt) {
   camUniforms(PR); lightU(PR, Lt);
   U(PR, 'uRes', [T.room.w, T.room.h]); U(PR, 'uTime', t % 900);
   const ct = WORLD.tod;
+  {
+    const pp = [0.30, S.WIN_Y0 + 0.12, 0.0], hd = HERO.on ? Math.hypot(HERO.p[0] - pp[0], HERO.p[1] - pp[1], HERO.p[2] - pp[2]) : 9;
+    const kick = Math.exp(-hd * hd / 0.012), now = realT;
+    R.plantKick = Math.max(kick, (R.plantKick || 0) * Math.exp(-Math.max(0, now - (R.plantT ?? now)) / 1.6)); R.plantT = now;
+    U(PR, 'uLife', [R.plantKick, 1.0, 0, 0]);
+  }
   U(PR, 'uClock', [(ct % 12) / 12 * 2 * Math.PI, (ct % 1) * 2 * Math.PI, ((ct * 60) % 1) * 2 * Math.PI, 0]); U(PR, 'uVar', VARY.v); U(PR, 'uSteam', 1.0); U(PR, 'uSeason', WORLD.season);
   U(PR, 'uJitter', R.jitter);
   if (VIEW.out) {
@@ -4502,7 +4514,7 @@ const UI = (() => {
    ========================================================================== */
 Object.assign(AUDIO, (() => {
   let ctx = null, master, comp, wet, film, roomVol, enabled = true, ready = false;
-  let bedGain, bedLP, patGain, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, cars = [], lastRub = 0, birdT = 2;
+  let bedGain, bedLP, patGain, patLP, roomGain, windGain, windBP, whistle, tickBuf = [], dripBuf = [], rubBuf = [], clickBuf, clockBuf, cars = [], lastRub = 0, birdT = 2, clockT = 0.3, clockK = 0;
   let gust = 0, gustT = 0, lastTick = 0, ticksThisSec = 0, secT = 0, dripT = 3;
   const rand = Math.random;
   // (recording: the offline context is suspended between frames, which is when the film schedules its sounds)
@@ -4597,7 +4609,7 @@ Object.assign(AUDIO, (() => {
     // patter on the sill / awning outside
     const pat = patterBuffer(9.0, 60);
     patGain = ctx.createGain(); patGain.gain.value = 0;
-    const pLP = ctx.createBiquadFilter(); pLP.type = 'lowpass'; pLP.frequency.value = 4200;
+    const pLP = patLP = ctx.createBiquadFilter(); pLP.type = 'lowpass'; pLP.frequency.value = 4200;
     loop(pat, 1.0, pLP); loop(pat, 0.913, pLP);
     pLP.connect(patGain); patGain.connect(master);
     // wind round the building: band-passed noise swept by the gusts, and a faint whistle in the window's gaps
@@ -4614,6 +4626,9 @@ Object.assign(AUDIO, (() => {
     for (let i = 0; i < 6; i++) tickBuf.push(tickBuffer());
     for (let i = 0; i < 5; i++) dripBuf.push(dripBuffer());
     clickBuf = clickBuffer();
+    // the wall clock: a small dry tick, the escapement's two sides a little different
+    clockBuf = [0, 1].map(k => { const sr = ctx.sampleRate, n = Math.floor(sr * 0.03), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) { const t = i / sr; d[i] = (Math.sin(2 * Math.PI * (k ? 3100 : 3600) * t) * 0.6 + (rand() * 2 - 1) * 0.4) * Math.exp(-t / 0.0035); } return b; });
     for (let k = 0; k < 3; k++) {                                   // skin on wet glass: short soft noise grains
       const sr = ctx.sampleRate, n = Math.floor(sr * 0.06), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
       for (let i = 0; i < n; i++) d[i] = (rand() * 2 - 1) * Math.sin(Math.PI * i / n) * 0.3;
@@ -4749,13 +4764,20 @@ Object.assign(AUDIO, (() => {
       // outside there is no glass in between: the rain is louder and brighter, the patter is the pavement and the puddles,
       // the room's hum is gone and the drops on the window are far away
       const out = VIEW.mix;
-      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * ts * (snow ? 0.22 : 1) * (0.8 + 0.25 * Math.sqrt(SE.rainR)) * (1 + 0.6 * out);
+      // indoors the glass takes most of it: the wash of the rain comes through soft and dark (≈ −10 dB, the highs gone);
+      // what stays clear are the separate drops ticking on the pane itself, close by (see below)
+      const inside = 1 - out;
+      const bed = 0.4 * Math.pow(I, 0.8) * (1 + 0.35 * gust) * ts * (snow ? 0.22 : 1) * (0.8 + 0.25 * Math.sqrt(SE.rainR)) * (1 + 0.6 * out) * (1 - 0.68 * inside);
       bedGain.gain.setTargetAtTime(bed, now, 0.8);
-      bedLP.frequency.setTargetAtTime((2500 + 1300 * I + 600 * gust) * (snow ? 0.4 : 1) * (1 + 1.6 * out), now, 0.8);
-      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust) * (snow ? 0.08 : 1) * (1 + 1.3 * out), now, 0.6);
-      roomGain.gain.setTargetAtTime(0.05 * (1 - out), now, 0.8);
+      bedLP.frequency.setTargetAtTime((2500 + 1300 * I + 600 * gust) * (snow ? 0.4 : 1) * (1 + 1.6 * out) * (1 - 0.5 * inside), now, 0.8);
+      patGain.gain.setTargetAtTime(0.22 * Math.pow(I, 1.2) * (1 + 0.5 * gust) * (snow ? 0.08 : 1) * (1 + 1.3 * out) * (1 - 0.6 * inside), now, 0.6);
+      patLP.frequency.setTargetAtTime(4200 - 2000 * inside, now, 0.6);
+      roomGain.gain.setTargetAtTime(0.03 * inside, now, 0.8);
       const wn = WORLD.windNow;
-      windGain.gain.setTargetAtTime(0.16 * Math.pow(wn, 1.4) * ts, now, 0.7);
+      windGain.gain.setTargetAtTime(0.16 * Math.pow(wn, 1.4) * ts * (1 - 0.6 * inside), now, 0.7);
+      // the wall clock, faint, once a second
+      clockT -= dt;
+      if (clockT <= 0) { clockT += 1.0; clockK ^= 1; if (inside > 0.5) oneShot(clockBuf[clockK], 0.035 * inside, -0.55, 1, 0.15, 7000); }
       windBP.frequency.setTargetAtTime(260 + 520 * wn + 120 * gust, now, 1.0);
       whistle.frequency.setTargetAtTime(760 + 160 * wn + 60 * gust, now, 1.5);
       // birds at first light in spring and summer, fewer in heavy rain; a stray sparrow during the day
@@ -4783,7 +4805,7 @@ Object.assign(AUDIO, (() => {
         const dx = c.x, dz = c.z, d = Math.hypot(dx, dz, S.GROUND_Y - 1.2);
         const vr = c.dir * c.v * dx / d;                       // radial velocity (+ = receding)
         const dop = 343 / (343 + vr);
-        const L = (c.bus ? 0.8 : 0.5) * c.I / (1 + (d / 11) ** 2) * smooth(0, 4, c.age) * Math.min(1, TIME.scale + 0.2);
+        const L = (c.bus ? 0.8 : 0.5) * c.I / (1 + (d / 11) ** 2) * smooth(0, 4, c.age) * Math.min(1, TIME.scale + 0.2) * (1 - 0.6 * (1 - VIEW.mix));
         ch.g.gain.setTargetAtTime(L, now, 0.15);
         if (ch.pan) ch.pan.pan.setTargetAtTime(clamp(dx / (Math.abs(dx) + 12), -0.95, 0.95), now, 0.15);
         ch.s1.playbackRate.setTargetAtTime(dop * TIME.scale ** 0.2, now, 0.2);

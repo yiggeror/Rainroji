@@ -17,6 +17,7 @@ const H = YL.hero = {
   // position along the route at time t (s): eased travel between points, gentle hovering while dwelling
   sample(t) {
     const R = H.route; if (!R) return YL.HERO.p;
+    if (R.flow) return H.flowAt(t);
     let k = 1, tt = t;
     for (; k < R.length; k++) {
       const w = R[k];
@@ -32,6 +33,22 @@ const H = YL.hero = {
     // an arc: it does not travel in straight lines, it bobs up a little on the way
     const lift = Math.sin(Math.PI * u) * Math.min(0.06, 0.25 * Math.hypot(p2[0] - p1[0], p2[2] - p1[2]));
     return [cr(0), cr(1) + lift, cr(2)];
+  },
+  // a flowing route (the film): one curve through all the points, never stopping on the way — it gathers speed as it
+  // leaves the first point and settles only at the last; between, each leg takes its own time
+  flowAt(t) {
+    const R = H.route, legs = R.slice(1).map(w => w.travel), T = legs.reduce((a, b) => a + b, 0), a = 0.6, b = 0.9;
+    // time warp: speed ramps up over the first a seconds and down over the last b, constant between
+    const v = 1 / (1 - a / 2 / T - b / 2 / T);
+    const tc = clamp(t, 0, T);
+    let s = tc < a ? v * tc * tc / (2 * a) : tc > T - b ? v * (T - a / 2 - b / 2) - v * (T - tc) * (T - tc) / (2 * b) : v * (tc - a / 2);
+    s = clamp(s, 0, T);
+    let k = 0; while (k < legs.length - 1 && s > legs[k]) { s -= legs[k]; k++; }
+    const u = clamp(s / legs[k], 0, 1), u2 = u * u, u3 = u2 * u;
+    const p0 = R[Math.max(k - 1, 0)].p, p1 = R[k].p, p2 = R[k + 1].p, p3 = R[Math.min(k + 2, R.length - 1)].p;
+    const cr = i => 0.5 * ((2 * p1[i]) + (-p0[i] + p2[i]) * u + (2 * p0[i] - 5 * p1[i] + 4 * p2[i] - p3[i]) * u2 + (-p0[i] + 3 * p1[i] - 3 * p2[i] + p3[i]) * u3);
+    const p = [cr(0), cr(1), cr(2)];
+    return t > T ? H.hover(p, t - T, R.length - 1) : p;
   },
   hover(p, tt, k) {
     const a = tt * 1.7 + k * 1.3, r = 0.012 * smooth(0, 0.8, tt);

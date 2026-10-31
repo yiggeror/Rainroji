@@ -61,15 +61,45 @@ let T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM
 /* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
    深海里小鱼一齐受惊，然后鲸来了。 */
 const FILM = QS.has('film');
-const FILM_ROUTE = [
+// in the film it never stops on the way: one flowing curve from the bulb, through the tea's steam, round the spider
+// plant's leaves, up to a drop on the glass
+const FILM_ROUTE = Object.assign([
   { p: S.BULB },
-  { p: [-0.50, 0.985, 0.27], travel: 0.6, dwell: 0.4 },
-  { p: [-0.17, 0.905, 0.19], travel: 1.5, dwell: 0.8 },     // the tea's steam
-  { p: [0.26, 1.07, 0.04], travel: 2.0, dwell: 0.7 },       // the spider plant
-  { p: [0.20, 1.42, -0.098], travel: 1.8, dwell: 0 },       // the glass
+  { p: [-0.50, 0.985, 0.27], travel: 0.6 },                 // out of the shade's open bottom
+  { p: [-0.17, 0.925, 0.19], travel: 1.4 },                 // through the tea's steam
+  { p: [0.03, 1.00, 0.15], travel: 0.8 },                   // over the desk
+  { p: [0.25, 1.09, 0.05], travel: 1.0 },                   // in among the spider plant's leaves
+  { p: [0.25, 1.30, -0.04], travel: 0.9 },                  // up the glass
+  { p: [0.20, 1.42, -0.098], travel: 0.7 },                 // onto a drop
+], { flow: true });
+/* the film's camera in the room: one continuous move, keyed to where the light is (te: seconds since it jumped out;
+   the film opens 3.4 s before that). It never cuts and never blends two shots: positions and aims run along
+   Catmull-Rom curves through these keys, the lens eases between its keys, and the focus is always on the light. */
+const ROOM_CAM = [
+  { t: -3.4, pos: [0.30, 1.27, 1.80], tgt: [-0.16, 1.33, 0.00], vfov: 42 },   // the room, the lamp lit
+  { t: 0.0, pos: [0.18, 1.24, 1.42], tgt: [-0.40, 1.14, 0.12], vfov: 38 },    // drawing in on the lamp as the light jumps out
+  { t: 1.6, pos: [0.08, 1.16, 1.08], tgt: [-0.20, 0.98, 0.15], vfov: 37 },    // down with it over the tea
+  { t: 3.3, pos: [0.33, 1.21, 0.94], tgt: [0.17, 1.10, 0.02], vfov: 33 },     // round to the spider plant
+  { t: 5.4, pos: [0.23, 1.40, 0.55], tgt: [0.20, 1.42, -0.12], vfov: 28 },    // the window
+  { t: 7.0, pos: [0.205, 1.42, 0.30], tgt: [0.20, 1.42, -0.12], vfov: 16 },   // in on the drop
+  { t: 9.0, pos: [0.199, 1.42, 0.14], tgt: [0.20, 1.42, -0.12], vfov: 5 },    // into it: a long lens, not a crash into the light
 ];
+function camPath(keys, t) {
+  t = clamp(t, keys[0].t, keys[keys.length - 1].t);
+  let k = 0; while (k < keys.length - 2 && t > keys[k + 1].t) k++;
+  const A = keys[Math.max(k - 1, 0)], B = keys[k], C = keys[k + 1], E = keys[Math.min(k + 2, keys.length - 1)];
+  const u = (t - B.t) / (C.t - B.t), u2 = u * u, u3 = u2 * u;
+  // Catmull-Rom with the neighbours' tangents scaled to this segment's duration (smooth speed across keys)
+  const sc1 = (C.t - B.t) / Math.max(C.t - A.t, 1e-6) * 2, sc2 = (C.t - B.t) / Math.max(E.t - B.t, 1e-6) * 2;
+  const cr = (f) => [0, 1, 2].map(i => {
+    const m1 = (C[f][i] - A[f][i]) * 0.5 * sc1, m2 = (E[f][i] - B[f][i]) * 0.5 * sc2;
+    return (2 * u3 - 3 * u2 + 1) * B[f][i] + (u3 - 2 * u2 + u) * m1 + (-2 * u3 + 3 * u2) * C[f][i] + (u3 - u2) * m2;
+  });
+  const e = u * u * (3 - 2 * u);
+  return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
+}
 if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.4, T_DAY: 1.7, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -103,7 +133,7 @@ const D = YL.director = {
       const t = D.t + (FILM ? 6.6 : 0);
       LIGHT.dip = 0.55 * (smooth(7.4, 7.5, t) - smooth(7.6, 7.75, t)) + 0.35 * (smooth(8.3, 8.36, t) - smooth(8.45, 8.6, t));
       if (t > 10) D.escape();
-      YL.cam = null;
+      YL.cam = FILM ? D.roomCam(D.phase === 'intro' ? D.t - 3.4 : D.t) : null;      // (it may have just jumped out)
       return;
     }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
@@ -121,6 +151,7 @@ const D = YL.director = {
     if (D.phase === 'daydrops' && D.pt > T_DAY) D.go('dive');
     if (D.phase === 'dive' && D.pt > T_DIVE) { D.enterSummer(); return; }
     // ---- the shot
+    if (FILM) { YL.cam = D.roomCam(D.t); D.dayDrops(); return; }
     const aspect = YL.canvasAspect();
     const base = YL.framing(aspect), h = HERO.p;
     const follow = { pos: V.add(base.pos, V.mul(V.sub(h, base.tgt), 0.12)), tgt: base.tgt.map((v, i) => lerp(v, h[i], 0.45)), vfov: base.vfov * 0.92 };
@@ -139,6 +170,20 @@ const D = YL.director = {
     const fwd = V.norm(V.sub(tgt, pos));
     const focus = lerp(V.dot(V.sub(h, pos), fwd), (S.GLASS_Z - pos[2]) / fwd[2], ww);
     YL.cam = { pos, tgt, vfov, focus: Math.max(focus, 0.05), w: smooth(0, 2.5, D.t) };
+    D.dayDrops();
+  },
+  // the film's room camera at te (see ROOM_CAM); it leans a little toward the light while it flies, focused on it
+  roomCam(te) {
+    const c = camPath(ROOM_CAM, te), h = HERO.on ? HERO.p : S.BULB;
+    const lean = 0.30 * smooth(-0.5, 0.8, te) * (1 - smooth(4.6, 6.0, te));
+    const tgt = c.tgt.map((v, i) => lerp(v, h[i], lean));
+    const fwd = V.norm(V.sub(tgt, c.pos));
+    return { pos: c.pos, tgt, vfov: c.vfov, focus: Math.max(V.dot(V.sub(h, c.pos), fwd), 0.05), w: 1 };
+  },
+  dayDrops() {
+    const summer = YL.worlds.summer;
+    // (in the film the light sinks into its drop as the eye goes in, so its glow doesn't fill the lens)
+    if (FILM) YL.hero.glowTarget = D.phase === 'daydrops' ? 1 - 0.65 * clamp(D.pt / T_DAY, 0, 1) : D.phase === 'dive' ? 0.35 - 0.30 * clamp(D.pt / (T_DIVE * 0.6), 0, 1) : 1;
     // ---- daylight in the drops; the summer's sounds creep in under the rain
     if (D.phase === 'daydrops' || D.phase === 'dive') {
       const u = D.phase === 'daydrops' ? ease(clamp(D.pt / T_DAY, 0, 1)) : 1;
@@ -176,7 +221,7 @@ const D = YL.director = {
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
-    if (D.phase === 'summer') { if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('updraft'); } return; }
+    if (D.phase === 'summer') { if (FILM) summer.speed = 1.1; if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('updraft'); } return; }
     // the light is carried up toward the tower of cloud, further and further away; the eye follows it up
     const T = summer.tower, dir = [Math.sin(T[0]) * Math.cos(T[1]), Math.sin(T[1]), -Math.cos(T[0]) * Math.cos(T[1])];
     if (D.phase === 'updraft') {
@@ -184,16 +229,18 @@ const D = YL.director = {
       summer.lift = ease(clamp(D.pt / (T_UP * 0.8), 0, 1));
       summer.zoom = 0.35 * easeIn(u);
       const dist = 2.4 * Math.exp(u * Math.log(30 / 2.4));
-      H.fly = V.add([0, 0.85, 0], V.mul(dir, dist));
+      H.fly = V.add(summer.eyeAt(summer.t), V.mul(dir, dist));
+      summer.speed = 1.1 * (1 - smooth(0, 0.6, u));                                 // the eye slows as it turns up to follow
       if (u > 0.5 && !wood.ready) wood.init();                                   // cut the blocks while it's still bright
       if (D.pt > T_UP) D.go('cloud');
     } else {
       const u = clamp(D.pt / T_CLOUD, 0, 1);
       summer.lift = 1; summer.zoom = 0.35 + 0.6 * ease(clamp(u / 0.6, 0, 1));
-      H.fly = V.add([0, 0.85, 0], V.mul(dir, 30 + 40 * u));
+      H.fly = V.add(summer.eyeAt(summer.t), V.mul(dir, 30 + 40 * u));
+      summer.speed = 0;
       summer.vol = 1 - ease(clamp((u - 0.2) / 0.7, 0, 1));
       if (D.pt > T_CLOUD) {
-        D.go('print'); D.world = 'woodcut'; if (FILM) wood.pace = 1.7;
+        D.go('print'); D.world = 'woodcut'; if (FILM) { wood.pace = 1.7; wood.panX = 0.80; }
         const hp = D.drainHero || [0, 0.5];
         wood.show = [0, 0, 0]; wood.vol = 0;
         wood.arrive(hp[0], hp[1], YL.canvasAspect());
@@ -218,7 +265,9 @@ const D = YL.director = {
         if (h) { h.textContent = '在黑处划一刀'; h.classList.add('show'); setTimeout(() => h.classList.remove('show'), 6000); }
       }
       // nobody has cut anything: it shows how, carving a new moon into the night (in the film, as soon as it is home)
-      if (D.pt > (FILM ? 0.6 : 20) && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home') wood.carveMoon();
+      // in the film it first goes from eave to eave lighting the village's little lanterns, then carves the moon
+      if (FILM && !wood.villageDone && wood.hero.mode === 'home' && D.pt > 0.3) wood.lightVillage();
+      if (D.pt > (FILM ? 0.6 : 20) && !wood.userCut && !wood.moonDone && wood.hero.mode === 'home' && (!FILM || wood.villageDone)) wood.carveMoon();
       const done = FILM ? wood.moonDone && !wood.queue.length && wood.hero.mode === 'home' && D.pt > 5 : D.pt > T_WOOD;
       if (done && wood.hero.mode === 'home') { D.go('inlantern'); const sh = YL.worlds.shadow; if (!sh.ready) sh.init(); }
     } else if (D.phase === 'inlantern') {
