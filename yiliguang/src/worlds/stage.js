@@ -71,6 +71,9 @@ void main(){
   // outside the screen (only seen as the eye goes down): the dark of the stage
   float inside = step(abs(X.x), ${(SW / 2).toFixed(2)}) * step(abs(X.y), ${(SH / 2).toFixed(2)});
   c *= mix(0.15, 1.0, inside);
+  float lum = dot(c, vec3(0.3, 0.55, 0.15));
+  c = max(mix(vec3(lum), c, 1.22), 0.0);                       // dyed hide, lit from behind, is vivid
+  c *= mix(vec3(1.0), vec3(1.0, 0.86, 0.70), smoothstep(0.6, 1.7, r));   // warmer and deeper away from the lamp
   c = 1.0 - exp(-c * 1.1);
   c = pow(c, vec3(0.92));
   // below the waterline, near where the pearl went in, the water is no longer hide: it is the sea (alpha 0)
@@ -164,6 +167,11 @@ W.stage = {
     // clouds drifting across the top
     put('clouds', -0.75 + 0.02 * t, 0.66, 0.03, 0.00095, 0, 1000, 500, 1, 0.9);
     put('clouds', 1.05 + 0.015 * t, 0.70, 0.04, 0.00095, 0, 1000, 500, -1, 0.9);
+    // a stone bridge over the water on the right, its far end lost behind the mountains' foot
+    put('bridge', 0.95, -0.50, 0.04, 0.00080, 0, 1000, 700, 1, 0.95);
+    // reeds and a lotus at the water's edge, close to the screen
+    put('reeds', -1.35, -0.62, 0.01, 0.00070, 0.03 * Math.sin(t * 0.9), 500, 990, 1, 1);
+    put('lotus', 1.42, -0.58, 0.01, 0.00062, 0, 500, 760, 1, 1);
     // the pagoda on its hill and a willow
     put('pagoda', -1.22, -0.18, 0.05, 0.0011, 0, 500, 1000, 1, 1);
     put('willow', -0.92, -0.42, 0.02, 0.0010, 0.02 * Math.sin(t * 0.8), 500, 1000, 1, 1);
