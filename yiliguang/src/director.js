@@ -57,7 +57,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-let T_SUMMER = 30, T_PAPER = 4.6, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SQUID = 41.3, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+let T_SUMMER = 30, T_PAPER = 6.2, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SQUID = 41.3, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
 /* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
    深海里小鱼一齐受惊，然后鲸来了。 */
 const FILM = QS.has('film');
