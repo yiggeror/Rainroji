@@ -383,11 +383,13 @@ const D = YL.director = {
       if (D.pt > T_INK && !ink.painting) D.go('dawn');
     } else if (D.phase === 'dawn') {
       ink.dawn = smooth(0, T_DAWN, D.pt);
+      ink.sunK = smooth(0.2, T_DAWN, D.pt);                                     // the light goes up and becomes the sun
       if (D.pt > T_DAWN) {
         const pond = YL.worlds.pond; if (!pond.ready) pond.init();
         const aspect = YL.canvasAspect(), H = ink.hero.p;
         const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (ink.pan ? ink.pan[0] : 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
         pond.arrive(...pond.toPaint(nx, ny, aspect)); pond.reveal = 0; pond.dew = 0; pond.drop = 0; pond.white = 0; pond.vol = 0;
+        pond.burstAt = pond.hero.p.slice();                                      // (the colour bursts out from the light, now the sun)
         D.go('burst');
       }
     }

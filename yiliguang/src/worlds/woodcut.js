@@ -1040,7 +1040,7 @@ W.woodcut = {
     if (z > 0) {
       const L = this.lantern(t), e = z * z * (3 - 2 * z), k = Math.pow(z, 1.6);
       v[0] += (L[0] - v[0]) * e; v[1] += (L[1] - 0.004 - v[1]) * e;
-      v[2] = s * Math.exp(Math.log(0.011 / s) * k);
+      v[2] = v[2] * Math.exp(Math.log(0.011 / v[2]) * k);                         // (from wherever the eye already is)
     }
     return v;
   },

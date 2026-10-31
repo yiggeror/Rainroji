@@ -33,13 +33,19 @@ uniform vec2 uRes; uniform float uAspect, uTime;
 uniform vec4 uPad[${NPAD}];  // lily pads: centre (x, y), radius across, seed (flower if > 0.75)
 uniform vec4 uSun;           // the sun: x, y (on the horizon), its brightness; the light on the water's x
 uniform vec4 uHero;          // 一粒光: x, y, brightness, -
+uniform float uPan;          // the eye drifting along the bank
+uniform vec4 uOpen[${NPAD / 4}];  // how far each pad's flower has opened (0 a bud … 1 open), four to a vec4
+uniform vec4 uRing[8];       // rings spreading on the water: where, how long ago, how strong
+uniform vec4 uFly[4];        // dragonflies: where, which way, their colour (0 blue … 1 red)
+uniform vec4 uFrog;          // the frog: where, how far through its jump (0 sitting … 1 in), shown
+uniform vec4 uGust;          // a gust crossing the water: where its front is (x), how strong
 layout(location = 0) out vec4 oC;    // colour (sRGB-ish, 0…1)
 layout(location = 1) out vec4 oP;    // the brush: direction (angle / π, 0…1), size (0…1), kind (0 water, .33 pad, .66 flower, 1 willow), -
 ` + COMMON + `
 const float HZ = 0.745;      // the far bank's foot: where the water starts
 void main(){
   vec2 p = vec2(gl_FragCoord.x / uRes.y, gl_FragCoord.y / uRes.y) * vec2(1.0, 1.0);
-  p.x += (1.7778 - uAspect) * 0.5;
+  p.x += (1.7778 - uAspect) * 0.5 + uPan;
   vec3 c; float ang = 0.0, size = 0.5, kind = 0.0;
   float t = uTime;
   vec2 S = uSun.xy;
@@ -80,6 +86,32 @@ void main(){
     ang = 0.0 + 0.06 * (vnoise(p * 8.0) - 0.5);
     size = 0.45 + 0.4 * z;
     kind = 0.0;
+    // a gust crossing the water: a darker, bluer band of small ripples behind its front; the gold glitters harder in it
+    {
+      float g = smoothstep(uGust.x + 0.02, uGust.x - 0.10, p.x) * smoothstep(uGust.x - 0.55, uGust.x - 0.25, p.x) * uGust.y;
+      float cat = smoothstep(0.35, 0.75, fbm(vec2(p.x * 14.0 - t * 1.4, p.y * 60.0 / (0.3 + z))));
+      c = mix(c, c * vec3(0.78, 0.86, 1.02), g * (0.5 + 0.5 * cat));
+      c = mix(c, vec3(1.0, 0.90, 0.60), g * road * 0.6 * cat);
+      ang += g * 0.35 * (cat - 0.5);
+    }
+    // rings spreading where a fish rose, where the frog went in, where the light touched: the strokes go round them
+    for (int i = 0; i < 8; i++){
+      vec4 R = uRing[i];
+      if (R.w <= 0.0) continue;
+      float zz = sat((HZ - R.y) / HZ);
+      vec2 q = (p - R.xy) * vec2(1.0, 1.0 / (0.25 + 0.35 * zz));
+      float d = length(q), rr = (0.02 + R.z * 0.11) * (0.5 + zz), fade = exp(-R.z / 1.6) * R.w;
+      for (int k = 0; k < 3; k++){
+        float rk = rr * (1.0 - 0.30 * float(k)), wk = 0.010 * (0.5 + zz);
+        float ring = exp(-pow((d - rk) / wk, 2.0)) * fade * (1.0 - 0.3 * float(k)), trough = exp(-pow((d - rk + wk * 1.6) / wk, 2.0)) * fade * (1.0 - 0.3 * float(k));
+        c = mix(c, vec3(1.0, 0.93, 0.80), sat(ring * 1.1)); c = mix(c, c * vec3(0.62, 0.70, 0.95), sat(trough * 0.9));
+        ang = mix(ang, atan(q.x, -q.y) / 3.14159, sat(ring));
+        size = mix(size, 0.18, sat(ring));
+      }
+    }
+    // morning mist lying on the far water, drifting
+    float mist = smoothstep(0.30, 0.0, z) * smoothstep(0.35, 0.7, fbm(vec2(p.x * 2.5 - t * 0.06, p.y * 18.0)));
+    c = mix(c, vec3(0.98, 0.88, 0.78), mist * 0.45);
     // ---- lily pads, in perspective: flattened discs with the notch cut in; some carry a flower
     for (int i = 0; i < ${NPAD}; i++){
       vec4 P = uPad[i];
@@ -98,9 +130,13 @@ void main(){
         size = mix(size, 0.25 + 0.4 * P.z / 0.06, pad);
         kind = mix(kind, 0.33, pad);
         if (P.w > 0.72){
-          vec2 f = (q - vec2(0.0, P.z * 0.10)) / (P.z * 0.45);
-          float fl = smoothstep(1.0, 0.6, length(f * vec2(1.0, 1.4)));
-          vec3 pink = mix(vec3(0.98, 0.70, 0.78), vec3(1.0, 0.94, 0.92), smoothstep(-0.2, 0.6, f.y));
+          // a water lily: a tight pink bud until the sun reaches it, then it opens wide and white at its heart
+          float op = uOpen[i / 4][i % 4];
+          vec2 f = (q - vec2(0.0, P.z * (0.12 + 0.06 * (1.0 - op)))) / (P.z * (0.30 + 0.42 * op));
+          float fl = smoothstep(1.0, 0.6, length(f * vec2(1.0 - 0.3 * (1.0 - op), 1.4 + 0.8 * (1.0 - op))));
+          vec3 pink = mix(vec3(0.98, 0.70, 0.78), vec3(1.0, 0.94, 0.92), smoothstep(-0.2, 0.6, f.y) * op);
+          pink = mix(vec3(0.88, 0.48, 0.58), pink, 0.4 + 0.6 * op);
+          pink = mix(pink, vec3(1.0, 0.86, 0.45), exp(-dot(f, f) * 8.0) * op * 0.8);          // its golden heart
           c = mix(c, pink, fl);
           ang = mix(ang, 0.5, fl); size = mix(size, 0.18, fl); kind = mix(kind, 0.66, fl);
         }
@@ -115,7 +151,7 @@ void main(){
       float len_ = 0.26 + 0.34 * fract(fk * 0.618) + 0.08 * sin(fk);
       float yy = 1.02 - p.y;
       if (yy < 0.0 || yy > len_) continue;
-      float sway = 0.015 * sin(t * 0.7 + fk) * yy / len_ + 0.03 * yy * yy;
+      float sway = (0.015 + 0.03 * uGust.y * smoothstep(uGust.x - 0.6, uGust.x, p.x + uPan * 0.0)) * sin(t * (0.7 + 1.2 * uGust.y) + fk) * yy / len_ + 0.03 * yy * yy;
       float d = abs(p.x - x0 - sway);
       float w = 0.020 * (1.0 - 0.5 * yy / len_);
       best = max(best, smoothstep(w, w * 0.4, d) * smoothstep(len_, len_ - 0.05, yy));
@@ -125,6 +161,27 @@ void main(){
       c = mix(c, wl, best);
       ang = mix(ang, 0.5, best); size = mix(size, 0.22, best); kind = mix(kind, 1.0, best);
     }
+  }
+  // ---- the frog: on its pad, then a leap in an arc into the water
+  if (uFrog.w > 0.0){
+    float u = uFrog.z, up = 4.0 * u * (1.0 - u);
+    vec2 fp = uFrog.xy + vec2(0.10 * u, 0.05 * up - 0.03 * u * u);
+    vec2 q = (p - fp) / vec2(0.030, 0.019);
+    float fr = smoothstep(1.0, 0.7, length(q)) * step(u, 0.97);
+    c = mix(c, mix(vec3(0.28, 0.50, 0.20), vec3(0.70, 0.78, 0.30), sat(q.y * 0.5 + 0.5)), fr);
+    ang = mix(ang, 0.15, fr); size = mix(size, 0.15, fr); kind = mix(kind, 0.66, fr);
+  }
+  // ---- dragonflies: a dark slip of a body and the glint of four wings, darting and hanging in the air
+  for (int i = 0; i < 4; i++){
+    vec4 F = uFly[i];
+    if (F.x < -5.0) continue;
+    vec2 q = p - F.xy; vec2 dir = vec2(cos(F.z), sin(F.z)), nrm = vec2(-dir.y, dir.x);
+    vec2 l = vec2(dot(q, dir), dot(q, nrm));
+    float body = smoothstep(0.0055, 0.0030, abs(l.y)) * step(-0.040, l.x) * step(l.x, 0.016);
+    float wings = smoothstep(0.020, 0.012, length((vec2(abs(l.x - 0.004), abs(l.y) - 0.018)) * vec2(1.8, 1.0)));
+    vec3 bc = mix(vec3(0.15, 0.30, 0.75), vec3(0.80, 0.20, 0.12), F.w);
+    c = mix(c, vec3(0.95, 0.97, 1.0), wings * 0.55); c = mix(c, bc, body);
+    float m = max(body, wings); ang = mix(ang, F.z / 3.14159, m); size = mix(size, 0.10, m); kind = mix(kind, 0.66, m);
   }
   oC = vec4(clamp(c, 0.0, 1.0), 1.0);
   oP = vec4(fract(ang + 1.0), size, kind, 1.0);
@@ -206,6 +263,7 @@ void main(){
 const FS_FINAL = `#version 300 es
 precision highp float;
 uniform sampler2D uA; uniform vec2 uRes; uniform float uTime, uFade, uWhite; uniform vec4 uDew;
+uniform vec4 uHeroS;         // 一粒光 on the screen (0…1), how bright
 out vec4 o;
 ` + COMMON + `
 void main(){
@@ -215,6 +273,14 @@ void main(){
   vec2 g = gl_FragCoord.xy / uRes.y * 420.0;
   float weave = 0.5 + 0.25 * sin(g.x * 3.14159) * sin(g.y * 3.14159) + 0.25 * vnoise(g * 0.5);
   c *= 0.95 + 0.07 * weave;
+  // 一粒光: the first light on the water, skimming; a glitter of reflection under it
+  {
+    vec2 hp = (gl_FragCoord.xy - uHeroS.xy * uRes) / uRes.y;
+    float core = exp(-dot(hp, hp) / 0.000020), halo = exp(-length(hp) / 0.020);
+    float streak = exp(-pow(hp.x / 0.010, 2.0)) * smoothstep(0.0, -0.005, hp.y) * exp(hp.y / 0.06) * step(0.5, vnoise(vec2(gl_FragCoord.y * 0.35, uTime * 6.0)));
+    c = mix(c, vec3(1.0, 0.97, 0.86), sat(core * uHeroS.z * 1.3));
+    c += vec3(1.0, 0.80, 0.45) * (halo * 0.35 + streak * 0.5) * uHeroS.z;
+  }
   // the dewdrop on its leaf, holding the sun: a bright bead, then a falling glint
   vec2 dp = (gl_FragCoord.xy - uDew.xy * uRes) / uRes.y;
   float dew = exp(-dot(dp, dp) / (uDew.z * uDew.z));
@@ -239,7 +305,7 @@ W.pond = {
     [this.pBase, this.pGround, this.pStroke, this.pFinal].forEach(YL.checkProgram);
     // the lily pads: clusters drifting across the water, smaller and flatter toward the far bank
     let a = 0x51ed27; const rnd = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-    const pads = [], clusters = [[0.30, 0.13, 9], [0.80, 0.06, 7], [1.42, 0.17, 9], [0.58, 0.36, 7], [1.18, 0.43, 7], [0.16, 0.48, 6], [1.58, 0.55, 6], [0.88, 0.60, 6], [0.40, 0.64, 5]];
+    const pads = [], clusters = [[0.30, 0.13, 8], [0.80, 0.06, 6], [1.42, 0.17, 8], [0.58, 0.36, 6], [1.18, 0.43, 6], [0.16, 0.48, 5], [1.58, 0.55, 5], [0.88, 0.60, 5], [0.40, 0.64, 4], [1.95, 0.30, 6], [2.10, 0.58, 4]];
     for (const [cx, cy, n] of clusters) {
       const z = (0.745 - cy) / 0.745;
       for (let i = 0; i < n && pads.length < NPAD; i++) {
@@ -248,6 +314,9 @@ W.pond = {
       }
     }
     pads.sort((p, q) => q[1] - p[1]);                                 // far ones first, so near ones overlap them
+    // (some pads carry a flower: make sure there are buds along the light's way)
+    for (const p of pads) if (p[3] <= 0.72 && rnd() < 0.10) p[3] = 0.73 + 0.2 * rnd();
+    this.open = new Float32Array(NPAD); this.openT = {};
     this.pads = new Float32Array(NPAD * 4); pads.forEach((p, i) => this.pads.set(p, i * 4));
     // the dewdrop sits on a near leaf
     const near = pads.filter(p => p[1] < 0.3).sort((p, q) => q[2] - p[2])[0] || pads[pads.length - 1];
@@ -277,24 +346,76 @@ W.pond = {
   },
   // 一粒光: the first light on the water, drifting along the sun's road; at the end it goes into the dewdrop
   hero: { p: [0.98, 0.30], v: [0, 0], aim: null, k: 1 },
-  arrive(px, py) { this.hero.p = [px, py]; this.hero.v = [0, 0]; },
-  toPaint(nx, ny, aspect) { return [(nx * 0.5 + 0.5) * aspect + (1.7778 - aspect) * 0.5, ny * 0.5 + 0.5]; },
+  arrive(px, py) { this.hero.p = [px, py]; this.hero.v = [0, 0]; this.t0 = this.t; this.run = null; this.rings = []; this.open && this.open.fill(0); this.openT = {}; this.frogIn = false; },
+  /* ---- the light's run: down the sun's road onto the water, then from bud to bud among the pads, far to near (each
+     one opens as it comes by, and a ring spreads where it touched), and on toward the leaf with the dew on it */
+  makeRun() {
+    const P = this.pads, buds = [];
+    for (let i = 0; i < NPAD; i++) if (P[i * 4 + 2] > 0 && P[i * 4 + 3] > 0.72) buds.push(i);
+    const pick = buds.filter(i => P[i * 4] > 0.35 && P[i * 4] < 1.75 && P[i * 4 + 1] < 0.66).sort((a, b) => P[b * 4 + 1] - P[a * 4 + 1]);
+    const way = [[1.0, 0.86], [1.0, 0.70], [1.0, 0.52]];
+    let x = 1.0;
+    for (const i of pick) { const px = P[i * 4], py = P[i * 4 + 1]; if (Math.abs(px - x) < 0.6) { way.push([px, py + P[i * 4 + 2] * 0.12]); x = px; } if (way.length > 7) break; }
+    way.push([this.dewPad[0] + 0.004, this.dewPad[1] + this.dewPad[2] * 0.12]);
+    this.run = { way, buds: pick, L: way.reduce((a, q, i) => i ? a + Math.hypot(q[0] - way[i - 1][0], q[1] - way[i - 1][1]) : 0, 0) };
+  },
+  toPaint(nx, ny, aspect) { return [(nx * 0.5 + 0.5) * aspect + (1.7778 - aspect) * 0.5 + (this.pan || 0), ny * 0.5 + 0.5]; },
   pointer(nx, ny) { this.hero.aim = this.toPaint(nx, ny, YL.canvasAspect()); this.hero.aimT = this.t; },
   dew: 0, drop: 0,
   update(dt) {
     this.t += dt;
-    const H = this.hero, sunX = 1.0;
+    const H = this.hero, sunX = 1.0, a = this.t - (this.t0 ?? 0);
+    if (!this.run && this.pads) this.makeRun();
     let tgt = H.aim && this.t - H.aimT < 3 ? H.aim : [sunX + 0.03 * Math.sin(this.t * 0.5), 0.30 + 0.05 * Math.sin(this.t * 0.31)];
+    if (this.run && !(H.aim && this.t - H.aimT < 3)) {
+      // along its way, skimming: quick across the open water, slowing at each bud
+      const R = this.run, s = Math.min(R.L, 0.21 * Math.max(0, a - 1.2));
+      let left = s; tgt = R.way[R.way.length - 1];
+      for (let i = 1; i < R.way.length; i++) { const p0 = R.way[i - 1], p1 = R.way[i], l = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]); if (left <= l) { const u = left / l, e = u * u * (3 - 2 * u); tgt = [p0[0] + (p1[0] - p0[0]) * e, p0[1] + (p1[1] - p0[1]) * e]; break; } left -= l; }
+    }
     if (this.dew > 0) tgt = [this.dewPad[0] + 0.004, this.dewPad[1] + this.dewPad[2] * 0.12];
-    for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.p[i]) * 3.2 * dt; H.v[i] *= Math.exp(-dt * 2.6); H.p[i] += H.v[i] * dt; }
+    for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.p[i]) * 5.0 * dt; H.v[i] *= Math.exp(-dt * 3.4); H.p[i] += H.v[i] * dt; }
+    // the buds it comes near open in the sun; where it touches the water a ring spreads
+    const P = this.pads;
+    for (let i = 0; i < NPAD; i++) {
+      if (P[i * 4 + 2] <= 0 || P[i * 4 + 3] <= 0.72) continue;
+      const d = Math.hypot(H.p[0] - P[i * 4], (H.p[1] - P[i * 4 + 1]) * 1.6);
+      if (d < 0.07 && !this.openT[i]) { this.openT[i] = this.t; this.addRing(P[i * 4], P[i * 4 + 1], 0.8); }
+      if (this.openT[i]) this.open[i] = Math.min(1, (this.t - this.openT[i]) / 1.3);
+      else if (a > 30) this.open[i] = Math.min(1, this.open[i] + dt * 0.1);                      // (left alone, they open anyway)
+    }
+    // a fish rising now and then
+    if ((this.nextRise = (this.nextRise ?? 1.5) - dt) <= 0) { const h = Math.sin(this.t * 91.7) * 0.5 + 0.5, k = Math.sin(this.t * 37.3) * 0.5 + 0.5; this.addRing(0.2 + 1.9 * h, 0.08 + 0.55 * k, 0.9); this.nextRise = 1.4 + 1.8 * (Math.sin(this.t * 13.1) * 0.5 + 0.5); }
+    // the frog: it sits on a near pad; then it jumps in
+    const fj = (a - 5.2) / 0.55;
+    if (fj >= 1 && !this.frogIn) { this.frogIn = true; const f = this.frogAt(); this.addRing(f[0] + 0.10, f[1] - 0.03, 1.3); this.plop && this.plop(); }
+    this.frogK = Math.max(0, Math.min(1, fj));
+    // the eye drifts slowly along the bank under the willow
+    this.pan = 0.36 * (a <= 0 ? 0 : YL.smooth(0.0, 16.0, a));
+    this.rings = (this.rings || []).filter(r => this.t - r.t0 < 4);
     this.sound(dt);
+  },
+  addRing(x, y, k) { (this.rings = this.rings || []).push({ x, y, t0: this.t, k }); if (this.rings.length > 8) this.rings.shift(); if (this.snd && k > 0.5) this.plip(0.03 * k); },
+  frogAt() { const P = this.pads, i = Math.min(NPAD - 3, 40); return [P[i * 4], P[i * 4 + 1] + 0.006]; },
+  // the dragonflies: a dart, then hanging still, then another dart (each its own rhythm)
+  flies() {
+    const out = new Float32Array(16).fill(-9);
+    const base = [[0.62, 0.55], [1.35, 0.42], [0.95, 0.28]];
+    for (let k = 0; k < 3; k++) {
+      const per = 1.6 + 0.5 * k, n = Math.floor((this.t + k * 0.7) / per), u = ((this.t + k * 0.7) / per) % 1;
+      const at = (m) => [base[k][0] + 0.25 * Math.sin(m * 2.3 + k) + 0.10 * Math.sin(m * 5.1), base[k][1] + 0.10 * Math.sin(m * 1.7 + k * 2) + 0.03 * Math.cos(m * 4.3)];
+      const p0 = at(n), p1 = at(n + 1), e = u < 0.18 ? (u / 0.18) * (u / 0.18) * (3 - 2 * u / 0.18) : 1;
+      const x = p0[0] + (p1[0] - p0[0]) * e + 0.002 * Math.sin(this.t * 37 + k), y = p0[1] + (p1[1] - p0[1]) * e + 0.002 * Math.sin(this.t * 29 + k);
+      out.set([x, y, Math.atan2(p1[1] - p0[1], p1[0] - p0[0]), k === 1 ? 1 : 0], k * 4);
+    }
+    return out;
   },
   render(target, aspect) {
     const gl = YL.gl, U = YL.U;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
     this.targets(w, h);
     const t = this.t, H = this.hero, br = 1 + 0.07 * Math.sin(t * 2.1) + 0.03 * Math.sin(t * 5.3);
-    const sun = [1.0, 0.765, 1.0, 1.0];
+    const sun = [1.0, 0.86, 1.0, 1.0];
     // 1) the underpainting
     const B = this.base;
     gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb); gl.viewport(0, 0, B.w, B.h);
@@ -303,6 +424,12 @@ W.pond = {
     U(this.pBase, 'uRes', [B.w, B.h]); U(this.pBase, 'uAspect', aspect); U(this.pBase, 'uTime', t);
     gl.uniform4fv(this.pBase.u.uPad, this.pads); U(this.pBase, 'uSun', sun);
     U(this.pBase, 'uHero', [H.p[0], H.p[1], (1 - this.dew) * br, 0]);
+    U(this.pBase, 'uPan', this.pan || 0);
+    gl.uniform4fv(this.pBase.u.uOpen, this.open);
+    const rg = new Float32Array(32); (this.rings || []).forEach((r, i) => rg.set([r.x, r.y, t - r.t0, r.k], i * 4)); gl.uniform4fv(this.pBase.u.uRing, rg);
+    gl.uniform4fv(this.pBase.u.uFly, this.flies());
+    const fa = this.frogAt(); U(this.pBase, 'uFrog', [fa[0], fa[1], this.frogK || 0, this.frogIn && (this.frogK || 0) >= 1 ? 0 : 1]);
+    const gp = ((t + 3) % 7.5) / 7.5; U(this.pBase, 'uGust', [-0.3 + 2.8 * gp + (this.pan || 0), Math.sin(Math.PI * gp) * 0.9, 0, 0]);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     for (const tx of B.texs) { gl.bindTexture(gl.TEXTURE_2D, tx.t); gl.generateMipmap(gl.TEXTURE_2D); }
     // 2) the ground, then the strokes over it, big ones first
@@ -316,8 +443,10 @@ W.pond = {
     // (the strokes are laid with the base texture's nearest samples: its direction must not be blended across an edge)
     gl.activeTexture(gl.TEXTURE1); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     const boil = YL.reduced ? 0 : Math.floor(t * 6);
-    U(this.pStroke, 'uRes', [Cv.w, Cv.h]); U(this.pStroke, 'uTime', t); U(this.pStroke, 'uBoil', boil % 64); U(this.pStroke, 'uSun', sun);
-    U(this.pStroke, 'uReveal', this.reveal * 2.4); U(this.pStroke, 'uBurst', [(sun[0] - (1.7778 - aspect) * 0.5) / aspect, 0.74]);
+    const off = (1.7778 - aspect) * 0.5 + (this.pan || 0);
+    U(this.pStroke, 'uRes', [Cv.w, Cv.h]); U(this.pStroke, 'uTime', t); U(this.pStroke, 'uBoil', boil % 64); U(this.pStroke, 'uSun', [sun[0], sun[1], sun[2], sun[3] - off + (1.7778 - aspect) * 0.5]);
+    const bc = this.burstAt || [sun[0], 0.74];
+    U(this.pStroke, 'uReveal', this.reveal * 2.4); U(this.pStroke, 'uBurst', [(bc[0] - off) / aspect, bc[1]]);
     for (const L of this.layers) {
       U(this.pStroke, 'uScale', L.scale);
       gl.bindVertexArray(L.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, L.n);
@@ -328,8 +457,9 @@ W.pond = {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     gl.useProgram(this.pFinal.p);
     U(this.pFinal, 'uRes', [w, h]); U(this.pFinal, 'uTime', t); U(this.pFinal, 'uFade', this.fade); U(this.pFinal, 'uWhite', this.white);
-    const dx = (H.p[0] - (1.7778 - aspect) * 0.5) / aspect, dy = H.p[1] - this.drop * this.drop * 0.9;
+    const dx = (H.p[0] - (1.7778 - aspect) * 0.5 - (this.pan || 0)) / aspect, dy = H.p[1] - this.drop * this.drop * 0.9;
     U(this.pFinal, 'uDew', [dx, dy, 0.0045 + 0.002 * this.dew, this.dew * br]);
+    U(this.pFinal, 'uHeroS', [dx, H.p[1], (1 - this.dew) * br * (0.4 + 0.6 * this.reveal), 0]);
     YL.bindTex(this.pFinal, 'uA', Cv.tex, 0);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
@@ -357,6 +487,18 @@ W.pond = {
     }
     o.start(); o.stop(t + 0.3);
   },
+  plop() {
+    const S = this.snd; if (!S) return; const ctx = S.ctx, t0 = ctx.currentTime + 0.02;
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(320, t0); o.frequency.exponentialRampToValueAtTime(140, t0 + 0.12);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(0.12, t0 + 0.006); g.gain.setTargetAtTime(0, t0 + 0.02, 0.05);
+    o.connect(g); g.connect(S.bus); o.start(t0); o.stop(t0 + 0.4);
+  },
+  croak() {
+    const S = this.snd; if (!S) return; const ctx = S.ctx; let t0 = ctx.currentTime + 0.02;
+    for (let k = 0; k < 2; k++) { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 110; const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 600; bp.Q.value = 3;
+      const g = ctx.createGain(); g.gain.setValueAtTime(0, t0); for (let i = 0; i < 6; i++) { g.gain.linearRampToValueAtTime(0.04, t0 + i * 0.03 + 0.01); g.gain.linearRampToValueAtTime(0.005, t0 + i * 0.03 + 0.025); } g.gain.linearRampToValueAtTime(0, t0 + 0.2);
+      o.connect(bp); bp.connect(g); g.connect(S.bus); o.start(t0); o.stop(t0 + 0.25); t0 += 0.35; }
+  },
   plip(gain = 0.08) {
     const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 0.02;
     const o = ctx.createOscillator(); o.frequency.setValueAtTime(900, t0); o.frequency.exponentialRampToValueAtTime(2200, t0 + 0.05);
@@ -370,6 +512,8 @@ W.pond = {
     S.wg.gain.setTargetAtTime(0.04 + 0.03 * Math.sin(this.t * 0.4), now, 0.5);
     if ((S.nextBird -= dt) <= 0) { this.bird(); S.nextBird = 0.8 + Math.random() * 2.5; }
     if ((S.nextDrip -= dt) <= 0) { this.plip(0.04); S.nextDrip = 2 + Math.random() * 4; }
+    const a = this.t - (this.t0 ?? 0);
+    if (a > 3.6 && !S.croaked) { S.croaked = true; this.croak(); }
   },
 };
 })();
