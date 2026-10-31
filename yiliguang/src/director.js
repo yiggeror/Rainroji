@@ -98,9 +98,25 @@ function camPath(keys, t) {
   const e = u * u * (3 - 2 * u);
   return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
 }
-if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SQUID, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SQUID: 15.8, T_SEA: 20.5, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+// ---- the village, the stage, the sea
+const T_LANE = 10.0, T_PUSH = 12.6, T_PLAY = 9.0, T_DESC = 4.0;
+const VIL_CAM = [
+  { t: 5.0, pos: [3.6, 5.2, -33], tgt: [4.4, 3.3, -56], vfov: 30 },
+  { t: 7.0, pos: [4.2, 4.8, -36.5], tgt: [4.5, 3.2, -56], vfov: 28 },
+  { t: 8.6, pos: [4.4, 4.4, -39.5], tgt: [4.6, 3.15, -56], vfov: 26 },   // the square, over the crowd, the stage
+  { t: 10.2, pos: [4.5, 3.7, -44.2], tgt: [4.55, 3.07, -56.26], vfov: 24.5 },
+  { t: 12.6, pos: null, tgt: null, vfov: 24 },                           // (the end of the push: filled in below)
+  { t: 13.6, pos: null, tgt: null, vfov: 24 },
+];
+{ const E = YL.worlds.village.CAM_END; for (const K of VIL_CAM) if (!K.pos) { K.pos = E.pos.slice(); K.tgt = E.tgt.slice(); } }
+if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_PAPER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SQUID, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_PAPER: 6.2, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SQUID: 15.8, T_SEA: 20.5, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
+// distance covered (0 … 1) at time x (0 … 1) when speeding up over the first a, steady, slowing over the last b
+const trap = (x, a, b) => { const vm = 1 / (1 - a / 2 - b / 2);
+  if (x < a) return vm * x * x / (2 * a);
+  if (x < 1 - b) return vm * (a / 2 + (x - a));
+  const y = 1 - x; return 1 - vm * y * y / (2 * b); };
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
 YL.reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -136,6 +152,7 @@ const D = YL.director = {
       YL.cam = FILM ? D.roomCam(D.phase === 'intro' ? D.t - 3.4 : D.t) : null;      // (it may have just jumped out)
       return;
     }
+    if (D.phase === 'village' || D.phase === 'stage' || D.phase === 'fall' || D.phase === 'water') { D.lineage(dt); return; }
     if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud' || D.phase === 'paper') { D.toPrint(dt); return; }
     if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'inlantern' || D.phase === 'spark' || D.phase === 'leave') { D.inPrint(dt); return; }
     if (D.phase === 'shadow' || D.phase === 'snuff' || D.phase === 'drop') { D.inShadow(dt); return; }
@@ -218,6 +235,125 @@ const D = YL.director = {
     el.style.opacity = a.toFixed(3);
     if (D.phase === 'end' && D.pt > 6.5) D.filmDone = true;
   },
+  /* ---- the snowy village, the stage, the sea: one unbroken shot.
+     village  the light, come in through the paper, flies down the lane, lighting each string of lanterns it passes; over
+              the crowd waiting in the square it goes into the screen of the stage, and the screen lights from there.
+              The eye goes after it, through the crowd, until the screen is the whole picture.
+     stage    on the screen, the shadow play: the light is the lamp behind it, its bright spot the pearl a dragon chases.
+     fall     the pearl drops into the waves; below the wave line it is the sea (both drawn every frame); the eye goes
+              down with it until the stage is gone above.
+     water    the watercolour sea: down through the light; a humpback comes and looks at it; a squid's ink. */
+  lineage(dt) {
+    const vil = YL.worlds.village, stg = YL.worlds.stage, sea = YL.worlds.sea;
+    if (D.phase === 'village') {
+      const t = D.pt;
+      if (!vil.ready) vil.init();
+      if (!stg.ready) stg.init();
+      // the light: along its way, slowing as it comes to the screen; it lights the lanterns it passes
+      const sm = vil.arc().L * trap(clamp((t - 0.8) / (T_LANE - 0.8), 0, 1), 0.14, 0.32);
+      vil.hero.p = vil.pathAtS(sm);
+      D.vilS = sm;
+      vil.hero.b = 1 - smooth(T_LANE - 0.25, T_LANE + 0.05, t);
+      if (t > 0.8) vil.lightNear(vil.hero.p, vil.t);
+      // it goes into the screen: the lamp behind catches where it touched
+      if (t > T_LANE - 0.05 && !D.stageOn) {
+        D.stageOn = true; stg.reset();
+        const sc = vil.SCR, hp = vil.pathAt(1);
+        stg.enterAt = [(hp[0] - sc.c[0]) / sc.hw * 1.6, (hp[1] - sc.c[1]) / sc.hh * 0.9];
+      }
+      if (D.stageOn) {
+        const a = t - (T_LANE - 0.05);
+        stg.light = smooth(0, 0.9, a) * (0.85 + 0.15 * Math.sin(a * 23) * (1 - smooth(0.3, 1.0, a)));
+        vil.lit = smooth(0, 0.9, a);
+        stg.view = [0, 0, 0.9 / vil.OVER];
+        stg.vol = 1;
+      } else stg.vol = 0;
+      // the eye: down from the whole village, after the light along the lane, to the square, and through the crowd into the screen
+      vil.cam = D.villageCam(t, vil);
+      // the snow and the printing thin out as the eye comes right up to the screen
+      const kEnd = smooth(T_PUSH - 2.2, T_PUSH, t);
+      vil.snowAmt = 1 - kEnd; vil.pure = 1 - kEnd;
+      vil.vol = 1 - 0.8 * kEnd;
+      if (t >= T_PUSH) { D.go('stage'); D.world = 'stage'; vil.vol = 0; stg.vol = 1; }
+      return;
+    }
+    if (D.phase === 'stage') {
+      stg.view = [0, 0, 0.9 / vil.OVER];
+      if (stg.t > T_PLAY && !stg.drop) stg.startDrop();
+      if (stg.drop && stg.lamp[1] < stg.WATER - 0.02) { D.go('fall'); if (!sea.ready) sea.init(); D.fallV = null; }
+      return;
+    }
+    if (D.phase === 'fall' || D.phase === 'water') {
+      // one descent, from the moment the pearl goes into the water: the eye goes down (sea units: a picture's height),
+      // quickly at first, slowing to where the whale comes, a little faster again for the squid
+      const vz = 0.9 / vil.OVER, k = 1 / (2 * vz);
+      if (D.tau === undefined) { D.tau = 0; D.camY = (0 - stg.WATER) * k; D.fallP = { y: (stg.lamp[1] - stg.WATER) * k, x: stg.lamp[0] * k, v: -0.6 }; }
+      D.tau += dt; const tau = D.tau;
+      const v = 0.55 * smooth(0, 1.5, tau) - 0.43 * smooth(3.5, 8.0, tau) + 0.16 * smooth(13.5, 15.5, tau);
+      D.camY -= v * dt;
+      const P = D.fallP;
+      // the pearl: it slows from the speed it came in at, and settles a little above the middle of the picture
+      P.v += (-0.10 - P.v) * (1 - Math.exp(-dt * 1.6)); P.y += P.v * dt;
+      const want = [0.05 + 0.04 * Math.sin(tau * 0.5), D.camY + 0.06 + 0.02 * Math.sin(tau * 0.8)];
+      const hold = smooth(0.6, 3.5, tau);
+      P.x += (want[0] - P.x) * (1 - Math.exp(-dt * 0.9)) * hold; P.y += (want[1] - P.y) * (1 - Math.exp(-dt * 0.9)) * hold;
+      sea.pearl = [P.x, P.y]; sea.zoom = 1;
+      let cam = [0, D.camY];
+      if (D.phase === 'fall') {
+        stg.view = [0, D.camY / k + stg.WATER, vz];
+        stg.lampOverride = [P.x / k, P.y / k + stg.WATER];
+        stg.light = Math.exp(-Math.max(0, -P.y) * 2.5);
+        sea.vol = smooth(0, 1.5, tau); stg.vol = 1 - smooth(0.5, 2.5, tau);
+        if (D.camY < -0.56) { D.go('water'); D.world = 'sea'; stg.vol = 0; sea.vol = 1; }
+      }
+      // ---- the whale: in from the right, slowing, until its eye is beside the pearl; it looks; it blinks; it goes on
+      const tw = tau - 2.5;
+      const L = 1.6, eyeOff = (0.245 - 0.5) * L;
+      const arrive = smooth(1.0, 6.5, tw), leave = smooth(9.0, 13.0, tw);
+      const eyeX = P.x + 0.13, wx = lerp(eyeX - eyeOff + 2.4, eyeX - eyeOff, arrive) - 2.6 * leave * leave;
+      const wy = P.y + 0.024 * L + 0.02 + 0.03 * Math.sin(tw * 0.4);
+      sea.whale = [wx, wy, tw > 0.5 ? L : 0, -0.03 + 0.04 * Math.sin(tw * 0.3)];
+      const look = smooth(6.0, 7.5, tw) * (1 - smooth(9.2, 10.6, tw));
+      sea.whaleB = [1 - 0.95 * Math.exp(-Math.pow((tw - 8.1) / 0.12, 2)), 0, look, 0];
+      const eyeW = [wx + eyeOff, wy - 0.024 * L];
+      const mid = [(eyeW[0] + P.x) * 0.5, (eyeW[1] + P.y) * 0.5];
+      sea.zoom = lerp(1, 0.20, look);
+      cam = [lerp(cam[0], mid[0], look), lerp(cam[1], mid[1], look)];
+      sea.cam = cam;
+      // ---- the squid: up out of the deep, startled; it jets off and leaves its ink, which blooms over everything
+      const sq = tw - 11.0;
+      if (sq > 0) {
+        const jet = smooth(1.4, 1.7, sq);
+        const sx = 0.55 - 0.15 * sq - 1.6 * smooth(1.5, 2.6, sq), sy = D.camY - 0.55 + 0.12 * sq + 0.5 * smooth(1.5, 2.6, sq);
+        sea.squid = [sx, sy, 0.30, 2.6 + 0.5 * smooth(1.4, 1.8, sq)]; sea.squidB = [smooth(0, 0.6, sq) * (1 - smooth(2.4, 2.9, sq)), jet, 0, 0];
+        if (sq > 1.55 && !D.inkAt) D.inkAt = [sx + 0.10, sy - 0.05];
+        if (D.inkAt) { const a2 = sq - 1.55; sea.ink = [D.inkAt[0], D.inkAt[1], 0.05 + 1.9 * smooth(0, 3.6, a2) * smooth(0, 3.6, a2) + 0.15 * smooth(0, 0.6, a2), smooth(1.0, 3.8, a2)];
+          // all ink now: it thins on the paper, and the pearl in it is a point of vermilion
+          if (a2 > 3.9 && D.phase === 'water') {
+            const ink = YL.worlds.ink; if (!ink.ready) ink.init();
+            const aspect = YL.canvasAspect(), n = sea.toNdc(sea.pearl, aspect), Pp = ink.toPaint(n[0], n[1], aspect);
+            ink.arrive(Pp[0], Pp[1]); ink.bloom = 1; ink.dawn = 0; ink.grow = [0, 0, 0, 0]; ink.vol = 0;
+            D.go('inkbloom');
+          }
+        }
+      }
+      return;
+    }
+  },
+  villageCam(t, vil) {
+    const V = YL.V, A = vil.arc(), sm = D.vilS || 0;
+    // following: some way behind it along the lane, a little above and to the right, looking ahead of it
+    const back = vil.pathAtS(sm - 10), ahead = vil.pathAtS(sm + 14), here = vil.pathAtS(sm);
+    const fwd = V.norm(V.sub(vil.pathAtS(sm + 2), vil.pathAtS(sm - 2)));
+    const right = V.norm(V.cross(fwd, [0, 1, 0]));
+    const follow = { pos: V.add(V.add(back, [0, 2.4, 0]), V.mul(right, 1.4)), tgt: V.add(ahead, [0, -0.9, 0]), vfov: 32 };
+    const C0 = vil.CAM0, rail = camPath(VIL_CAM, t);
+    const kIn = smooth(0.9, 3.4, t), kOut = smooth(T_LANE - 3.6, T_LANE - 1.2, t);
+    const mix3 = (a, b, k) => a.map((v, i) => lerp(v, b[i], k));
+    let pos = mix3(C0.pos, follow.pos, kIn), tgt = mix3(C0.tgt, follow.tgt, kIn), vfov = lerp(C0.vfov, follow.vfov, kIn);
+    pos = mix3(pos, rail.pos, kOut); tgt = mix3(tgt, rail.tgt, kOut); vfov = lerp(vfov, rail.vfov, kOut);
+    return { pos, tgt, vfov };
+  },
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
@@ -226,37 +362,47 @@ const D = YL.director = {
     //      goes after it and into it, through its face: what has gone through is a flame in the print. The print wakes
     //      from there; the eye closes in until the sheet is the whole picture, and then it is
     if (D.phase === 'paper') {
-      const u = D.pt, sh = summer.sheetAt(), V = YL.V, aspect = YL.canvasAspect();
-      summer.speed = 1.1 * (1 - smooth(0, 1.4, u));
-      if (!wood.ready) wood.init();
-      if (!D.sheetReady) { D.sheetReady = true; wood.sleep(); wood.panX = 0.80; wood.panY = 0.50; wood.panZ = 1.0; wood.holdView = true; wood.pace = FILM ? 1.7 : 1; wood.vol = 0; }
-      if (sh) {
-        const cam = summer.cam || summer.camera(aspect, summer.t, YL.DBG.still);
-        // the light: after the sheet; then round to its face; then into it, where the village's sky is
-        const N = sh.N, entry = V.add(sh.c, V.add(V.mul(sh.X, 0.1875), V.mul(sh.Y, 0.4)));
-        // the eye: turning to the sheet; closing in on where the light goes in; then on the whole sheet, until it fills
-        // the picture (a hair more, so no grass shows at its edges)
-        const onIn = smooth(1.5, 2.0, u) * (1 - smooth(2.9, 3.6, u));
-        summer.look = { p: V.add(V.mul(sh.c, 1 - onIn), V.mul(entry, onIn)), k: smooth(0.7, 2.3, u) };
-        const d = Math.max(0.3, V.dot(V.sub(sh.c, cam.eye), cam.fwd)), zz = (half) => (52 - 2 * Math.atan(half / d / aspect) * 180 / Math.PI) / 43;
-        summer.zoom = zz(0.40) * smooth(1.5, 2.2, u) + (zz(0.236) - zz(0.40)) * ease(clamp((u - 2.9) / (T_PAPER - 2.9), 0, 1));
-        const chase = V.add(sh.c, V.add(V.mul(cam.right, 0.55), V.add(V.mul(cam.fwd, -0.35), [0, 0.08, 0])));
-        const before = V.add(entry, V.add(V.mul(N, 0.30), [0, 0.04, 0])), through = V.sub(entry, V.mul(N, 0.06));
-        const k1 = smooth(1.3, 2.0, u), k2 = smooth(2.0, 2.65, u);
-        H.fly = V.add(V.mul(V.add(V.mul(chase, 1 - k1), V.mul(before, k1)), 1 - k2), V.mul(through, k2)); H.flyK = 1.4 + 8 * smooth(0.4, 1.8, u);
-        summer.heroK = 1 - smooth(2.6, 2.8, u);
-        summer.sheetGlow = [0, 0, 0, 0.1];
-        summer.sheetFlat = smooth(T_PAPER - 0.9, T_PAPER - 0.1, u);
-        // in the print: the flame where it went in, growing as it goes through; the waking; then off to its lantern
-        if (u > 2.15 && wood.hero.mode === 'off') { wood.hero.mode = 'arrive'; wood.hero.p = [0.95, 0.70]; wood.hero.v = [0, 0]; }
-        wood.arriveK = smooth(2.2, 2.62, u);
-        if (u > 2.45 && wood.wake && wood.wake.t0 === null) wood.wakeFrom([0.95, 0.70]);
-        if (u > 3.0 && wood.hero.mode === 'arrive') { wood.hero.mode = 'hop'; wood.hops = []; }
-      }
-      summer.vol = 1 - smooth(3.0, T_PAPER, u); wood.vol = smooth(2.4, 3.8, u);
+      // A sheet of paper comes blowing over the grass and settles on the grass tops ahead. On it, printed in black only,
+      // the snowy village. The light goes to it; its warmth falls on the paper; it sinks in, and what has gone through is
+      // a flame in the print. The colour goes on from there, block by block, outward. The eye comes down to the sheet and
+      // turns square to it until it is the whole picture: and the picture is the village itself, already alive.
+      const u = D.pt, V = YL.V, vil = YL.worlds.village;
+      if (!vil.ready) vil.init();
+      summer.speed = 1.1 * (1 - smooth(0, 1.6, u));
+      const sh = summer.sheetAt(), Rs = sh.rest;
+      // where on the sheet the light goes in: where the village's light starts, as the sheet's picture shows it
+      const q = vil.project(vil.ENTRY, 16 / 9, vil.CAM0);
+      const X = V.mul(Rs.X, 0.24), Y = V.mul(Rs.Y, 0.135);
+      const entryW = V.add(Rs.c, V.add(V.mul(X, q[0]), V.mul(Y, q[1])));
+      // the light: to above that place, down to it, and in
+      const H = summer.hero, above = V.add(entryW, V.add(V.mul(Rs.N, 0.30), [0, 0.06, 0])), touch = V.add(entryW, V.mul(Rs.N, 0.02)), through = V.sub(entryW, V.mul(Rs.N, 0.03));
+      const k1 = smooth(0.5, 2.6, u), k2 = smooth(2.6, 3.5, u), k3 = smooth(3.5, 4.3, u);
+      const start = D.paperH0 || (D.paperH0 = H.p.slice());
+      H.fly = V.add(V.mul(V.add(V.mul(V.add(V.mul(start, 1 - k1), V.mul(above, k1)), 1 - k2), V.mul(touch, k2)), 1 - k3), V.mul(through, k3));
+      H.flyK = 1.4 + 10 * smooth(0.3, 1.5, u);
+      summer.heroK = 1 - smooth(4.0, 4.4, u);
+      // the eye: comes down over the sheet, looking at where the light is going, then turns square to it as it closes in
+      const dEnd = 0.135 / vil.OVER / Math.tan(20 * Math.PI / 180);
+      const E0 = D.paperE0 || (D.paperE0 = summer.eyeAt(summer.t));
+      const pEnd = V.add(Rs.c, V.mul(Rs.N, dEnd)), pMid = V.add(Rs.c, V.add(V.mul(Rs.N, 0.75), V.mul(V.sub(E0, Rs.c), 0.30)));
+      const s_ = trap(clamp((u - 1.6) / (T_PAPER - 1.6), 0, 1), 0.3, 0.4);
+      const bz = (a0, m, c0, w) => V.add(V.add(V.mul(a0, (1 - w) * (1 - w)), V.mul(m, 2 * w * (1 - w))), V.mul(c0, w * w));
+      const eye = bz(E0, pMid, pEnd, s_);
+      const look = V.add(V.mul(entryW, 1 - smooth(4.0, 5.4, u)), V.mul(Rs.c, smooth(4.0, 5.4, u)));
+      const fwd = V.norm(V.sub(look, eye));
+      const upK = smooth(3.4, T_PAPER - 0.2, u);
+      summer.camOv = { k: smooth(1.2, 2.4, u), eye, fwd, up: V.norm(V.add(V.mul([0, 1, 0], 1 - upK), V.mul(Rs.Y, upK))), vfov: lerp(52, 40, smooth(1.6, T_PAPER, u)) };
+      summer.look = null; summer.zoom = 0;
+      summer.sheetFlat = smooth(4.4, T_PAPER - 0.2, u);
+      summer.sheetGlow = [0, 0, 0, 0.1];
+      // in the print: the flame where it went in, then the colour going on from there
+      vil.cam = vil.CAM0; vil.hero.p = vil.ENTRY.slice();
+      vil.hero.b = smooth(3.4, 4.1, u);
+      vil.wake = { p: vil.ENTRY, r: u < 3.6 ? 0 : 2.4 * Math.pow(smooth(3.6, T_PAPER + 0.3, u), 1.3) };
+      vil.snowAmt = 1; vil.pure = 1; vil.lit = 0;
+      summer.vol = 1 - smooth(3.6, T_PAPER, u); vil.vol = smooth(3.6, T_PAPER, u);
       if (D.pt > T_PAPER) {
-        D.go('woodcut'); D.world = 'woodcut'; wood.holdView = false; wood.vol = 1; summer.vol = 0;
-        if (FILM) { wood.pace = 1.7; }
+        D.go('village'); D.world = 'village'; summer.vol = 0; vil.vol = 1; vil.wake = null; summer.camOv = null;
       }
       return;
     }
@@ -410,7 +556,7 @@ const D = YL.director = {
   },
   // ---- ink: the deep's black breaking up into it, the painting laying itself down, then the dawn
   inInk(dt) {
-    const ink = YL.worlds.ink, sea = YL.worlds.deepsea;
+    const ink = YL.worlds.ink, sea = YL.worlds.sea;
     const G = (a, b, x) => smooth(a, b, x);
     if (D.phase === 'inkbloom') {
       const u = clamp(D.pt / T_BLOOM, 0, 1);
@@ -665,6 +811,26 @@ void main(){
   c = mix(c, vec3(1.0, 0.82, 0.55), uGlow * (1.0 - 0.5 * length(uv - 0.5)));
   o = vec4(c, 1.0);
 }`;
+// ---- the shadow play over the sea: above the water line (alpha) the screen, below it the watercolour
+const FS_FALL = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform vec2 uRes;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec4 a = texture(uA, uv); vec3 b = texture(uB, uv).rgb;
+  vec3 c = mix(b, a.rgb, a.a);
+  c += vec3(0.95, 0.97, 1.0) * a.a * (1.0 - a.a) * 4.0 * 0.22;          // a bright meniscus along the line
+  o = vec4(c, 1.0);
+}`;
+let fallProg = null;
+function fallP() {
+  if (fallProg) return fallProg;
+  fallProg = YL.makeProgram('fall', `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_FALL);
+  YL.checkProgram(fallProg);
+  return fallProg;
+}
 let mixProg = null;
 function mixP() {
   if (mixProg) return mixProg;
@@ -700,6 +866,7 @@ D.world = QS.get('world') || 'room';
 let lastPtr = null;
 D.renderFrame = (dt, realT) => {
   if (YL.gl.isContextLost()) return true;          // (the loss is reported a frame late: draw nothing meanwhile)
+  if (D.phase === 'village' || D.phase === 'stage' || D.phase === 'fall' || D.phase === 'water') { D.drawLineage(dt); return true; }
   const summer = YL.worlds.summer;
   // drops showing the summer: keep its panorama fresh
   if ((D.phase === 'daydrops' || D.phase === 'dive') && !summer.ready) summer.init();
@@ -730,11 +897,13 @@ D.renderFrame = (dt, realT) => {
     wood.zmTex = D.zmT.tex;                                                      // (then the woodcut is drawn as usual, the shadow play in its lantern)
   }
   if (D.phase === 'paper' && summer.ready) {
-    // the print on the sheet is the woodcut world itself, drawn whole (1.6 : 1) into a picture of its own
-    const wood = YL.worlds.woodcut;
-    if (!wood.ready) wood.init();
-    if (!D.printT) D.printT = YL.makeTarget(1024, 640, ['rgba8']);
-    wood.update(dt); wood.render(D.printT, 1.6);
+    // the print on the sheet is the village itself, drawn at the size of the picture (so when the sheet fills it, it is it)
+    const vil = YL.worlds.village, gl = YL.gl;
+    if (!vil.ready) vil.init();
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    if (!D.printT || D.printT.w !== w || D.printT.h !== h) D.printT = YL.makeTarget(w, h, ['rgba8']);
+    if (D.pt > 3.6) vil.update(dt);
+    vil.render(D.printT, w / h);
     summer.printTex = D.printT.tex;                                              // (then the summer is drawn as usual, the print on its sheet)
   }
   if (D.phase === 'cloud' && summer.ready) {
@@ -757,7 +926,7 @@ D.renderFrame = (dt, realT) => {
     return true;
   }
   if (D.phase === 'inkbloom' && D.pt < 1.2) {
-    const I = irisTargets(), gl = YL.gl, sea = YL.worlds.deepsea, ink = YL.worlds.ink, aspect = YL.canvasAspect();
+    const I = irisTargets(), gl = YL.gl, sea = YL.worlds.sea, ink = YL.worlds.ink, aspect = YL.canvasAspect();
     if (!sea.ready) sea.init(); if (!ink.ready) ink.init();                      // (a jump straight here)
     sea.update(dt); sea.render(I.A, aspect);
     ink.update(dt); ink.render(I.B, aspect);
@@ -842,6 +1011,43 @@ D.renderFrame = (dt, realT) => {
   w.render(null, YL.canvasAspect());
   return true;
 };
+// the worlds of the village–stage–sea shot: move them on, then draw (the screen's picture first, or both sides of the water line)
+D.stepLineage = (dt) => {
+  const vil = YL.worlds.village, stg = YL.worlds.stage, sea = YL.worlds.sea;
+  for (const w of [vil, stg, sea]) if (!w.ready) w.init();
+  if (D.phase === 'village') { vil.update(dt); if (D.stageOn) stg.update(dt); }
+  else if (D.phase === 'stage') stg.update(dt);
+  else if (D.phase === 'fall') { stg.update(dt); sea.update(dt); }
+  else if (D.phase === 'water') sea.update(dt);
+};
+D.drawLineage = (dt) => {
+  if (D.lineageJump) {
+    const { ph, pt } = D.lineageJump; D.lineageJump = null;
+    const order = ['village', 'stage', 'fall', 'water'];
+    // run until that phase is reached, then on into it by pt
+    let guard = 0;
+    while (order.indexOf(D.phase) < order.indexOf(ph) && guard++ < 24 * 60) D.ffLineage(1 / 24);
+    D.ffLineage(pt);
+  }
+  const vil = YL.worlds.village, stg = YL.worlds.stage, sea = YL.worlds.sea, aspect = YL.canvasAspect(), gl = YL.gl;
+  D.stepLineage(dt);
+  if (D.phase === 'village') {
+    if (D.stageOn) { const I = irisTargets(); stg.render(I.B, aspect); vil.screenTex = I.B.tex; } else vil.screenTex = null;
+    vil.render(null, aspect);
+  } else if (D.phase === 'stage') stg.render(null, aspect);
+  else if (D.phase === 'fall') {
+    const I = irisTargets();
+    stg.render(I.A, aspect); sea.render(I.B, aspect);
+    const p = fallP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]);
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+  } else sea.render(null, aspect);
+};
+// run the shot forward without drawing (for a jump straight into the middle of it)
+D.ffLineage = (secs) => { const dt = 1 / 24; for (let i = 0; i < Math.round(secs * 24); i++) { D.pt += dt; D.t += dt; D.clock += dt; D.lineage(dt); D.stepLineage(dt); } };
 // called by the host right after it has drawn the room (into A during the dive)
 D.afterRoom = () => {
   if (D.flashFrame) {
@@ -872,7 +1078,7 @@ D.afterRoom = () => {
 if (D.world !== 'room') YL.roomVol = 0;
 // a lost and restored GL context: everything the worlds and the transitions made belongs to the old one
 YL.onContextRestored = () => {
-  iris = null; tearP = null; drainP = null; mixProg = null; YL.sharp2 = null; YL.roomTarget = null;
+  iris = null; tearP = null; drainP = null; mixProg = null; fallProg = null; YL.sharp2 = null; YL.roomTarget = null;
   for (const w of Object.values(YL.worlds || {})) {
     w.ready = false;
     w.res = null; w.tw = 0; w.inks = null; w.A = null; w.B = null;
@@ -883,13 +1089,19 @@ YL.onContextRestored = () => {
 if (QS.get('phase')) {
   const ph = QS.get('phase'), pt = +(QS.get('pt') || 0);
   D.escape();
+  if (FILM) D.clock = 3;                           // (past the film's opening fade from black)
   LIGHT.level = 0; HERO.glow = 1;
   const L = YL.hero.routeLength();
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
     const later = ['summer', 'paper', 'updraft', 'cloud', 'print', 'woodcut', 'spark', 'inlantern', 'shadow', 'drop', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];
-    if (later.includes(ph)) {
+    if (['village', 'stage', 'fall', 'water'].includes(ph)) {
+      // into the village–stage–sea shot: run it from the village's start up to the moment asked for (once GL exists)
+      D.irisCenter = [0.1, 0.1]; D.enterSummer(); YL.roomVol = 0;
+      D.go('village'); D.world = 'village';
+      D.lineageJump = { ph, pt };
+    } else if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
       else if (ph === 'updraft' || ph === 'cloud') { D.go(ph); D.pt = pt; }

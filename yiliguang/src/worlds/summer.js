@@ -244,6 +244,7 @@ uniform vec2 uWind;
 uniform float uGust;
 uniform vec4 uStroke[8];             // the pointer as wind: recent stroke points on the ground (x, z, strength, age)
 uniform vec4 uTile;                  // the blades' tile: width (x), depth (z) — it travels with the eye
+uniform vec4 uSheetC;                // where the sheet of paper lies on the grass (x, z, radius): the blades under it are pressed down
 out vec3 vC; out float vT; out float vSide; out float vDepth; out float vShadow; out vec3 vWP;
 // wind at a point of the field: the steady wind, travelling gust bands, and the pointer's stroke
 vec2 windAt(vec2 p, float t){
@@ -271,6 +272,7 @@ void main(){
     base.y = uEye.z - 0.45 - mod(uEye.z - 0.45 - base.y, uTile.y);
     h *= smoothstep(uTile.y + 0.45, uTile.y - 2.0, uEye.z - base.y);       // (grows up out of the far edge, not popping)
   }
+  if (uSheetC.z > 0.0) h *= mix(0.62, 1.0, smoothstep(uSheetC.z * 0.6, uSheetC.z * 1.4, length(base - uSheetC.xy)));
   vec2 wv = windAt(base, uTime + aC.x);
   float bend = length(wv) / (1.0 + aC.y);
   // the blade's own lean, then the wind bends it more toward the tip (quadratic)
@@ -448,7 +450,8 @@ void main(){
   float glow = exp(-r / (2.4 * b));
   float rays = pow(max(cos(3.0 * (ang + uTime * 0.12)), 0.0), 24.0) * smoothstep(11.0 * b, 2.0, r) + 0.6 * pow(max(cos(3.0 * (ang - uTime * 0.07) + 0.5), 0.0), 40.0) * smoothstep(8.0 * b, 2.0, r);
   vec3 col = vec3(1.0, 0.99, 0.94) * core + vec3(1.0, 0.80, 0.40) * halo * 0.45 * (1.0 - core) + vec3(1.0, 0.86, 0.52) * (glow * 0.35 + rays * 0.3);
-  gl_FragDepth = clamp(z / 80.0, 0.0, 1.0);
+  float zc = z - uHR * sqrt(max(1.0 - r * r, 0.0)) * step(r, 1.0);       // (the core is a ball: the paper cuts it where it goes in)
+  gl_FragDepth = clamp(zc / 80.0, 0.0, 1.0);
   o = vec4(col * uOn, 1.0);
 }`;
 const FS_RESOLVE = `#version 300 es
@@ -561,6 +564,7 @@ uniform vec3 uEye, uSun;
 uniform vec4 uGlow;                               // the light inside it: where on the sheet (uv), how bright, how far it has spread
 uniform sampler2D uPrint;                         // what is on it: the snowy village, printed (the next world, asleep)
 uniform float uFlat;                              // (as the eye closes in on it, the summer light on it gives way to the print as it is)
+uniform vec4 uHeroP;                              // the light near it: where, how bright (its warmth falls on the paper)
 out vec4 o;
 void main(){
   vec3 n = normalize(vN), v = normalize(uEye - vP);
@@ -585,6 +589,9 @@ void main(){
   // a thin edge line, darker, as an animator would draw it
   vec2 e = 0.5 - abs(vUV);
   c *= 1.0 - 0.35 * smoothstep(0.012, 0.004, min(e.x, e.y * 1.6)) * (1.0 - uFlat);
+  // the light near it: its warmth on the paper, a pool that tightens and brightens as it comes down to it
+  float hd = length(vP - uHeroP.xyz);
+  c += vec3(1.0, 0.80, 0.48) * uHeroP.w * (0.012 / (0.012 + hd * hd * 6.0)) * (1.0 - 0.7 * uFlat);
   // the light gone into it: a warm bloom spreading through the paper from where it went in
   float d = length((vUV - uGlow.xy) * vec2(1.6, 1.0));
   c += vec3(1.0, 0.78, 0.45) * uGlow.z * (exp(-d * d / max(uGlow.w * uGlow.w, 1e-4)) * 0.55 + exp(-d * 30.0) * 0.6);
@@ -766,26 +773,35 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   },
   /* ---- the sheet of paper. It comes blowing in from the right, low over the grass, tumbling end over end; it rises and
      slows, and turns to face us, and hangs there in front of the eye. 0.48 × 0.30 m: the print's own shape. */
-  startSheet() { this.sheet = { t0: this.t }; },
+  startSheet() {
+    // where it will come to rest: ahead of the eye, on the tops of the grass, tilted up toward the eye as if propped
+    const V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still), E = this.eyeAt(this.t);
+    const F = V.norm([cam.fwd[0], 0, cam.fwd[2]]), R = V.norm(V.cross(F, [0, 1, 0]));
+    const C = V.add(E, V.add(V.mul(F, 1.85), V.add(V.mul(R, 0.12), [0, 0.66 - E[1], 0])));
+    const tilt = 34 * Math.PI / 180, yaw = 0.10;
+    const Fy = V.norm(V.add(V.mul(F, Math.cos(yaw)), V.mul(R, Math.sin(yaw)))), Ry = V.norm(V.cross(Fy, [0, 1, 0]));
+    const N = V.norm(V.add(V.mul([0, 1, 0], Math.cos(tilt)), V.mul(Fy, -Math.sin(tilt))));
+    const X = Ry, Y = V.norm(V.cross(N, X));
+    this.sheet = { t0: this.t, rest: { c: C, X, Y, N }, E0: E, F, R };
+  },
+  /* ---- the sheet of paper. It comes blowing in from the right over the grass, tumbling, and settles onto the grass
+     tops ahead of the eye, propped up toward it. 0.48 × 0.27 m: the print's own shape (16 : 9). */
   sheetAt() {
     const S = this.sheet; if (!S) return null;
-    const V = YL.V, tau = this.t - S.t0, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
-    const e = YL.smooth(0, 2.5, tau), e2 = YL.smooth(0.6, 2.5, tau);
-    // (relative to the eye: right, up, ahead)
-    const x = 1.9 * (1 - e) + 0.22 * Math.sin(tau * 2.1) * (1 - e), y = -0.40 + 0.45 * e + 0.10 * Math.sin(tau * 3.0) * (1 - e) + 0.008 * Math.sin(tau * 1.7), z = 3.8 - 2.2 * e;
-    const fl = [0, 0, -1], R = cam.right, Uv = V.norm(V.cross(R, cam.fwd));
-    const F = V.norm([cam.fwd[0], 0, cam.fwd[2]]);
-    const c = V.add(cam.eye, V.add(V.mul(R, x), V.add(V.mul([0, 1, 0], y), V.mul(F, z))));
-    // facing the eye, then turned end over end twice about its width, swung and rolled a little, all dying away
-    // (while the light goes into it, it is turned well away to one side, so the light can be seen going through its face)
-    const turn = 0.80 * YL.smooth(1.4, 2.1, tau) * (1 - YL.smooth(2.7, 3.6, tau));
-    const flip = 4 * Math.PI * YL.smooth(0.0, 2.1, tau), sw = 0.6 * Math.sin(2.3 * tau) * (1 - e2) + turn, rl = 0.45 * Math.sin(1.7 * tau + 0.5) * (1 - e2);
-    const N0 = V.mul(F, -1), X0 = V.norm(V.cross([0, 1, 0], N0)), Y0 = [0, 1, 0];
+    const V = YL.V, tau = this.t - S.t0, Rs = S.rest;
+    const e = YL.smooth(0, 2.4, tau);
+    // its way in: from up and off to the right, gliding down in an arc onto its resting place, with a last flutter
+    const from = V.add(Rs.c, V.add(V.mul(S.R, 1.7), V.add([0, 0.75, 0], V.mul(S.F, 0.6))));
+    const mid = V.add(Rs.c, V.add(V.mul(S.R, 0.55), V.add([0, 0.42, 0], V.mul(S.F, -0.1))));
+    const b = (a, m, c, u) => V.add(V.add(V.mul(a, (1 - u) * (1 - u)), V.mul(m, 2 * u * (1 - u))), V.mul(c, u * u));
+    const c = V.add(b(from, mid, Rs.c, e), [0, 0.012 * Math.sin(tau * 9.0) * Math.exp(-Math.max(tau - 2.2, 0) * 3.0) * YL.smooth(1.8, 2.3, tau), 0]);
+    // turning end over end on the way, the turns dying out as it lands
     const rot = (a, axis, ang) => { const c_ = Math.cos(ang), s_ = Math.sin(ang), d = V.dot(axis, a); return V.add(V.add(V.mul(a, c_), V.mul(V.cross(axis, a), s_)), V.mul(axis, d * (1 - c_))); };
-    let X = X0, Y = Y0, N = N0;
-    for (const [ax, ang] of [[X0, flip], [[0, 1, 0], sw], [N0, rl]]) { X = rot(X, ax, ang); Y = rot(Y, ax, ang); N = rot(N, ax, ang); }
-    void fl; void Uv;
-    return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.15), N, curl: ((0.05 * Math.sin(tau * 4.0) + 0.03) * (1 - e2) + 0.012) * (1 - YL.smooth(2.8, 3.8, tau)), tau };
+    const flip = 2 * Math.PI * (1 - e) * 1.0, sw = 0.7 * Math.sin(2.1 * tau) * (1 - e), rl = 0.5 * Math.sin(1.6 * tau + 0.5) * (1 - e);
+    let X = Rs.X, Y = Rs.Y, N = Rs.N;
+    for (const [ax, ang] of [[Rs.X, flip], [[0, 1, 0], sw], [Rs.N, rl]]) { X = rot(X, ax, ang); Y = rot(Y, ax, ang); N = rot(N, ax, ang); }
+    const curl = ((0.04 * Math.sin(tau * 4.0) + 0.03) * (1 - e) + 0.010) * (1 - YL.smooth(3.0, 4.2, tau));
+    return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.135), N, curl, tau, rest: Rs };
   },
   // where the eye is: it travels forward over the field (this.speed m/s), weaving a little
   eyeAt(t) { const z = -(this.travel || 0); return [0.45 * Math.sin(z * 0.11), 0.80 + 0.05 * Math.sin(t * 0.55), z]; },
@@ -814,10 +830,20 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
       const d = YL.V.sub(this.look.p, this.eyeAt(t)), ty_ = Math.atan2(d[0], -d[2]), tp = Math.atan2(d[1], Math.hypot(d[0], d[2]));
       yaw += (ty_ - yaw) * this.look.k; pitch += (tp - pitch) * this.look.k;
     }
-    const fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
-    const right = YL.V.norm(YL.V.cross(fwd, [0, 1, 0])), up = YL.V.cross(right, fwd);
-    const vfov = (aspect < 0.9 ? 68 : 52) * (1 - zoom) + 9 * zoom, ty = Math.tan(vfov * Math.PI / 360);
-    return { eye: this.eyeAt(t), fwd, right, up, tan: [ty * aspect, ty] };
+    let fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
+    let upW = [0, 1, 0], eye = this.eyeAt(t);
+    let vfov = (aspect < 0.9 ? 68 : 52) * (1 - zoom) + 9 * zoom;
+    const O = this.camOv;
+    if (O && O.k > 0) {
+      const V = YL.V, k = O.k;
+      eye = V.add(V.mul(eye, 1 - k), V.mul(O.eye, k));
+      fwd = V.norm(V.add(V.mul(fwd, 1 - k), V.mul(O.fwd, k)));
+      upW = V.norm(V.add(V.mul(upW, 1 - k), V.mul(O.up, k)));
+      vfov = vfov + (O.vfov - vfov) * k;
+    }
+    const right = YL.V.norm(YL.V.cross(fwd, upW)), up = YL.V.cross(right, fwd);
+    const ty = Math.tan(vfov * Math.PI / 360);
+    return { eye, fwd, right, up, tan: [ty * aspect, ty] };
   },
   // the summer sky and field as the room's window would see them, for the drops' inverted images
   renderEquirect(target) {
@@ -867,6 +893,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.useProgram(this.pGrass.p);
     U(this.pGrass, 'uEye', cam.eye); U(this.pGrass, 'uFwd', cam.fwd); U(this.pGrass, 'uRight', cam.right); U(this.pGrass, 'uUp', cam.up); U(this.pGrass, 'uTan', cam.tan);
     U(this.pGrass, 'uTime', this.t); U(this.pGrass, 'uWind', wind); U(this.pGrass, 'uGust', this.gust); U(this.pGrass, 'uSun', SUN); U(this.pGrass, 'uTile', [TILE[0], TILE[1], 0, 0]);
+    U(this.pGrass, 'uSheetC', this.sheet ? [this.sheet.rest.c[0], this.sheet.rest.c[2], 0.55, 0] : [0, 0, 0, 0]);
     const H = this.hero, hp = [H.p[0], H.p[1] + (H.bob || 0), H.p[2]];
     U(this.pGrass, 'uHP', hp); U(this.pGrass, 'uHOn', H.on ? 1 : 0);
     const st = new Float32Array(32); this.strokes.forEach((s, i) => st.set([s.x, s.z, s.s, s.age], i * 4));
@@ -885,6 +912,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
       U(this.pPaper, 'uEye', cam.eye); U(this.pPaper, 'uFwd', cam.fwd); U(this.pPaper, 'uRight', cam.right); U(this.pPaper, 'uUp', cam.up); U(this.pPaper, 'uTan', cam.tan);
       U(this.pPaper, 'uSC', sh.c); U(this.pPaper, 'uSX', sh.X); U(this.pPaper, 'uSY', sh.Y); U(this.pPaper, 'uSN', sh.N); U(this.pPaper, 'uCurl', sh.curl);
       U(this.pPaper, 'uSun', SUN); U(this.pPaper, 'uGlow', this.sheetGlow || [0, 0, 0, 0.1]); U(this.pPaper, 'uFlat', this.sheetFlat || 0);
+      U(this.pPaper, 'uHeroP', [H.p[0], H.p[1] + (H.bob || 0), H.p[2], (H.on ? 1 : 0) * (this.heroK ?? 1)]);
       if (this.printTex) YL.bindTex(this.pPaper, 'uPrint', this.printTex, 0);
       gl.bindVertexArray(this.pvao); gl.drawArrays(gl.TRIANGLES, 0, this.nPaper);
     }
