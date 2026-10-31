@@ -99,7 +99,7 @@ function camPath(keys, t) {
   return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
 }
 if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -291,13 +291,13 @@ const D = YL.director = {
       const u = clamp(D.pt / T_SNUFF, 0, 1);
       // the candle gutters: the flame sinks and shrinks, so every shadow stretches up and swells over the paper; then it dies
       sh.sink = Math.pow(u, 1.4);
-      sh.light = Math.pow(1 - u, 1.8) * (1 - 0.3 * u) + 0.012;
+      sh.light = Math.pow(1 - u, 1.8) * (1 - 0.3 * u);
       sh.vol = 1 - u;
       if (D.pt > T_SNUFF) {
         // the deep, with the light just where the flame was on the screen
         const aspect = YL.canvasAspect(), c = sh.cam, f = sh.flame(sh.t).p, v = YL.V.sub(f, c.eye), z = YL.V.dot(v, c.fwd);
         sea.arrive(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
-        sea.fade = 0; sea.vol = 1;
+        sea.fade = 0.6; sea.vol = 1;                                           // (not from black: the light carries straight on)
         D.go('deepsea'); D.world = 'deepsea';
       }
     }
