@@ -99,7 +99,7 @@ function camPath(keys, t) {
   return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
 }
 if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 14.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SEA: 16.6, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 14.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SEA: 16.6, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -374,11 +374,13 @@ const D = YL.director = {
       ink.bloom = 1 - smooth(0.12, 1.0, u);
       ink.grow = [G(0.35, 0.85, u), G(0.55, 1.0, u), 0, 0];
       ink.vol = smooth(0.1, 0.8, u); sea.vol = 1 - smooth(0.0, 0.3, u);
+      // out of the settling ink the light sets off as the brush, and paints the scroll as it goes
+      if (D.pt > 1.2 && !ink.painting && ink.now === 0) ink.startPaint();
       if (D.pt > T_BLOOM) { D.go('ink'); D.world = 'ink'; ink.bloom = 0; sea.vol = 0; }
     } else if (D.phase === 'ink') {
       const t = D.pt;
-      ink.grow = [1, 1, G(0.0, 2.6, t), G(2.2, 4.2, t)];
-      if (D.pt > T_INK) D.go('dawn');
+      ink.grow = [1, 1, 1, 1]; void t;
+      if (D.pt > T_INK && !ink.painting) D.go('dawn');
     } else if (D.phase === 'dawn') {
       ink.dawn = smooth(0, T_DAWN, D.pt);
       if (D.pt > T_DAWN) {
@@ -709,6 +711,7 @@ D.renderFrame = (dt, realT) => {
   }
   if (D.phase === 'inkbloom' && D.pt < 1.2) {
     const I = irisTargets(), gl = YL.gl, sea = YL.worlds.deepsea, ink = YL.worlds.ink, aspect = YL.canvasAspect();
+    if (!sea.ready) sea.init(); if (!ink.ready) ink.init();                      // (a jump straight here)
     sea.update(dt); sea.render(I.A, aspect);
     ink.update(dt); ink.render(I.B, aspect);
     const p = mixP();
@@ -850,7 +853,7 @@ if (QS.get('phase')) {
         if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
         if (ph === 'shadow' || ph === 'snuff') { D.world = 'shadow'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.shadow.t = 1 + pt; }
         if (ph === 'burst' || ph === 'pond' || ph === 'dew') { D.world = ph === 'burst' ? 'ink' : 'pond'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.ink.dawn = 1; }
-        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; }
+        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; if (ph === 'inkbloom') k.arrive(0.9, 0.5); }
         if (ph === 'surface') { D.jump = null; YL.roomVol = 1; setTimeout(() => { D.surface(); D.pt = pt; YL.hero.t = pt; if (pt > T_SURF) D.go('home'); }, 0); }
       }
     }

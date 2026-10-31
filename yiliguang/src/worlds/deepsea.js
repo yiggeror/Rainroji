@@ -934,7 +934,7 @@ layout(location = 0) in vec4 aG;      // a light: position, brightness
 layout(location = 1) in vec4 aK;      //          its colour, its size (m)
 uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan; uniform vec2 uRes;
 uniform sampler2D uDepth;
-out vec2 vUV; out float vI; out float vR; out vec3 vK;
+out vec2 vUV; out float vI; out float vR; out vec3 vK; out float vSoft;
 const vec3 SIG_V = vec3(0.10, 0.06, 0.045);
 void main(){
   vec2 cq = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0;
@@ -946,16 +946,18 @@ void main(){
   vI = aG.w * exp(-0.06 * z) / (z * z + 0.3);
   vR = px;
   vK = aK.rgb;
+  vSoft = step(0.025, aK.w);                                              // (a cloud of light, not a point)
   vUV = cq * px;
   gl_Position = vec4(ndc + cq * px / uRes * 2.0, 0.5, 1.0);
 }`;
 const FS_GLOW = `#version 300 es
 precision highp float;
-in vec2 vUV; in float vI; in float vR; in vec3 vK;
+in vec2 vUV; in float vI; in float vR; in vec3 vK; in float vSoft;
 out vec4 o;
 void main(){
   float r = length(vUV);
-  float g = exp(-r * r / 1.2) * 1.4 + exp(-r / (vR * 0.35)) * 0.12;
+  float g = (exp(-r * r / 1.2) * 1.4 + exp(-r / (vR * 0.35)) * 0.12) * smoothstep(vR, vR * 0.6, r);
+  if (vSoft > 0.5) g = exp(-r * r / (vR * vR) * 3.5) * 0.35;              // a spreading cloud: soft all the way out
   o = vec4(vK * g * vI * 0.6, 1.0);
 }`;
 
@@ -1088,7 +1090,7 @@ W.deepsea = {
       const t = this.t;
       tgt = V.add(V.add(cam.eye, V.mul(cam.fwd, 1.0)), [0.10 * Math.sin(t * 0.19), -0.02 + 0.07 * Math.sin(t * 0.15 + 1), 0.06 * Math.sin(t * 0.11 + 2)]);
     }
-    const k = this.rise > 0 ? 7 : 2.2, c = this.rise > 0 ? 5 : 2.6;              // rising, it keeps up with the eye
+    const look = this.greatLook(), k = this.rise > 0 ? 7 : 2.2 + 3 * look, c = this.rise > 0 ? 5 : 2.6 + 1.5 * look;   // rising (or while the whale goes over), it keeps up with the eye
     for (let i = 0; i < 3; i++) { H.v[i] += (tgt[i] - H.p[i]) * k * dt; H.v[i] *= Math.exp(-dt * c); H.p[i] += H.v[i] * dt; }
     // the eye follows only when the light nears the edge of the picture
     const v = V.sub(H.p, cam.eye), z = Math.max(V.dot(v, cam.fwd), 0.1);
@@ -1254,7 +1256,7 @@ W.deepsea = {
   // how far its middle is past the point of its way nearest the light (m), or null when it is gone
   greatS() { const G = this.great; if (!G) return null; const s = G.s0 + G.speed * (this.t - G.t0); return s < 14 ? s : null; },
   // how far the eye is tipped up to watch it go over (0 … 1)
-  greatLook() { const G = this.great; if (!G) return 0; const a = this.t - G.t0; return YL.smooth(0, 2.2, a) * (1 - YL.smooth(4.3, 6.0, a)); },
+  greatLook() { const G = this.great; if (!G) return 0; const a = this.t - G.t0; return YL.smooth(0, 2.2, a) * (1 - YL.smooth(4.0, 6.4, a)); },
   // the flipper, in the whale's frame: held out toward us, sweeping up through the light as it comes by
   finDir(s) {
     // (held out to the side like wings, drooping a little; one slow stroke down and back up as it goes over)

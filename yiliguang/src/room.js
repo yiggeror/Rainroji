@@ -4908,7 +4908,7 @@ async function recRun() {
       if (QS.has('rectime') && k < 6) console.log(`rec timing ${k}: tick ${(t1 - t0).toFixed(0)} finish ${(t2 - t1).toFixed(0)} grab ${(t3 - t2).toFixed(0)} ms`);
       if (window.__recFrame) await window.__recFrame(k, png);
     }
-    catch (e) { console.error('rec frame ' + k + ': ' + e.message); }
+    catch (e) { console.error('rec frame ' + k + ': ' + e.message + (k < 2 ? ' @ ' + (e.stack || '').split('\n').slice(1, 4).join(' | ') : '')); }
     k++;
   };
   await frameOut();
