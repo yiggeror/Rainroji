@@ -743,9 +743,9 @@ const OVER = 1.02;
 const CAM_END = (() => { const d = SCR.hh / OVER / Math.tan(12 * Math.PI / 180); return { pos: [SCR.c[0], SCR.c[1], SCR.c[2] + d], tgt: SCR.c.slice(), vfov: 24 }; })();
 // the light's way: from where it came in through the paper, down the lane under the lantern strings, over the crowd,
 // over the screen's frame and down behind it, where the lamp is
-const ENTRY = [-0.6, 4.2, 9.0];
+const ENTRY = [-1.6, 6.2, 3.0];             // (high over the roofs, left of the middle of the print: where it comes in through the paper)
 // (it ends on the screen's face: the light goes into the paper of the screen, as it went into the paper in the summer)
-const PATH = [ENTRY, [-2.2, 3.6, 2], [-1.7, 3.4, -8], [-0.6, 3.5, -17], [1.6, 3.6, -26], [3.2, 3.5, -35], [4.1, 4.2, -44], [4.4, 3.9, -49], [4.6, 3.6, -52.5], [4.8, 3.5, -55.0], [4.9, 3.5, SCR.c[2]]];
+const PATH = [ENTRY, [-2.4, 4.0, -2], [-1.7, 3.4, -8], [-0.6, 3.5, -17], [1.6, 3.6, -26], [3.2, 3.5, -35], [4.1, 4.2, -44], [4.4, 3.9, -49], [4.6, 3.6, -52.5], [4.8, 3.5, -55.0], [4.9, 3.5, SCR.c[2]]];
 
 W.village = {
   ready: false, t: 0, vol: 1, fade: 1,

@@ -374,33 +374,38 @@ const D = YL.director = {
       const q = vil.project(vil.ENTRY, 16 / 9, vil.CAM0);
       const X = V.mul(Rs.X, 0.24), Y = V.mul(Rs.Y, 0.135);
       const entryW = V.add(Rs.c, V.add(V.mul(X, q[0]), V.mul(Y, q[1])));
-      // the light: to above that place, down to it, and in
-      const H = summer.hero, above = V.add(entryW, V.add(V.mul(Rs.N, 0.30), [0, 0.06, 0])), touch = V.add(entryW, V.mul(Rs.N, 0.02)), through = V.sub(entryW, V.mul(Rs.N, 0.03));
-      const k1 = smooth(0.5, 2.6, u), k2 = smooth(2.6, 3.5, u), k3 = smooth(3.5, 4.3, u);
-      const start = D.paperH0 || (D.paperH0 = H.p.slice());
-      H.fly = V.add(V.mul(V.add(V.mul(V.add(V.mul(start, 1 - k1), V.mul(above, k1)), 1 - k2), V.mul(touch, k2)), 1 - k3), V.mul(through, k3));
-      H.flyK = 1.4 + 10 * smooth(0.3, 1.5, u);
-      summer.heroK = 1 - smooth(4.0, 4.4, u);
+      // the light: up and over to a little above that place on the sheet; it hangs there, its warmth on the paper; then
+      // straight down onto the paper, and through it
+      const H = summer.hero, start = D.paperH0 || (D.paperH0 = H.p.slice());
+      const high = V.add(entryW, V.add(V.mul(Rs.N, 0.34), [0, 0.10, 0])), touch = V.add(entryW, V.mul(Rs.N, 0.015)), through = V.sub(entryW, V.mul(Rs.N, 0.035));
+      const arcTop = V.add(V.mul(V.add(start, high), 0.5), [0, 0.12, 0]);
+      const k1 = smooth(0.3, 2.3, u);
+      const qb = V.add(V.add(V.mul(start, (1 - k1) * (1 - k1)), V.mul(arcTop, 2 * k1 * (1 - k1))), V.mul(high, k1 * k1));
+      const hover = V.add(qb, [0.012 * Math.sin(u * 2.3), 0.010 * Math.sin(u * 3.1), 0]);
+      const k2 = smooth(2.9, 3.55, u), k3 = smooth(3.55, 4.0, u);
+      H.fly = V.add(V.mul(V.add(V.mul(hover, 1 - k2), V.mul(touch, k2)), 1 - k3), V.mul(through, k3));
+      H.flyK = 2 + 22 * smooth(0.2, 1.2, u);
+      summer.heroK = 1 - smooth(3.85, 4.15, u);
       // the eye: comes down over the sheet, looking at where the light is going, then turns square to it as it closes in
       const dEnd = 0.135 / vil.PAPER_OVER / Math.tan(20 * Math.PI / 180);
       const E0 = D.paperE0 || (D.paperE0 = summer.eyeAt(summer.t));
       const pEnd = V.add(Rs.c, V.mul(Rs.N, dEnd)), pMid = V.add(Rs.c, V.add(V.mul(Rs.N, 0.75), V.mul(V.sub(E0, Rs.c), 0.30)));
-      const s_ = trap(clamp((u - 1.6) / (T_PAPER - 1.6), 0, 1), 0.3, 0.4);
+      const s_ = trap(clamp((u - 1.0) / 3.8, 0, 1), 0.30, 0.35);
       const bz = (a0, m, c0, w) => V.add(V.add(V.mul(a0, (1 - w) * (1 - w)), V.mul(m, 2 * w * (1 - w))), V.mul(c0, w * w));
       const eye = bz(E0, pMid, pEnd, s_);
-      const look = V.add(V.mul(entryW, 1 - smooth(4.0, 5.4, u)), V.mul(Rs.c, smooth(4.0, 5.4, u)));
+      const look = V.add(V.mul(entryW, 1 - smooth(3.7, 4.8, u)), V.mul(Rs.c, smooth(3.7, 4.8, u)));
       const fwd = V.norm(V.sub(look, eye));
-      const upK = smooth(3.4, T_PAPER - 0.2, u);
-      summer.camOv = { k: smooth(1.2, 2.4, u), eye, fwd, up: V.norm(V.add(V.mul([0, 1, 0], 1 - upK), V.mul(Rs.Y, upK))), vfov: lerp(52, 40, smooth(1.6, T_PAPER, u)) };
+      const upK = smooth(3.0, 4.8, u);
+      summer.camOv = { k: smooth(0.8, 2.0, u), eye, fwd, up: V.norm(V.add(V.mul([0, 1, 0], 1 - upK), V.mul(Rs.Y, upK))), vfov: lerp(52, 40, smooth(1.0, 4.8, u)) };
       summer.look = null; summer.zoom = 0;
-      summer.sheetFlat = smooth(4.4, T_PAPER - 0.2, u);
+      summer.sheetFlat = smooth(4.0, 5.0, u);
       summer.sheetGlow = [0, 0, 0, 0.1];
       // in the print: the flame where it went in, then the colour going on from there
       vil.cam = vil.CAM0; vil.hero.p = vil.ENTRY.slice();
-      vil.hero.b = smooth(3.4, 4.1, u);
-      vil.wake = { p: vil.ENTRY, r: u < 3.6 ? 0 : 2.4 * Math.pow(smooth(3.6, T_PAPER + 0.3, u), 1.3) };
+      vil.hero.b = smooth(3.55, 4.0, u);
+      vil.wake = { p: vil.ENTRY, r: u < 3.65 ? 0 : 2.4 * Math.pow(smooth(3.65, T_PAPER, u), 1.2) };
       vil.snowAmt = 1; vil.pure = 1; vil.lit = 0;
-      summer.vol = 1 - smooth(3.6, T_PAPER, u); vil.vol = smooth(3.6, T_PAPER, u);
+      summer.vol = 1 - smooth(3.9, T_PAPER, u); vil.vol = smooth(3.9, T_PAPER, u);
       if (D.pt > T_PAPER) {
         D.go('village'); D.world = 'village'; summer.vol = 0; vil.vol = 1; vil.wake = null; summer.camOv = null;
       }
@@ -902,7 +907,7 @@ D.renderFrame = (dt, realT) => {
     if (!vil.ready) vil.init();
     const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
     if (!D.printT || D.printT.w !== w || D.printT.h !== h) D.printT = YL.makeTarget(w, h, ['rgba8']);
-    if (D.pt > 3.6) vil.update(dt);
+    if (D.pt > 3.65) vil.update(dt);
     vil.render(D.printT, w / h);
     summer.printTex = D.printT.tex;                                              // (then the summer is drawn as usual, the print on its sheet)
   }

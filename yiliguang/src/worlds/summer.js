@@ -777,7 +777,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     // where it will come to rest: ahead of the eye, on the tops of the grass, tilted up toward the eye as if propped
     const V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still), E = this.eyeAt(this.t);
     const F = V.norm([cam.fwd[0], 0, cam.fwd[2]]), R = V.norm(V.cross(F, [0, 1, 0]));
-    const C = V.add(E, V.add(V.mul(F, 1.85), V.add(V.mul(R, 0.12), [0, 0.66 - E[1], 0])));
+    const C = V.add(E, V.add(V.mul(F, 1.6), V.add(V.mul(R, 0.10), [0, 0.66 - E[1], 0])));
     const tilt = 34 * Math.PI / 180, yaw = 0.10;
     const Fy = V.norm(V.add(V.mul(F, Math.cos(yaw)), V.mul(R, Math.sin(yaw)))), Ry = V.norm(V.cross(Fy, [0, 1, 0]));
     const N = V.norm(V.add(V.mul([0, 1, 0], Math.cos(tilt)), V.mul(Fy, -Math.sin(tilt))));
