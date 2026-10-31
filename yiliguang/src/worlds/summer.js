@@ -541,7 +541,7 @@ layout(location = 0) in vec2 aUV;                 // across the sheet (-0.5…0.
 uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
 uniform vec3 uSC, uSX, uSY, uSN;                  // its middle; its half width, half height and facing (m)
 uniform float uCurl;                              // how much it bends (m at its edges)
-out vec2 vUV; out vec3 vN; out vec3 vP;
+out vec2 vUV; out vec3 vN; out vec3 vP; out vec3 vF;
 void main(){
   vec2 q = aUV * 2.0;
   // a sheet in the wind curls along its length and ripples a little
@@ -549,19 +549,22 @@ void main(){
   vec3 p = uSC + uSX * q.x + uSY * q.y + normalize(uSN) * c;
   vec3 dx = uSX + normalize(uSN) * uCurl * 2.0 * q.x, n = normalize(cross(dx, uSY));
   if (dot(n, uSN) < 0.0) n = -n;
-  vUV = aUV; vN = n; vP = p;
+  vUV = aUV; vN = n; vP = p; vF = normalize(uSN);
   vec3 v = p - uEye; float z = dot(v, uFwd);
   vec2 ndc = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
   gl_Position = vec4(ndc, clamp(z / 80.0, 0.0, 1.0) * 2.0 - 1.0, 1.0);
   if (z < 0.02) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }`;
 const FS_PAPER = HEAD + `
-in vec2 vUV; in vec3 vN; in vec3 vP;
+in vec2 vUV; in vec3 vN; in vec3 vP; in vec3 vF;
 uniform vec3 uEye, uSun;
 uniform vec4 uGlow;                               // the light inside it: where on the sheet (uv), how bright, how far it has spread
+uniform sampler2D uPrint;                         // what is on it: the snowy village, printed (the next world, asleep)
+uniform float uFlat;                              // (as the eye closes in on it, the summer light on it gives way to the print as it is)
 out vec4 o;
 void main(){
   vec3 n = normalize(vN), v = normalize(uEye - vP);
+  bool front = dot(vF, v) > 0.0;
   if (dot(n, v) < 0.0) n = -n;                                          // whichever side faces us
   float lit = dot(n, uSun);
   // two tones, a clean edge between (the way everything here is painted)
@@ -574,9 +577,14 @@ void main(){
   float through = smoothstep(0.0, 0.5, -lit) * (1.0 - tone);
   c = mix(c, vec3(1.0, 0.94, 0.80) * (0.92 + 0.08 * fibre), through * 0.8);
   c *= 0.97 + 0.03 * fibre;
+  // on its face, the print: lit by the summer sun like the paper it is on, until the eye is close enough to be in it
+  vec3 pr = texture(uPrint, vUV + 0.5).rgb;
+  vec3 light = mix(shade, vec3(1.0), tone) * (0.97 + 0.03 * fibre) / vec3(0.98, 0.96, 0.91);
+  if (front) c = mix(pr * mix(light, vec3(1.0), 0.25), pr, uFlat);
+  else c = mix(c, c * mix(vec3(1.0), texture(uPrint, vec2(0.5 - vUV.x, vUV.y + 0.5)).rgb, 0.10), 1.0);   // (the back: the print faintly through it)
   // a thin edge line, darker, as an animator would draw it
   vec2 e = 0.5 - abs(vUV);
-  c *= 1.0 - 0.35 * smoothstep(0.012, 0.004, min(e.x, e.y * 1.6));
+  c *= 1.0 - 0.35 * smoothstep(0.012, 0.004, min(e.x, e.y * 1.6)) * (1.0 - uFlat);
   // the light gone into it: a warm bloom spreading through the paper from where it went in
   float d = length((vUV - uGlow.xy) * vec2(1.6, 1.0));
   c += vec3(1.0, 0.78, 0.45) * uGlow.z * (exp(-d * d / max(uGlow.w * uGlow.w, 1e-4)) * 0.55 + exp(-d * 30.0) * 0.6);
@@ -769,13 +777,15 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     const F = V.norm([cam.fwd[0], 0, cam.fwd[2]]);
     const c = V.add(cam.eye, V.add(V.mul(R, x), V.add(V.mul([0, 1, 0], y), V.mul(F, z))));
     // facing the eye, then turned end over end twice about its width, swung and rolled a little, all dying away
-    const flip = 4 * Math.PI * YL.smooth(0.0, 2.1, tau), sw = 0.6 * Math.sin(2.3 * tau) * (1 - e2), rl = 0.45 * Math.sin(1.7 * tau + 0.5) * (1 - e2);
+    // (while the light goes into it, it is turned well away to one side, so the light can be seen going through its face)
+    const turn = 0.80 * YL.smooth(1.4, 2.1, tau) * (1 - YL.smooth(2.7, 3.6, tau));
+    const flip = 4 * Math.PI * YL.smooth(0.0, 2.1, tau), sw = 0.6 * Math.sin(2.3 * tau) * (1 - e2) + turn, rl = 0.45 * Math.sin(1.7 * tau + 0.5) * (1 - e2);
     const N0 = V.mul(F, -1), X0 = V.norm(V.cross([0, 1, 0], N0)), Y0 = [0, 1, 0];
     const rot = (a, axis, ang) => { const c_ = Math.cos(ang), s_ = Math.sin(ang), d = V.dot(axis, a); return V.add(V.add(V.mul(a, c_), V.mul(V.cross(axis, a), s_)), V.mul(axis, d * (1 - c_))); };
     let X = X0, Y = Y0, N = N0;
     for (const [ax, ang] of [[X0, flip], [[0, 1, 0], sw], [N0, rl]]) { X = rot(X, ax, ang); Y = rot(Y, ax, ang); N = rot(N, ax, ang); }
     void fl; void Uv;
-    return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.15), N, curl: (0.05 * Math.sin(tau * 4.0) + 0.03) * (1 - e2) + 0.012, tau };
+    return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.15), N, curl: ((0.05 * Math.sin(tau * 4.0) + 0.03) * (1 - e2) + 0.012) * (1 - YL.smooth(2.8, 3.8, tau)), tau };
   },
   // where the eye is: it travels forward over the field (this.speed m/s), weaving a little
   eyeAt(t) { const z = -(this.travel || 0); return [0.45 * Math.sin(z * 0.11), 0.80 + 0.05 * Math.sin(t * 0.55), z]; },
@@ -874,7 +884,8 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
       gl.useProgram(this.pPaper.p); gl.disable(gl.CULL_FACE);
       U(this.pPaper, 'uEye', cam.eye); U(this.pPaper, 'uFwd', cam.fwd); U(this.pPaper, 'uRight', cam.right); U(this.pPaper, 'uUp', cam.up); U(this.pPaper, 'uTan', cam.tan);
       U(this.pPaper, 'uSC', sh.c); U(this.pPaper, 'uSX', sh.X); U(this.pPaper, 'uSY', sh.Y); U(this.pPaper, 'uSN', sh.N); U(this.pPaper, 'uCurl', sh.curl);
-      U(this.pPaper, 'uSun', SUN); U(this.pPaper, 'uGlow', this.sheetGlow || [0, 0, 0, 0.1]);
+      U(this.pPaper, 'uSun', SUN); U(this.pPaper, 'uGlow', this.sheetGlow || [0, 0, 0, 0.1]); U(this.pPaper, 'uFlat', this.sheetFlat || 0);
+      if (this.printTex) YL.bindTex(this.pPaper, 'uPrint', this.printTex, 0);
       gl.bindVertexArray(this.pvao); gl.drawArrays(gl.TRIANGLES, 0, this.nPaper);
     }
     // the little light, in front of what is behind it and behind the blades in front of it

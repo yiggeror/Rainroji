@@ -77,6 +77,8 @@ uniform vec4 uFig[3];        // people going home: x, foot y, walk phase (sign: 
 uniform vec4 uDog;           // the dog: x, foot y, trot phase (sign: which way), shown
 uniform vec4 uCrow;          // the crow: x, y, wing phase, shown
 uniform vec4 uEave[8];       // a paper lantern under each house's eaves: lit (0 … 1), -, -, -
+uniform vec4 uWake;          // the print waking from a point: where, how far it has reached (>= 9: all awake), the moment it was asleep at
+float wakeAt(vec2 P){ if (uWake.z >= 9.0) return 1.0; return smoothstep(uWake.z, uWake.z - 0.10, length(P - uWake.xy) + 0.05 * (vnoise(P * 9.0) - 0.5)); }
 out vec4 o;
 
 vec3 ink;                    // coverage of the key (black) block, the indigo block's strength, the vermilion block
@@ -153,7 +155,7 @@ void pine(vec2 q, float H, float W, float seed){
 
 void main(){
   vec2 P = printPos(gl_FragCoord.xy);
-  float t = uTime;
+  float t = mix(uWake.w, uTime, wakeAt(P));                                     // (asleep, nothing moves)
   ink = vec3(1.0, 0.9, 0.0);
 
   // ---------------- the sky: black, cut with long gently-curving lines; the cuts widen toward the snow-light over the land
@@ -746,6 +748,9 @@ uniform vec3 uShow;          // how far each block has been printed yet (indigo,
 uniform vec4 uHero;          // 一粒光 here: a little flame. x, y, size, strength
 uniform vec4 uTrail[16];     // where it has just been: x, y, age (s)
 uniform vec4 uPuff[12];      // snow shaken off the lantern: x, y, radius
+uniform vec4 uWake;          // (as in the cutting: where the print is waking from, how far it has reached)
+uniform vec4 uZM;            // the revolving lantern at the village's end: centre, half the width of its paper, whether its paper shows what is in it
+uniform sampler2D uZMtex;    // … what is in it: the shadow play, as it is at this moment
 out vec4 o;
 const vec3 PAPER = vec3(0.935, 0.905, 0.835);
 const vec3 AI    = vec3(0.150, 0.250, 0.450);
@@ -847,6 +852,38 @@ void main(){
     float s = texture(uSeal, vec2(sq.x, 1.0 - sq.y)).r;
     s *= step(0.18, vnoise(sq * 38.0) + 0.3 * vnoise(sq * 9.0));
     c = mix(c, c * SHU / PAPER, s * 0.95 * step(0.999, uShow.z));
+  }
+  // ---- the revolving lantern (走马灯) hanging from a bent pole at the end of the village: dark, until a spark goes into
+  //      it; then its paper is the shadow play inside it
+  {
+    vec2 q = P - uZM.xy; float hw = uZM.z, hh = hw * 9.0 / 16.0;
+    float L = 0.0;
+    L = max(L, fill(abs(q.x - hw * 1.55) - 0.0016) * step(-hh - 0.12, q.y) * step(q.y, hh + 0.040));            // the pole
+    L = max(L, fill(abs(q.y - hh - 0.040) - 0.0014) * step(-0.002, q.x) * step(q.x, hw * 1.55));                // its arm
+    L = max(L, fill(abs(q.x) - 0.0008) * step(hh, q.y) * step(q.y, hh + 0.040));                                // the cord
+    float capT = step(abs(q.x), hw * 1.10 - (q.y - hh) * 0.6) * step(hh, q.y) * step(q.y, hh + 0.011);
+    float capB = step(abs(q.x), hw * 1.06) * step(-hh - 0.009, q.y) * step(q.y, -hh);
+    float tassel = fill(abs(q.x) - 0.0010) * step(-hh - 0.030, q.y) * step(q.y, -hh) + fill(length((q - vec2(0.0, -hh - 0.032)) * vec2(1.0, 0.5)) - 0.0045);
+    if (abs(q.x) < hw && abs(q.y) < hh){
+      vec3 inside = uZM.w > 0.0 ? texture(uZMtex, q / vec2(2.0 * hw, 2.0 * hh) + 0.5).rgb : vec3(0.0);
+      vec3 dark = mix(SUMI, AI, 0.35) * (0.85 + 0.15 * vnoise(q * 300.0));
+      c = mix(dark, inside, uZM.w);
+      c *= 1.0 - 0.8 * fill(abs(abs(q.x) - hw * 0.34) - 0.0007) * (1.0 - uZM.w);                                  // its ribs, while it is dark
+    }
+    c = mix(c, SUMI, sat(max(max(L, capT), capB) + tassel * 0.0));
+    c = mix(c, SHU, sat(fill(abs(q.y - hh - 0.005) - 0.0016) * capT + fill(abs(q.y + hh + 0.004) - 0.0016) * capB));   // a vermilion band round each cap
+    c = mix(c, SHU, sat(tassel));
+    c = mix(c, SUMI, sat(fill(abs(abs(q.x) - hw) - 0.0011) * step(abs(q.y), hh)));                              // its sides
+  }
+  // asleep, it is an old print, faded to greys; where the light has woken it the ink comes up rich, a warm glow running
+  // out at the edge of the waking
+  if (uWake.z < 9.0){
+    float aw = uWake.z < 0.0 ? 0.0 : smoothstep(uWake.z, uWake.z - 0.10, length(P - uWake.xy) + 0.05 * (vnoise(P * 9.0) - 0.5));
+    aw = max(aw, exp(-length(P - uHero.xy) / 0.02) * uHero.w);                  // (the flame itself is never faded: it is what wakes it)
+    vec3 lum = vec3(dot(c, vec3(0.30, 0.55, 0.15)));
+    vec3 faded = mix(PAPER * 0.97, lum * vec3(0.93, 0.95, 1.0), 0.50);
+    c = mix(faded, c, aw);
+    if (uWake.z > 0.0) c += vec3(1.0, 0.60, 0.28) * exp(-abs(length(P - uWake.xy) - uWake.z) / 0.014) * 0.30 * (1.0 - smoothstep(1.4, 2.0, uWake.z));
   }
   o = vec4(c * uFade, 1.0);
 }`;
@@ -1038,9 +1075,9 @@ W.woodcut = {
     // the way out: the eye goes into the lantern until its lit paper is all there is
     const z = this.zoomIn || 0;
     if (z > 0) {
-      const L = this.lantern(t), e = z * z * (3 - 2 * z), k = Math.pow(z, 1.6);
-      v[0] += (L[0] - v[0]) * e; v[1] += (L[1] - 0.004 - v[1]) * e;
-      v[2] = v[2] * Math.exp(Math.log(0.011 / v[2]) * k);                         // (from wherever the eye already is)
+      const Z = this.zoomTo, L = Z ? Z.c : this.lantern(t), e = z * z * (3 - 2 * z), k = Math.pow(z, Z ? 1.0 : 1.6), to = Z ? Z.h : 0.011;
+      v[0] += (L[0] - v[0]) * e; v[1] += (L[1] - (Z ? 0 : 0.004) - v[1]) * e;
+      v[2] = v[2] * Math.exp(Math.log(to / v[2]) * k);                             // (from wherever the eye already is)
     }
     return v;
   },
@@ -1071,6 +1108,21 @@ W.woodcut = {
     this.lanLight = 0; this.lit = this.litBase.map((v, i) => i === 6 ? 1 : 0); this.lightsOn = false;
     this.queue = []; this.trail = []; this.clearCarve();
   },
+  /* ---- asleep: the print lies on a sheet of paper in the summer grass, faded, nothing moving, no light in it. The light
+     goes into it, and it wakes from that point outward. */
+  sleep() {
+    this.wake = { c: [0.95, 0.70], t0: null, frozen: Math.floor(this.t * FPS) / FPS };
+    this.lanLight = 0; this.lit = this.litBase.map(() => 0); this.lightsOn = false; this.eaveOn = []; this.show = [1, 1, 1];
+    this.hero.mode = 'off'; this.queue = []; this.trail = [];
+  },
+  wakeFrom(p) { if (this.wake) { this.wake.c = p.slice(); this.wake.t0 = this.t; } },
+  // the revolving lantern at the end of the village (its paper is 16 : 9, the shadow play's own picture)
+  zm: { c: [1.455, 0.452], hw: 0.045 },
+  // the way out: the lantern sends off a spark of its light (it stays lit); the spark goes along the village into the
+  // revolving lantern
+  sendSpark() { const H = this.hero; H.mode = 'spark'; H.v = [0, 0.05]; H.k = 0; },
+  wakeR() { const W = this.wake; if (!W) return 99; if (W.t0 === null) return -1; const a = this.t - W.t0; return a > 2.6 ? 99 : 2.0 * YL.smooth(0, 2.6, a); },
+  wakeU() { const W = this.wake; return W ? [W.c[0], W.c[1], this.wakeR(), W.frozen] : [0, 0, 99, 0]; },
   /* ---- the film's way in: the light has gone into a blank sheet. It sweeps across it in three broad rows (the sky,
      the village, the river and snow), and the blocks print wherever it has been, as if it were the baren; then it
      goes home into the lantern, and the vermilion goes on. */
@@ -1108,7 +1160,16 @@ W.woodcut = {
     const H = this.hero, L = this.lantern(this.t), core = [L[0], L[1] - 0.003];
     const breath = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in every world
     let moving = false;
-    if (H.mode === 'paint') {
+    if (H.mode === 'spark') {
+      moving = true; H.k += dt;
+      const tgt = [this.zm.c[0], this.zm.c[1] + 0.004 * Math.sin(this.t * 3)];
+      const d = this.steer(H.k < 0.5 ? [H.p[0] + 0.05, H.p[1] + 0.06] : tgt, 0.55 * YL.smooth(0, 0.4, H.k) + 0.05, dt, 3.5);
+      if (H.k > 0.5 && d < 0.008) { H.mode = 'inzm'; this.sparkIn = this.t; }
+    } else if (H.mode === 'inzm') {
+      moving = false;
+    } else if (H.mode === 'arrive') {
+      moving = false;                                                           // (held where it went into the sheet)
+    } else if (H.mode === 'paint') {
       // along its rows at a steady pace (a beat's pause first), dabbing the sheet as it goes
       moving = true; H.k += dt;
       const R = H.route, sp = 2.4, go = Math.max(0, H.k - 0.35) * sp * YL.smooth(0.35, 0.8, H.k);
@@ -1409,14 +1470,20 @@ W.woodcut = {
   update(dt) {
     this.t += dt;
     if (!this.eave) this.eave = new Float32Array(32);
+    // waking: each window lights as the waking reaches its house
+    if (this.wake && this.wake.t0 !== null) {
+      const r = this.wakeR();
+      this.houses.forEach((h, i) => { if (!this.lit[i] && Math.hypot(h[0] - this.wake.c[0], h[1] - this.wake.c[1]) < r) this.lit[i] = this.litBase[i] || 1; });
+      if (r >= 99) this.wake = null;
+    }
     for (let i = 0; i < 8; i++) if (this.eaveOn && this.eaveOn[i]) this.eave[i * 4] = Math.min(1, this.eave[i * 4] + dt / 0.35);
     // the eye follows the light across the print (the film): close in while it drifts down and goes from eave to eave
     // through the village (the people, the windows lighting); back out to the whole sheet for the moon. It never jumps:
     // it leans after the light
     if (this.paintK > 0 && this.hero.mode !== 'paint') this.paintK = Math.max(0, this.paintK - dt / 0.6);
-    if (this.panX !== undefined) {
+    if (this.panX !== undefined && !this.holdView) {
       const H = this.hero, painting = H.mode === 'paint' || this.paintK > 0;
-      const close = painting ? 0.86 : H.mode === 'hop' ? 0.46 : (H.mode === 'fall' || H.mode === 'enter') ? 0.60 : 0.86;
+      const close = painting ? 0.86 : H.mode === 'hop' ? 0.46 : (H.mode === 'fall' || H.mode === 'enter') ? 0.60 : (H.mode === 'spark' || H.mode === 'inzm') ? 0.50 : 0.86;
       const z = this.panZ = (this.panZ ?? 0.84) + (close - (this.panZ ?? 0.84)) * (1 - Math.exp(-dt * 1.1));
       const half = 0.5 * Math.min(1.6, YL.canvasAspect() * Math.min(1, 1.6 / YL.canvasAspect())) * z;   // half the width on screen
       const tx = painting ? 0.80 : Math.max(half, Math.min(1.6 - half, H.p[0] * 0.85 + 0.90 * 0.15));
@@ -1433,13 +1500,14 @@ W.woodcut = {
   },
   // draw rows [y0, y1) of one printing (frame number f) into ink buffer k
   printRows(k, f, aspect, y0, y1) {
-    const gl = YL.gl, U = YL.U, ink = this.inks[k], w = ink.w, h = ink.h, tq = f / FPS;
+    const gl = YL.gl, U = YL.U, ink = this.inks[k], w = ink.w, h = ink.h, tq = this.wake && this.wake.t0 === null ? this.wake.frozen : f / FPS;
     const view = this.view(aspect, tq), pS = this.pScene;
     gl.bindFramebuffer(gl.FRAMEBUFFER, ink.fb); gl.viewport(0, 0, w, h);
     gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.SCISSOR_TEST); gl.scissor(0, y0, w, y1 - y0);
     gl.useProgram(pS.p);
     U(pS, 'uRes', [w, h]); U(pS, 'uView', view); U(pS, 'uPx', view[2] / h); U(pS, 'uBoil', YL.reduced ? 0 : f % 4); U(pS, 'uTime', tq);
+    U(pS, 'uWake', this.wakeU());
     gl.uniform4fv(pS.u.uBr, this.trBuf); gl.uniform4fv(pS.u.uBrR, this.trR); gl.uniform1i(pS.u.uBrN, this.tree.length); U(pS, 'uTreeBox', this.treeBox);
     this.lit.forEach((v, i) => { this.hB[i * 4 + 2] = v; });
     gl.uniform4fv(pS.u.uHA, this.hA); gl.uniform4fv(pS.u.uHB, this.hB);
@@ -1485,10 +1553,12 @@ W.woodcut = {
     U(pP, 'uRegB', reg(0.0014, -0.0010)); U(pP, 'uRegR', reg(-0.0011, 0.0013));
     const sz = Math.min(0.075 * h, 0.09 * w);
     U(pP, 'uSealBox', [1 - (sz + 0.03 * h) / w, 0.035, sz / w, sz / h]);
-    U(pP, 'uShow', this.show);
-    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' || H.mode === 'hop' || H.mode === 'paint' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
+    U(pP, 'uShow', this.show); U(pP, 'uWake', this.wakeU());
+    U(pP, 'uZM', [this.zm.c[0], this.zm.c[1], this.zm.hw, this.zmTex ? 1 : 0]);
+    if (this.zmTex) YL.bindTex(pP, 'uZMtex', this.zmTex, 5);
+    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' || H.mode === 'hop' || H.mode === 'paint' || H.mode === 'spark' ? 1 : H.mode === 'arrive' ? (this.arriveK ?? 1) : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
-    U(pP, 'uHero', [H.p[0], H.p[1], H.size * br * (H.mode === 'sink' ? 1 - 0.7 * H.k : 1), vis]);
+    U(pP, 'uHero', [H.p[0], H.p[1], H.size * br * (H.mode === 'sink' ? 1 - 0.7 * H.k : 1) * (H.mode === 'arrive' ? 1.8 : 1), vis]);
     const tr = new Float32Array(64).fill(-1);
     this.trail.forEach((p, i) => tr.set([p[0], p[1], this.t - p[2], 0], i * 4));
     if (vis > 0 && this.trail.length) tr.set([H.p[0], H.p[1], 0, 0], this.trail.length * 4 < 64 ? this.trail.length * 4 : 60);

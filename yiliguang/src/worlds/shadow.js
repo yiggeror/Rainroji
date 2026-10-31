@@ -468,6 +468,9 @@ uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
 uniform float uTime, uExp, uFade, uDbg, uShim, uSink, uBare;
 uniform vec4 uReach;         // as the candle catches: the point on the paper nearest the flame, how far round it the light has reached (m)
 uniform vec3 uDot;           // the flame itself (一粒光): it stays when the paper goes dark
+uniform vec4 uSpark;         // a spark it has sent off, falling: where on the paper (s along it, height), how bright
+uniform vec4 uWin;           // the river opened onto the deep: how open; the deep, as it is, behind it
+uniform sampler2D uSea;
 uniform sampler2D uAtlas;
 uniform vec3 uF;             // the flame
 uniform vec4 uFI;            // its colour × brightness, its radius
@@ -606,6 +609,23 @@ void main(){
   c = pow(c, vec3(1.0 / 2.2));
   vec2 uv = gl_FragCoord.xy / uRes - 0.5;
   c *= 1.0 - 0.35 * dot(uv, uv) * 1.6;
+  if (tF > 0.0 && abs(S.y) < H){
+    float th = atan(S.z, S.x), sp = (1.5707963 - th) * R;
+    // the river, when the spark comes to it, opens: below its surface there is the deep itself (seen as through a hole)
+    float wl = -0.085 + 0.0030 * sin(sp * 70.0 + uTime * 2.5) + 0.0018 * sin(sp * 31.0 - uTime * 1.7);
+    if (uWin.x > 0.0){
+      float below = smoothstep(wl + 0.002, wl - 0.004, S.y) * uWin.x;
+      vec3 deep = texture(uSea, gl_FragCoord.xy / uRes).rgb;
+      c = mix(c, deep, below);
+      c += vec3(1.0, 0.75, 0.40) * exp(-abs(S.y - wl) / 0.0015) * 0.35 * uWin.x * (1.0 - uWin.y);   // the surface, catching the candlelight
+    }
+    // the spark, a hot point on the paper; only above the water (below it, it is the deep's own light)
+    if (uSpark.z > 0.0){
+      vec2 d = vec2(sp - uSpark.x, S.y - uSpark.y);
+      float g = exp(-dot(d, d) / 0.000006) * 1.2 + exp(-length(d) / 0.010) * 0.35;
+      c += vec3(1.0, 0.82, 0.55) * g * uSpark.z * (uWin.x > 0.0 ? smoothstep(wl - 0.002, wl + 0.002, S.y) : 1.0);
+    }
+  }
   c += (hash12(gl_FragCoord.xy + fract(uTime * 7.13) * 917.0) - 0.5) * 0.02;
   o = vec4(max(c, 0.0) * uFade, 1.0);
 }`;
@@ -832,9 +852,11 @@ W.shadow = {
     const u = this.pull ?? 1, e = u * u * (3 - 2 * u), f = this.flame(t).p;
     const th = Math.PI / 2 - sc / DR, dir = [Math.cos(th), 0, Math.sin(th)];
     const dist = 0.075 + 0.305 * e, y = (f[1] + 0.012) * (1 - e) + (0.0 + (still ? 0 : 0.004 * Math.sin(t * 0.23))) * e;
-    const eye = [dir[0] * (DR + dist), y, dir[2] * (DR + dist)];
+    // (diving: down to the river and closer, so the opened water fills the picture)
+    const dk = this.diveK || 0, de = dk * dk * (3 - 2 * dk);
+    const eye = [dir[0] * (DR + dist - 0.08 * de), y - 0.20 * de, dir[2] * (DR + dist - 0.08 * de)];
     // (as the candle gutters the eye tips down after it, so the last of the light stays in the picture)
-    const sk = this.sink || 0, at = [f[0] * (1 - e), f[1] * (1 - e) + (y - 0.004 + 0.55 * sk * (f[1] - y)) * e, f[2] * (1 - e)];
+    const sk = this.sink || 0, at = [f[0] * (1 - e), f[1] * (1 - e) + (y - 0.004 + 0.55 * sk * (f[1] - y)) * e - 0.20 * de, f[2] * (1 - e)];
     const fwd = V.norm(V.sub(at, eye)), right = V.norm(V.cross(fwd, [0, 1, 0])), up = V.cross(right, fwd);
     const vfov = (aspect < 0.9 ? 52 : 36) * (this.zoom ?? 1), ty = Math.tan(vfov * Math.PI / 360);
     return { eye, fwd, right, up, tan: [ty * aspect, ty] };
@@ -852,12 +874,29 @@ W.shadow = {
     const sink = this.sink || 0;
     return { p: [sx * (1 - sink), YF + sy + H.sway[1] - 0.15 * sink, 0.004 * Math.sin(t * 1.1)], k: br * this.light, br: dotK * (1 + 0.07 * Math.sin(t * 2.1) + 0.04 * Math.sin(t * 13.0) * Math.sin(t * 3.1)), r: 0.0042 * (1 - 0.7 * sink), gust };
   },
+  // the flame sends off a spark of itself (it stays lit): it pops out and falls, down into the river
+  sendSpark() { this.spark = { t0: this.t, s: 0, Y: YF, k: 0 }; },
+  sparkUpdate() {
+    const sp = this.spark; if (!sp) return;
+    const a = this.t - sp.t0, sc = this.camS(this.wheelT(this.t)), f = this.flame(this.t).p;
+    // (a little hop up out of the flame, then a fall that slows as it goes down into the water)
+    const u = Math.min(1, Math.max(0, (a - 0.15) / 1.0)), fall = u * u * (3 - 2 * u);
+    sp.s = sc - f[0] + 0.03 * Math.sin(Math.min(a, 1.2) * 2.0); sp.Y = f[1] + 0.014 * Math.sin(Math.min(a, 0.45) * 7.0) * (1 - u) - (f[1] + 0.20) * fall;
+    sp.k = YL.smooth(0, 0.15, a);
+  },
+  // the spark's place on the screen (-1 … 1), with the camera of the last frame
+  sparkScreen() {
+    const sp = this.spark, c = this.cam; if (!sp || !c) return null;
+    const th = Math.PI / 2 - sp.s / DR, P = [Math.cos(th) * DR, sp.Y, Math.sin(th) * DR], V = YL.V, v = V.sub(P, c.eye), z = V.dot(v, c.fwd);
+    return [V.dot(v, c.right) / (z * c.tan[0]), V.dot(v, c.up) / (z * c.tan[1])];
+  },
   pointer(nx, ny, speed) {
     this.hero.aim = [Math.max(-1, Math.min(1, nx)), Math.max(-1, Math.min(1, ny))];
     if (speed > 1.5) this.gust = Math.min(1, (this.gust || 0) + 0.3);
   },
   update(dt) {
     this.t += dt;
+    this.sparkUpdate();
     this.slow = this.sink ? this.slow + dt * this.sink * 0.85 : 0;
     const H = this.hero, tgt = H.aim ? [H.aim[0] * 0.03, H.aim[1] * 0.012] : [0, 0];
     this.gust = Math.max(0, (this.gust || 0) - dt * 0.8);
@@ -876,6 +915,10 @@ W.shadow = {
     U(p, 'uTime', this.t); U(p, 'uDbg', YL.QS.has('sdbg') ? 1 : 0); U(p, 'uExp', 1.0); U(p, 'uFade', this.fade); U(p, 'uShim', 1 + 1.5 * f.gust); U(p, 'uSink', Math.min(1, (this.sink || 0) * 2.5)); const rr = smooth(1.0, 3.2, this.t), ce = YL.V.norm([cam.eye[0], 0, cam.eye[2]]);
     U(p, 'uReach', [ce[0] * DR, f.p[1], ce[2] * DR, 0.65 * rr * rr]); U(p, 'uBare', 1 - smooth(1.4, 2.4, this.t));
     U(p, 'uDot', YL.mulc(YL.bb(1900), 0.55 * f.br * (1 - 0.35 * (this.sink || 0))));
+    const sk = this.spark;
+    U(p, 'uSpark', sk ? [sk.s, sk.Y, sk.k, 0] : [0, 0, 0, 0]);
+    U(p, 'uWin', [this.win || 0, this.diveK || 0, 0, 0]);
+    if (this.seaTex) YL.bindTex(p, 'uSea', this.seaTex, 1);
     U(p, 'uF', f.p); U(p, 'uFI', [...YL.mulc(YL.bb(2000), 1.15 * f.k), f.r * (1 + (this.gust || 0))]);
     gl.uniform4fv(p.u.uP0, P.a0); gl.uniform4fv(p.u.uP1, P.a1); gl.uniform4fv(p.u.uP2, P.a2); gl.uniform4fv(p.u.uP3, P.a3);
     gl.uniform1i(p.u.uN, P.nf); gl.uniform1i(p.u.uNB, P.nb);
