@@ -658,7 +658,7 @@ float squidSDF(vec3 p, float pulse, out float part){
 vec3 squid(vec3 ro, vec3 rd, inout float T){
   if (uSq.w <= 0.0) return vec3(0.0);
   vec3 F = uSqF.xyz, Up0 = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up0)), Up = cross(Z, F);
-  vec3 rl = ro - uSq.xyz;
+  vec3 rl = (ro - uSq.xyz) / 1.7;                                               // (it is drawn at 1.7 times its model's size)
   vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
   vec3 oc = o - vec3(0.0, 0.0, 0.0); float b = dot(oc, d), cc = dot(oc, oc) - 0.20 * 0.20, h = b * b - cc;
   if (h < 0.0) return vec3(0.0);
@@ -673,6 +673,7 @@ vec3 squid(vec3 ro, vec3 rd, inout float T){
   vec3 p = o + d * t; float pp;
   vec2 e = vec2(0.0008, -0.0008);
   vec3 n = normalize(e.xyy * squidSDF(p + e.xyy, uSqF.w, pp) + e.yyx * squidSDF(p + e.yyx, uSqF.w, pp) + e.yxy * squidSDF(p + e.yxy, uSqF.w, pp) + e.xxx * squidSDF(p + e.xxx, uSqF.w, pp));
+  t *= 1.7;
   vec3 xw = ro + rd * t, Lw = uL - xw, Ld = normalize(vec3(dot(Lw, F), dot(Lw, Up), dot(Lw, Z)));
   float ndl = dot(n, Ld), wrap = sat((ndl + 0.4) / 1.4);
   vec3 E = lightAt(xw);
@@ -699,9 +700,10 @@ vec3 inkCloud(vec3 ro, vec3 rd, inout float T, vec3 c){
     float dens = smoothstep(1.0, 0.30, q + 0.45 * (billow - 0.5)) * uInkK.x;
     if (dens <= 0.0) continue;
     float a = dens * dt * 28.0;
-    vec3 Ein = uLI2.r > 0.0 ? uLI2 * exp(-SIG_T * length(p - uL2)) / (dot(p - uL2, p - uL2) + 0.004) : vec3(0.0);
-    vec3 Eout = lightAt(p) - Ein;
-    sc += tr * a * (Eout * 0.010 * vec3(0.30, 0.24, 0.22) + Ein * 0.030 * vec3(1.0, 0.55, 0.25) * uInkK.y);
+    // (the spark's glow in the ink: soft, short-reaching, a warm heart in the black, not a lamp)
+    vec3 Ein = uLI2.r > 0.0 ? uLI2 * 6.0 * exp(-length(p - uL2) / 0.10) : vec3(0.0);
+    vec3 Eout = lightAt(p); Eout /= 1.0 + 0.5 * length(Eout);                  // (ink drinks light: near the lamp it does not blaze)
+    sc += tr * a * (Eout * 0.004 * vec3(0.30, 0.24, 0.22) + Ein * 0.030 * vec3(1.0, 0.55, 0.25) * uInkK.y);
     tr *= exp(-a);
     if (firstT < 0.0 && tr < 0.3) firstT = t;
   }
@@ -864,6 +866,7 @@ uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
 uniform float uTime;
 uniform vec4 uJP[3]; uniform vec4 uJU[3]; uniform vec4 uJK[3];
 uniform int uSeg;            // vertices per tentacle
+uniform float uDim;          // (the squid's ink closing over everything)
 out vec3 vC;
 ` + COMMON + `
 void main(){
@@ -898,7 +901,7 @@ void main(){
   float fwd = HG(dot(normalize(p - uL), -normalize(v)), 0.5) * 4.0 * PI;
   vC = E * (k == jm ? vec3(0.9, 0.95, 1.0) : vec3(0.7, 0.12, 0.12)) * (0.012 + 0.02 * fwd) * (1.0 - 0.7 * s);
   if (k == ja) vC += vec3(0.05, 0.2, 0.6) * 0.004 * (1.0 - s) * (inst == 120 ? 0.4 : 1.0);
-  vC *= exp(-SIG_V * z);
+  vC *= exp(-SIG_V * z) * uDim;
 }`;
 const FS_TENT = `#version 300 es
 precision highp float;
@@ -1020,6 +1023,7 @@ layout(location = 0) in vec4 aG;      // a light: position, brightness
 layout(location = 1) in vec4 aK;      //          its colour, its size (m)
 uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan; uniform vec2 uRes;
 uniform sampler2D uDepth;
+uniform float uDim;
 out vec2 vUV; out float vI; out float vR; out vec3 vK; out float vSoft;
 const vec3 SIG_V = vec3(0.10, 0.06, 0.045);
 void main(){
@@ -1029,7 +1033,7 @@ void main(){
   vec2 ndc = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
   if (abs(ndc.x) < 1.0 && abs(ndc.y) < 1.0 && texture(uDepth, ndc * 0.5 + 0.5).a < length(v) - 0.05){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   float px = aK.w / (z * uTan.y) * uRes.y * 0.5 + 3.0;                   // its glow, in pixels
-  vI = aG.w * exp(-0.06 * z) / (z * z + 0.3);
+  vI = aG.w * exp(-0.06 * z) / (z * z + 0.3) * uDim;
   vR = px;
   vK = aK.rgb;
   vSoft = step(0.025, aK.w);                                              // (a cloud of light, not a point)
@@ -1369,7 +1373,7 @@ W.deepsea = {
   squidState() {
     const S = this.sq; if (!S) return null;
     const V = YL.V, a = this.t - S.t0, at = (r, u, f) => V.add(S.L, V.add(V.mul(S.R, r), V.add(V.mul(S.U, u), V.mul(S.F, f))));
-    const P0 = at(1.5, 0.12, 0.25), Ps = at(0.42, 0.06, 0.22), e = YL.smooth(0, 1.3, a);
+    const P0 = at(1.4, 0.10, 0.10), Ps = at(0.30, 0.05, 0.05), e = YL.smooth(0, 1.3, a);
     const away = V.norm(V.add(S.R, V.add(V.mul(S.U, 0.45), V.mul(S.F, -0.3))));
     let p = V.add(V.mul(P0, 1 - e), V.mul(Ps, e)), dir = V.mul(S.R, -1);
     const turn = YL.smooth(1.3, 1.6, a); dir = V.norm(V.add(V.mul(dir, 1 - turn), V.mul(away, turn)));
@@ -1382,8 +1386,8 @@ W.deepsea = {
     if (a > 1.45) {
       const c0 = V.add(Ps, V.add(V.mul(S.R, -0.03), V.mul(S.U, 0.01 * (a - 1.45)))), r0 = 0.04 + 0.24 * YL.smooth(1.45, 2.4, a);
       const eng = YL.smooth(3.2, 4.7, a), toEye = V.add(S.eye, V.mul(V.norm(V.sub(c0, S.eye)), 0.35));
-      ink = { c: V.add(V.mul(c0, 1 - eng), V.mul(toEye, eng)), r: r0 + 2.6 * eng * eng, k: 1 };
-      if (a > 2.4) { const sp = YL.smooth(2.4, 3.0, a); spark = { p: V.add(V.mul(S.L, 1 - sp), V.mul(ink.c, sp)), glow: YL.smooth(2.9, 3.4, a) }; }
+      ink = { c: V.add(V.mul(c0, 1 - eng), V.mul(toEye, eng)), r: r0 + 2.6 * eng * eng, k: 1 + 1.5 * eng };
+      if (a > 2.4) { const sp = YL.smooth(2.4, 3.0, a); spark = { p: V.add(V.mul(S.L, 1 - sp), V.mul(ink.c, sp)), glow: YL.smooth(2.9, 3.4, a) * (1 - 0.85 * eng) }; }
     }
     return { p, dir, pulse, shown: a < 3.0 ? 1 : 0, ink, spark, a };
   },
@@ -1593,7 +1597,8 @@ W.deepsea = {
     const cam = this.cam = this.camera(aspect, this.t, still);
     const L = this.L = this.lightPos(this.t, cam);
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);       // the same breathing as in every world
-    const LI = YL.mulc(YL.bb(2500), 0.30 * br * (this.light ?? 1) * (1 - 0.6 * (this.hero.fear || 0)));
+    const swallowed = this.sq ? YL.smooth(3.4, 4.6, this.t - this.sq.t0) : 0;
+    const LI = YL.mulc(YL.bb(2500), 0.30 * br * (this.light ?? 1) * (1 - 0.6 * (this.hero.fear || 0)) * (1 - 0.85 * swallowed));
     const Lr = this.lure, br2 = 1 + 0.07 * Math.sin(this.t * 2.1 + 0.9) + 0.03 * Math.sin(this.t * 5.3 + 2);
     let LI2 = Lr.state !== 'off' && Lr.state !== 'gone' ? YL.mulc(YL.bb(2500), 0.30 * br2 * Lr.k) : [0, 0, 0];
     const SQ = this.squidState();
@@ -1627,7 +1632,7 @@ W.deepsea = {
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(this.pTent.p); camU(this.pTent);
     gl.uniform4fv(this.pTent.u.uJP, jp); gl.uniform4fv(this.pTent.u.uJU, ju); gl.uniform4fv(this.pTent.u.uJK, jk);
-    gl.uniform1i(this.pTent.u.uSeg, 24);
+    gl.uniform1i(this.pTent.u.uSeg, 24); U(this.pTent, 'uDim', 1 - swallowed);
     gl.drawArraysInstanced(gl.LINE_STRIP, 0, 24, 121);
     // 3) marine snow, into its own buffer
     gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb); gl.viewport(0, 0, B.w, B.h);
@@ -1674,7 +1679,7 @@ W.deepsea = {
     });
     gl.useProgram(this.pGlow.p);
     U(this.pGlow, 'uEye', cam.eye); U(this.pGlow, 'uFwd', cam.fwd); U(this.pGlow, 'uRight', cam.right); U(this.pGlow, 'uUp', cam.up); U(this.pGlow, 'uTan', cam.tan); U(this.pGlow, 'uRes', [B.w, B.h]);
-    YL.bindTex(this.pGlow, 'uDepth', A.tex, 0);
+    YL.bindTex(this.pGlow, 'uDepth', A.tex, 0); U(this.pGlow, 'uDim', 1 - swallowed);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.gbuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, gb);
     gl.bindVertexArray(this.gvao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nGlow);
     gl.disable(gl.BLEND);
