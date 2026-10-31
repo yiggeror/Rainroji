@@ -110,7 +110,7 @@ const VIL_CAM = [
 ];
 { const E = YL.worlds.village.CAM_END; for (const K of VIL_CAM) if (!K.pos) { K.pos = E.pos.slice(); K.tgt = E.tgt.slice(); } }
 if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_PAPER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SQUID, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_PAPER: 6.2, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SQUID: 15.8, T_SEA: 20.5, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_PAPER: 6.2, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SQUID: 15.8, T_SEA: 20.5, T_BLOOM: 5.2, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 // distance covered (0 … 1) at time x (0 … 1) when speeding up over the first a, steady, slowing over the last b
 const trap = (x, a, b) => { const vm = 1 / (1 - a / 2 - b / 2);
@@ -302,7 +302,7 @@ const D = YL.director = {
       if (D.phase === 'fall') {
         stg.view = [0, D.camY / k + stg.WATER, vz];
         stg.lampOverride = [P.x / k, P.y / k + stg.WATER];
-        stg.light = Math.exp(-Math.max(0, -P.y) * 2.5);
+        stg.light = 0.40 + 0.60 * Math.exp(-Math.max(0, -P.y) * 2.5);        // (the screen keeps some of its glow as the pearl goes down)
         sea.vol = smooth(0, 1.5, tau); stg.vol = 1 - smooth(0.5, 2.5, tau);
         if (D.camY < -0.56) { D.go('water'); D.world = 'sea'; stg.vol = 0; sea.vol = 1; }
       }
@@ -310,14 +310,14 @@ const D = YL.director = {
       const tw = tau - 2.5;
       const L = 1.6, eyeOff = (0.245 - 0.5) * L;
       const arrive = smooth(1.0, 6.5, tw), leave = smooth(9.0, 13.0, tw);
-      const eyeX = P.x + 0.13, wx = lerp(eyeX - eyeOff + 2.4, eyeX - eyeOff, arrive) - 2.6 * leave * leave;
-      const wy = P.y + 0.024 * L + 0.02 + 0.03 * Math.sin(tw * 0.4);
+      const eyeX = P.x + 0.075, wx = lerp(eyeX - eyeOff + 2.4, eyeX - eyeOff, arrive) - 2.6 * leave * leave;
+      const wy = P.y + 0.024 * L + 0.005 + 0.02 * Math.sin(tw * 0.4);
       sea.whale = [wx, wy, tw > 0.5 ? L : 0, -0.03 + 0.04 * Math.sin(tw * 0.3)];
       const look = smooth(6.0, 7.5, tw) * (1 - smooth(9.2, 10.6, tw));
       sea.whaleB = [1 - 0.95 * Math.exp(-Math.pow((tw - 8.1) / 0.12, 2)), 0, look, 0];
       const eyeW = [wx + eyeOff, wy - 0.024 * L];
-      const mid = [(eyeW[0] + P.x) * 0.5, (eyeW[1] + P.y) * 0.5];
-      sea.zoom = lerp(1, 0.20, look);
+      const mid = [eyeW[0] + (P.x - eyeW[0]) * 0.35, eyeW[1] + (P.y - eyeW[1]) * 0.35];
+      sea.zoom = 1 / lerp(1, 1 / 0.075, look * look * (3 - 2 * look));
       cam = [lerp(cam[0], mid[0], look), lerp(cam[1], mid[1], look)];
       sea.cam = cam;
       // ---- the squid: up out of the deep, startled; it jets off and leaves its ink, which blooms over everything
@@ -327,9 +327,9 @@ const D = YL.director = {
         const sx = 0.55 - 0.15 * sq - 1.6 * smooth(1.5, 2.6, sq), sy = D.camY - 0.55 + 0.12 * sq + 0.5 * smooth(1.5, 2.6, sq);
         sea.squid = [sx, sy, 0.30, 2.6 + 0.5 * smooth(1.4, 1.8, sq)]; sea.squidB = [smooth(0, 0.6, sq) * (1 - smooth(2.4, 2.9, sq)), jet, 0, 0];
         if (sq > 1.55 && !D.inkAt) D.inkAt = [sx + 0.10, sy - 0.05];
-        if (D.inkAt) { const a2 = sq - 1.55; sea.ink = [D.inkAt[0], D.inkAt[1], 0.05 + 1.9 * smooth(0, 3.6, a2) * smooth(0, 3.6, a2) + 0.15 * smooth(0, 0.6, a2), smooth(1.0, 3.8, a2)];
+        if (D.inkAt) { const a2 = sq - 1.55; sea.ink = [D.inkAt[0], D.inkAt[1], 0.02 + a2 * 0.75, smooth(2.2, 4.2, a2)];
           // all ink now: it thins on the paper, and the pearl in it is a point of vermilion
-          if (a2 > 3.9 && D.phase === 'water') {
+          if (a2 > 4.3 && D.phase === 'water') {
             const ink = YL.worlds.ink; if (!ink.ready) ink.init();
             const aspect = YL.canvasAspect(), n = sea.toNdc(sea.pearl, aspect), Pp = ink.toPaint(n[0], n[1], aspect);
             ink.arrive(Pp[0], Pp[1]); ink.bloom = 1; ink.dawn = 0; ink.grow = [0, 0, 0, 0]; ink.vol = 0;
@@ -347,7 +347,7 @@ const D = YL.director = {
     const fwd = V.norm(V.sub(vil.pathAtS(sm + 2), vil.pathAtS(sm - 2)));
     const right = V.norm(V.cross(fwd, [0, 1, 0]));
     const follow = { pos: V.add(V.add(back, [0, 2.4, 0]), V.mul(right, 1.4)), tgt: V.add(ahead, [0, -0.9, 0]), vfov: 32 };
-    const C0 = vil.CAM0, rail = camPath(VIL_CAM, t);
+    const C0 = vil.CAM0V, rail = camPath(VIL_CAM, t);
     const kIn = smooth(0.9, 3.4, t), kOut = smooth(T_LANE - 3.6, T_LANE - 1.2, t);
     const mix3 = (a, b, k) => a.map((v, i) => lerp(v, b[i], k));
     let pos = mix3(C0.pos, follow.pos, kIn), tgt = mix3(C0.tgt, follow.tgt, kIn), vfov = lerp(C0.vfov, follow.vfov, kIn);
@@ -382,7 +382,7 @@ const D = YL.director = {
       H.flyK = 1.4 + 10 * smooth(0.3, 1.5, u);
       summer.heroK = 1 - smooth(4.0, 4.4, u);
       // the eye: comes down over the sheet, looking at where the light is going, then turns square to it as it closes in
-      const dEnd = 0.135 / vil.OVER / Math.tan(20 * Math.PI / 180);
+      const dEnd = 0.135 / vil.PAPER_OVER / Math.tan(20 * Math.PI / 180);
       const E0 = D.paperE0 || (D.paperE0 = summer.eyeAt(summer.t));
       const pEnd = V.add(Rs.c, V.mul(Rs.N, dEnd)), pMid = V.add(Rs.c, V.add(V.mul(Rs.N, 0.75), V.mul(V.sub(E0, Rs.c), 0.30)));
       const s_ = trap(clamp((u - 1.6) / (T_PAPER - 1.6), 0, 1), 0.3, 0.4);
@@ -560,7 +560,7 @@ const D = YL.director = {
     const G = (a, b, x) => smooth(a, b, x);
     if (D.phase === 'inkbloom') {
       const u = clamp(D.pt / T_BLOOM, 0, 1);
-      ink.bloom = 1 - smooth(0.12, 1.0, u);
+      ink.bloom = 0.80 * (1 - smooth(0.18, 1.0, u)) + 0.20 * (1 - smooth(0.0, 0.14, u));
       ink.grow = [G(0.35, 0.85, u), G(0.55, 1.0, u), 0, 0];
       ink.vol = smooth(0.1, 0.8, u); sea.vol = 1 - smooth(0.0, 0.3, u);
       // out of the settling ink the light sets off as the brush, and paints the scroll as it goes

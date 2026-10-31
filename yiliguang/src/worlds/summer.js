@@ -456,11 +456,11 @@ void main(){
 }`;
 const FS_RESOLVE = `#version 300 es
 precision highp float;
-uniform sampler2D uSrc; uniform vec2 uRes; uniform float uFade;
+uniform sampler2D uSrc; uniform vec2 uRes; uniform float uFade, uVig;
 out vec4 o;
 void main(){ vec2 uv = gl_FragCoord.xy / uRes; vec3 c = texture(uSrc, uv).rgb;
   // a soft vignette, as in a painted background
-  vec2 d = uv - 0.5; c *= 1.0 - 0.18 * dot(d, d) * 2.0;
+  vec2 d = uv - 0.5; c *= 1.0 - 0.18 * dot(d, d) * 2.0 * uVig;
   o = vec4(c * uFade, 1.0); }`;
 
 // ---------------------------------------------------------------------------
@@ -932,7 +932,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msFb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.res.fb);
     gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
-    gl.useProgram(this.pRes.p); U(this.pRes, 'uRes', [w, h]); U(this.pRes, 'uFade', this.fade);
+    gl.useProgram(this.pRes.p); U(this.pRes, 'uRes', [w, h]); U(this.pRes, 'uFade', this.fade); U(this.pRes, 'uVig', 1 - (this.sheetFlat || 0));
     YL.bindTex(this.pRes, 'uSrc', this.res.tex, 0);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

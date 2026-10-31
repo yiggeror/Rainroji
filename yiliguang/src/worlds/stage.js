@@ -168,13 +168,22 @@ W.stage = {
     put('pagoda', -1.22, -0.18, 0.05, 0.0011, 0, 500, 1000, 1, 1);
     put('willow', -0.92, -0.42, 0.02, 0.0010, 0.02 * Math.sin(t * 0.8), 500, 1000, 1, 1);
     // the dragon: head, eight joints and the tail, all on its way behind one another
-    const mpp = 0.00085, segL = 560 * 0.512 * mpp, sH = this.dS(t);
+    const mpp = 0.00085, segL = 480 * 0.512 * mpp, sH = this.dS(t);
     const joints = []; for (let i = 0; i <= 9; i++) joints.push(this.wayAt(sH - 0.05 - i * segL));
     const ang = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
     const hp = this.wayAt(sH + 0.08);
     put('dhead', joints[0][0], joints[0][1], 0.012, mpp, ang(joints[0], hp) + 0.18, 230, 530);
     for (let i = 0; i < 8; i++) put('dbody', joints[i][0], joints[i][1], 0.012, mpp, ang(joints[i], joints[i + 1]) + Math.PI, 900, 530);
     put('dtail', joints[8][0], joints[8][1], 0.012, mpp, ang(joints[8], joints[9]), 100, 530);
+    // two cranes crossing high up, right to left, their wings beating
+    for (let k = 0; k < 2; k++) {
+      const x = 2.1 - 0.30 * (t - 1.5 - k * 1.1), y = 0.52 + 0.05 * k + 0.02 * Math.sin(t * 0.9 + k);
+      if (x < -2.1 || x > 2.1) continue;
+      const g = t * 4.2 + k * 1.7;
+      put('cwing', x + 0.004, y, 0.03, 0.00062, -0.9 + 0.7 * Math.sin(g - 0.5), 500, 500, -1, 0.8);
+      put('crane', x, y, 0.03, 0.00062, 0.04 * Math.sin(g - 1.0), 540, 500, -1, 1);
+      put('cwing', x, y, 0.03, 0.00062, -0.9 + 0.7 * Math.sin(g), 500, 500, -1, 1);
+    }
     // a carp leaping, now and then; a boat on the waves
     const cj = (t - 5.2);
     if (cj > 0 && cj < 1.6) {
@@ -197,7 +206,7 @@ W.stage = {
     // the water changes, from where the pearl went in
     if (this.drop) {
       const pe = this.lamp;
-      if (this.sea[2] === 0 && pe[1] < this.WATER + 0.02) { this.sea[0] = pe[0]; this.sea[1] = this.WATER; this.seaT = t; this.splash = t; }
+      if (this.seaT === undefined && pe[1] < this.WATER + 0.02) { this.sea[0] = pe[0]; this.sea[1] = this.WATER; this.seaT = t; this.splash = t; }
       if (this.seaT !== undefined) this.sea[2] = 4.0 * smooth(0, 1.4, t - this.seaT) + 0.12 * smooth(0, 0.15, t - this.seaT);
     }
     this.sound(dt);

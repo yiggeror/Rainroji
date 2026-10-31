@@ -57,6 +57,7 @@ const vec3 GAMB = vec3(0.02, 0.20, 0.92);
 const vec3 SIEN = vec3(0.22, 0.60, 0.92);
 const vec3 ORAN = vec3(0.05, 0.60, 1.39);
 const vec3 SUMI = vec3(1.55, 1.50, 1.40);
+const vec3 PHTH = vec3(1.20, 0.52, 0.13);          // phthalo blue: a cool, clear deep blue
 const vec3 PAPER = vec3(0.965, 0.952, 0.915);
 `;
 const FS = HEAD + `
@@ -310,31 +311,77 @@ void squid(vec2 p, vec4 S, vec4 SB, inout vec3 K){
   vec3 sK = (ROSE * 0.7 + SIEN * 0.45) * b * (0.7 + 0.3 * fbm3(q * 6.0)) + SIEN * 0.8 * spots + INDI * 1.2 * eye;
   K = mix(K, sK + K * 0.25, clamp(b, 0.0, 1.0) * SB.x);
 }
-// ---- the whale's eye, looked at close: folds of skin round it, the dark eye, a wet highlight, the pearl in it
+// ---- a school of small silver fish: a whirling ball of darts round a centre, thinning at its edge
+void fishBall(vec2 p, vec2 c, float R, float squash, float spin, float seed, inout vec3 K){
+  vec2 sp = (p - c) / R;
+  float sr = length(sp * vec2(1.0, squash));
+  if (sr > 1.15) return;
+  float dens = smoothstep(1.05, 0.55, sr + 0.25 * (fbm3(sp * 2.0 + seed + uTime * 0.05) - 0.5)) * smoothstep(0.05, 0.22, sr);
+  float a = atan(sp.y * squash, sp.x) - uTime * spin;
+  float rings = 14.0 * R / 0.3;
+  vec2 polar = vec2(a * floor(9.0 + 26.0 * R) / PI, sr * rings);
+  vec2 cell = floor(polar), f = fract(polar) - 0.5;
+  vec2 j = hash22(cell + seed) - 0.5;
+  if (hash12(cell + 3.1 + seed) > 0.25 + 0.6 * dens) return;
+  float ta = atan(sp.y * squash, sp.x) + PI * 0.5 * sign(spin);
+  vec2 fq = rot(-ta) * (f - j * 0.45) * vec2(PI * sr * R * 2.0 / floor(9.0 + 26.0 * R), R / rings);
+  float fd = fish(fq, 0.026);
+  float fdens = wash(fd, 0.0012, 0.6, 0.003);
+  K += (INDI * 0.8 + ULTR * 0.6) * fdens * 0.95;
+  K *= 1.0 - 0.45 * smoothstep(0.004, 0.0, abs(fq.y + 0.0012)) * step(fd, 0.0);        // a silver flash along each flank
+}
+// ---- a manta, gliding: dark above, its wings rising and falling slowly; painted round, its belly edge pale
+void manta(vec2 p, vec2 c, float s, float ph, inout vec3 K){
+  vec2 q = (p - c) / s;
+  if (abs(q.x) > 1.4 || abs(q.y) > 1.0) return;
+  float flap = sin(uTime * 1.1 + ph);
+  float wing = abs(q.x);
+  // the body seen a little from above: a broad diamond whose tips rise and fall
+  float yTip = 0.18 * flap * wing * wing;
+  float top = 0.30 * (1.0 - wing) * (1.0 - 0.3 * wing) + 0.10 + yTip;
+  float bot = -0.18 * (1.0 - wing) - 0.04 + yTip;
+  float d = max(max(q.y - top, bot - q.y), wing - 1.0 + 0.15 * max(q.y - yTip, 0.0));
+  // the horns in front and the whip of a tail behind
+  float horns = min(sdSeg(q, vec2(-0.08, 0.36), vec2(-0.13, 0.50)), sdSeg(q, vec2(0.08, 0.36), vec2(0.13, 0.50))) - 0.035;
+  float tail = sdSeg(q, vec2(0.0, -0.12), vec2(0.04 * sin(uTime * 2.0 + ph), -0.80)) - 0.012;
+  d = min(d, min(horns, tail));
+  d += rough(q, 14.0, 0.02, ph);
+  float dpx = d * s;
+  float b = wash(dpx, 0.0015, 0.7, 0.006);
+  float cov = clamp(b, 0.0, 1.0);
+  float shade = smoothstep(-0.2, 0.3, q.y - yTip);
+  vec3 mK = (INDI * 0.9 + ULTR * 0.5) * mix(0.55, 1.1, shade) * (0.85 + 0.3 * fbm3(q * 5.0 + ph));
+  K = mix(K, mK + K * 0.25, cov * 0.92);
+}
+// ---- the whale's eye: an almond between heavy lids, the folds of skin following the lids' line; the eye wet and dark,
+// a highlight lifted out of it, and in it, small and warm, the pearl
 void bigEye(vec2 p, vec2 c, float r, float lid, vec2 pearl, inout vec3 K){
   vec2 q = (p - c) / r;
-  float d = length(q * vec2(1.0, 1.35));
-  if (d > 9.0) return;
-  // the folds: wrinkles running round the eye, drawn with a fine brush
-  float fold = abs(fract(d * 1.6 - 0.15 * fbm3(q * 1.5)) - 0.5);
-  float folds = smoothstep(0.06, 0.0, fold - 0.02) * smoothstep(1.3, 1.8, d) * smoothstep(7.0, 3.0, d);
-  K += INDI * folds * 0.35 * (0.6 + 0.4 * vnoise(q * 3.0));
-  // the lids
-  float lidY = mix(0.02, 1.0, lid);
-  float open = max(d - 1.0, abs(q.y) - 0.74 * lidY);
-  float rim = smoothstep(0.10, 0.0, abs(d - 1.06)) * step(abs(q.y), 0.9);
-  K += INDI * rim * 0.8;
-  // the eye: nearly black, a ring of brown, the wet highlight lifted out, and the little warm pearl in it
-  if (open < 0.0){
-    vec3 eK = INDI * 2.1 + SIEN * 0.5;
-    float iris = smoothstep(0.62, 0.80, d);
-    eK = mix(eK, SIEN * 1.4 + INDI * 0.6, iris * 0.6);
-    float hl = smoothstep(0.20, 0.08, length(q - vec2(-0.30, 0.32)));
+  if (dot(q, q) > 120.0) return;
+  q = rot(-0.12) * q;
+  // the almond: two arcs meeting at the corners
+  float open_ = mix(0.06, 1.0, lid);
+  float halfH = 0.62 * open_ * sqrt(max(1.0 - q.x * q.x / 1.9, 0.0));
+  float almond = max(abs(q.y + 0.04 * q.x) - halfH, abs(q.x) - 1.38);
+  // the folds round it: lines that follow the almond outward, looser and fainter as they go
+  float lev = abs(q.y) / max(0.62 * sqrt(max(1.0 - q.x * q.x / 9.0, 0.02)), 0.05) + 0.25 * abs(q.x);
+  float fold = abs(fract(lev * 1.3 + 0.12 * fbm3(q * 1.3)) - 0.5);
+  float folds = smoothstep(0.07, 0.0, fold - 0.015) * smoothstep(1.1, 1.6, lev) * smoothstep(5.5, 2.5, lev);
+  K += INDI * folds * 0.30 * (0.6 + 0.4 * vnoise(q * 2.0));
+  // the heavy lid line and a shadow under the upper lid
+  float rim = smoothstep(0.10, 0.0, abs(almond)) ;
+  K += INDI * rim * 0.9;
+  if (almond < 0.0){
+    vec3 eK = INDI * 2.2 + SIEN * 0.5;
+    float iris = smoothstep(0.30, 0.55, length(q * vec2(0.8, 1.0)));
+    eK = mix(eK, SIEN * 1.5 + INDI * 0.7, iris * 0.55);
+    eK += INDI * 0.6 * smoothstep(0.0, 0.35, q.y + 0.04 * q.x - halfH + 0.35);           // the lid's shadow on it
+    float hl = smoothstep(0.24, 0.10, length((q - vec2(-0.35, 0.18)) * vec2(0.8, 1.3)));
     eK *= 1.0 - 0.85 * hl;
-    vec2 pd = normalize(pearl - c + 1e-5) * 0.38;
-    float warm = smoothstep(0.13, 0.03, length(q - pd));
-    eK = mix(eK, GAMB * 0.3, warm);
-    K = mix(K, eK, smoothstep(0.03, -0.03, open));
+    vec2 pd = normalize(pearl - c + 1e-5) * 0.30;
+    float warm = smoothstep(0.12, 0.03, length(q - pd));
+    eK = mix(eK, GAMB * 0.25, warm);
+    K = mix(K, eK, smoothstep(0.03, -0.03, almond));
   }
 }
 void main(){
@@ -353,9 +400,9 @@ void main(){
   float mot = mix(0.30, 0.14, smoothstep(0.8, 2.5, dd));
   float wd = 0.30 + 0.60 * min(dd, 1.0) + 0.16 * min(max(dd - 1.0, 0.0), 2.0) + mot * (m1 - 0.5) + 0.08 * (streak - 0.5);
   vec3 mixK = mix(TURQ * 0.85, CERU, smoothstep(0.35, 0.65, m1));
-  mixK = mix(mixK, ULTR * 1.1, smoothstep(0.2, 1.0, dd) * smoothstep(0.35, 0.7, m2));
+  mixK = mix(mixK, mix(PHTH, ULTR, 0.35) * 1.05, smoothstep(0.2, 1.0, dd) * smoothstep(0.35, 0.7, m2));
   mixK += VIOL * (0.25 * smoothstep(0.62, 0.8, m3) * smoothstep(0.3, 1.0, dd) + 0.10 * smoothstep(1.8, 4.0, dd));
-  mixK = mix(mixK, CERU * 0.9 + TURQ * 0.25, 0.25 * smoothstep(1.2, 3.0, dd));
+  mixK = mix(mixK, PHTH * 0.75 + TURQ * 0.30, 0.45 * smoothstep(1.0, 2.6, dd));
   K += mixK * wd;
   float gEdge = -0.60 - 0.22 * w.x + 0.14 * (fbm3(vec2(w.x * 2.3, 2.0)) - 0.5) + 0.05 * (fbm3(vec2(w.x * 9.0, 7.0)) - 0.5);
   float gd = gEdge - w.y;
@@ -371,7 +418,7 @@ void main(){
   float ang = atan(rd.x, -rd.y);
   float shafts = smoothstep(0.55, 0.95, vnoise(vec2(ang * 22.0 + uTime * 0.05, 0.5)));
   shafts += 0.6 * smoothstep(0.5, 0.9, vnoise(vec2(ang * 47.0 - uTime * 0.07, 3.5)));
-  shafts *= exp(-max(depth - 0.1, 0.0) * 1.0) * (0.75 + 0.5 * vnoise(vec2(ang * 30.0, length(rd) * 3.0)));
+  shafts *= (exp(-max(depth - 0.1, 0.0) * 1.0) * 0.8 + 0.2 * exp(-max(depth - 0.1, 0.0) * 0.35)) * (0.75 + 0.5 * vnoise(vec2(ang * 30.0, length(rd) * 3.0)));
   K *= 1.0 - 0.5 * clamp(shafts, 0.0, 1.2);
   // near the surface the light comes through in a net of caustic lines
   float caus = 1.0 - abs(vnoise(p * vec2(9.0, 14.0) + vec2(uTime * 0.3, 0.0)) * 2.0 - 1.0);
@@ -416,8 +463,15 @@ void main(){
       K *= 1.0 - 0.4 * smoothstep(0.004, 0.0, abs(fq.y + 0.0012)) * step(fd, 0.0) * school;
     }
   }
+  // ===== further down: a great school whirling, a smaller one, a manta gliding across
+  fishBall(p, vec2(-0.55 + 0.05 * sin(uTime * 0.2), -1.75), 0.42, 1.5, 0.22, 1.0, K);
+  fishBall(p, vec2(0.62, -2.35), 0.25, 1.8, -0.30, 7.0, K);
+  manta(p, vec2(-1.25 + 0.16 * uTime, -1.35 + 0.04 * sin(uTime * 0.5)), 0.30, 0.0, K);
   // ===== jellyfish at their depths
   float jl = 0.0;
+  jelly(p, vec2(0.38, -1.05), 0.08, 0.2, 7.0, K, jl);
+  jelly(p, vec2(-0.25, -2.05), 0.10, -0.25, 8.0, K, jl);
+  jelly(p, vec2(0.48, -2.75), 0.065, 0.15, 9.0, K, jl);
   jelly(p, vec2(-0.42, -0.55 + 0.02 * sin(uTime * 0.6)), 0.12, 0.25, 0.0, K, jl);
   jelly(p, vec2(0.30, -0.25), 0.06, -0.3, 2.0, K, jl);
   jelly(p, vec2(-0.10, -1.55), 0.05, 0.1, 4.0, K, jl);
@@ -462,23 +516,37 @@ void main(){
     K *= 1.0 - 0.7 * smoothstep(0.001, -0.002, d + r * 0.3);
     K += ULTR * wash(abs(d + r * 0.15) - r * 0.15, 0.001, 0.0, 0.01) * 0.5;
   }
-  // ===== the ink: a cloud of sumi billowing in the water — a warped mass with folds, dense at its heart, thin and
-  // see-through at its fringe, threads pulling out of it and curling; it swells until there is nothing else
+  // ===== the ink: puffs sprayed one after another along the squid's way. Each is smoke in water: noise warped through
+  // itself so it curls into wisps, a dense heart, soft veils, curling fronts; they swell and run together until
+  // there is only ink, still moving
   if (uInk.z > 0.0){
-    float R = uInk.z;
-    vec2 iq = (p - uInk.xy) / R;
-    float tt = uTime * 0.12;
-    vec2 wq = iq + 0.45 * vec2(fbm(iq * 1.8 + vec2(tt, 3.0)), fbm(iq * 1.8 + vec2(7.0, -tt))) - 0.22;
-    wq += 0.18 * vec2(fbm(wq * 4.0 - tt * 1.3), fbm(wq * 4.0 + 5.0 + tt)) - 0.09;
-    float n = fbm(wq * 3.0 + 11.0);
-    float rr = length(wq * vec2(1.0, 1.2));
-    float body = smoothstep(1.0, 0.45, rr + 0.55 * (n - 0.5));
-    float folds = 0.75 + 0.5 * smoothstep(0.35, 0.75, fbm(wq * 7.0 + 2.0));
-    float rid = 1.0 - abs(2.0 * fbm(wq * 6.5 + 4.0) - 1.0);
-    float threads = pow(rid, 7.0) * smoothstep(1.7, 0.7, rr);
-    float dens = max(body * folds, threads * 0.75);
-    float edge = exp(-pow((rr + 0.55 * (n - 0.5) - 0.82) / 0.05, 2.0)) * 0.5;      // the drying edge, darker
-    K = K * (1.0 - 0.6 * clamp(dens, 0.0, 1.0)) + SUMI * (dens * 1.35 + edge * body);
+    float tt = uTime * 0.08;
+    float inkK = 0.0;
+    for (int i = 0; i < 4; i++){
+      float fi = float(i);
+      float age = uInk.z - fi * 0.30;
+      if (age <= 0.0) continue;
+      vec2 c = uInk.xy + vec2(-0.20 * fi, 0.06 * fi + 0.04 * sin(fi * 2.3));
+      float R = (0.06 + 0.42 * age + 0.16 * age * age) * (0.85 + 0.3 * hash11(fi * 3.1));
+      vec2 q = (p - c) / R;
+      if (dot(q, q) > 6.0) continue;
+      // smoke: warp the point by noise of the point warped by noise
+      vec2 w1 = vec2(fbm3(q * 1.3 + vec2(fi * 3.0, tt)), fbm3(q * 1.3 + vec2(5.2 + fi, -tt)));
+      vec2 w2 = vec2(fbm3(q * 1.3 + 3.0 * w1 + vec2(1.7, 9.2) + tt), fbm3(q * 1.3 + 3.0 * w1 + vec2(8.3, 2.8) - tt));
+      float sm = fbm(q * 1.3 + 3.2 * w2);
+      float d = length(q * vec2(1.0, 1.2)) - 0.9 * (sm - 0.45);
+      float body = smoothstep(1.05, 0.25, d);
+      float dens = body * (0.30 + 0.70 * smoothstep(0.30, 0.80, sm + 0.25 * body));
+      inkK = inkK + dens * (1.0 - 0.55 * inkK);
+    }
+    // in the end it is everywhere, still uneven, still curling
+    float flood = smoothstep(2.0, 3.2, uInk.z);
+    vec2 fw1 = vec2(fbm3(p * 1.5 + tt), fbm3(p * 1.5 + 4.0 - tt));
+    float fl = fbm(p * 1.5 + 3.0 * fw1);
+    inkK = max(inkK, flood * (0.45 + 0.55 * smoothstep(0.25, 0.80, fl)));
+    inkK = min(inkK, 1.0);
+    // thin, it is a grey veil the water shows through; thick, it is black
+    K = K * (1.0 - 0.65 * inkK) + SUMI * (0.20 * inkK + 0.95 * inkK * inkK);
   }
   // the colour going out of everything as the ink takes it
   if (uInk.w > 0.0){

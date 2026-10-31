@@ -733,6 +733,10 @@ function spline(P, u) {
 }
 // the establishing view: the whole village down the lane to the stage (this is the picture printed on the sheet in the summer)
 const CAM0 = { pos: [0, 8.5, 18], tgt: [3, 1.0, -60], vfov: 20.6 };
+// the sheet ends a hair larger than the picture (so no grass shows at its edges): the village takes over with the lens
+// narrowed by the same hair, so nothing moves at the handover
+const PAPER_OVER = 1.005;
+const CAM0V = { pos: CAM0.pos, tgt: CAM0.tgt, vfov: 2 * Math.atan(Math.tan(CAM0.vfov * Math.PI / 360) / PAPER_OVER) * 180 / Math.PI };
 // the end of the push: square on to the screen, the screen exactly filling a 16 : 9 picture
 // (a hair closer than exactly filling, so no edge of the frame can show: the stage world starts with the same hair)
 const OVER = 1.02;
@@ -746,7 +750,7 @@ const PATH = [ENTRY, [-2.2, 3.6, 2], [-1.7, 3.4, -8], [-0.6, 3.5, -17], [1.6, 3.
 W.village = {
   ready: false, t: 0, vol: 1, fade: 1,
   // driven from outside (the director): where the eye is, where the light is
-  cam: CAM0, CAM0, CAM_END, SCR, ENTRY, PATH, STAGE, OVER,
+  cam: CAM0, CAM0, CAM0V, PAPER_OVER, CAM_END, SCR, ENTRY, PATH, STAGE, OVER,
   hero: { p: ENTRY.slice(), b: 0 },
   lit: 0,                  // the stage's lamp (0 dark … 1 burning)
   snowAmt: 1, pure: 1,
