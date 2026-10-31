@@ -735,6 +735,8 @@ void main(){
 const FS_PRINT = HEAD + `
 uniform sampler2D uInk;
 uniform sampler2D uCarve;    // what the knife has taken out of the blocks (print space, 1.6 × 1)
+uniform sampler2D uRev;      // where the light has been over the blank sheet (print space): the blocks print there
+uniform float uPaint;        // 1 while the light is printing the sheet; 0 once it is all printed
 uniform vec2 uRegB, uRegR;   // where the indigo and vermilion blocks landed, relative to the key block (uv)
 uniform float uBoil, uPx, uTime;
 uniform sampler2D uSeal;
@@ -780,8 +782,14 @@ void main(){
     float cut = smoothstep(0.38, 0.62, texture(uCarve, cu).r + (vnoise(P * 650.0) - 0.5) * 0.30);
     K *= 1.0 - cut; B *= 1.0 - 0.92 * cut;
   }
-  // the world arriving: each block printed in turn, the baren sweeping across
-  B *= shown(uv, uShow.x, 1.0); K *= shown(uv, uShow.y, 2.0); R *= shown(uv, uShow.z, 3.0);
+  // the world arriving: each block printed in turn, the baren sweeping across; or, at the start of the film, printed
+  // wherever the light has been over the blank sheet, the ink's edge ragged where it stops
+  if (uPaint > 0.0){
+    float rv = texture(uRev, vec2(P.x / 1.6, P.y)).r;
+    float m = max(smoothstep(0.28, 0.72, rv + (vnoise(P * 26.0) - 0.5) * 0.45 + (vnoise(P * 170.0) - 0.5) * 0.18), 1.0 - uPaint);
+    B *= m; K *= m;
+  } else { B *= shown(uv, uShow.x, 1.0); K *= shown(uv, uShow.y, 2.0); }
+  R *= shown(uv, uShow.z, 3.0);
   // where the flame has just passed, the cut is still warm
   for (int i = 0; i < 15; i++){
     vec4 a = uTrail[i], b = uTrail[i + 1];
@@ -1026,7 +1034,7 @@ W.woodcut = {
     const pan = still ? 0 : 0.016 * Math.sin(t * 0.05);
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
     const v = [0.80 - 0.06 * narrow + pan, 0.5, s];
-    if (this.panX !== undefined) { v[0] = this.panX; v[2] = s * (this.panZ ?? 0.84); v[1] = 0.49 - 0.10 * (0.84 - (this.panZ ?? 0.84)); }
+    if (this.panX !== undefined) { v[0] = this.panX; v[2] = s * (this.panZ ?? 0.84); v[1] = this.panY ?? 0.49; }
     // the way out: the eye goes into the lantern until its lit paper is all there is
     const z = this.zoomIn || 0;
     if (z > 0) {
@@ -1063,6 +1071,31 @@ W.woodcut = {
     this.lanLight = 0; this.lit = this.litBase.map((v, i) => i === 6 ? 1 : 0); this.lightsOn = false;
     this.queue = []; this.trail = []; this.clearCarve();
   },
+  /* ---- the film's way in: the light has gone into a blank sheet. It sweeps across it in three broad rows (the sky,
+     the village, the river and snow), and the blocks print wherever it has been, as if it were the baren; then it
+     goes home into the lantern, and the vermilion goes on. */
+  paintFrom(nx, ny, aspect) {
+    this.arrive(nx, ny, aspect);
+    const H = this.hero, gl = YL.gl;
+    H.mode = 'paint'; H.k = 0;
+    H.route = [H.p.slice(), [0.14, 0.80], [1.46, 0.80], [1.46, 0.50], [0.14, 0.50], [0.14, 0.18], [1.46, 0.18]];
+    if (!this.rev) {
+      const cv = document.createElement('canvas'); cv.width = 256; cv.height = 160;
+      const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.rev = { cv, ctx: cv.getContext('2d'), tex, dirty: true };
+    }
+    const c = this.rev.ctx; c.fillStyle = '#000'; c.fillRect(0, 0, 256, 160); this.rev.dirty = true;
+    this.paintK = 1; this.paintS = 0;
+  },
+  // the light's brush on the reveal: a soft round dab where it is
+  dab(p) {
+    const c = this.rev.ctx, x = p[0] / 1.6 * 256, y = p[1] * 160, r = 0.21 / 1.6 * 256;
+    const g = c.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, 'rgba(255,255,255,0.9)'); g.addColorStop(0.6, 'rgba(255,255,255,0.5)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill(); c.globalCompositeOperation = 'source-over';
+    this.rev.dirty = true;
+  },
   steer(target, speed, dt, turn = 4) {
     const H = this.hero, dx = target[0] - H.p[0], dy = target[1] - H.p[1], d = Math.hypot(dx, dy);
     const sp = Math.min(speed, d * 3 + 0.01);
@@ -1075,7 +1108,18 @@ W.woodcut = {
     const H = this.hero, L = this.lantern(this.t), core = [L[0], L[1] - 0.003];
     const breath = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in every world
     let moving = false;
-    if (H.mode === 'hop') {
+    if (H.mode === 'paint') {
+      // along its rows at a steady pace (a beat's pause first), dabbing the sheet as it goes
+      moving = true; H.k += dt;
+      const R = H.route, sp = 2.4, go = Math.max(0, H.k - 0.35) * sp * YL.smooth(0.35, 0.8, H.k);
+      let left = go, i = 0, p = R[0].slice();
+      while (i < R.length - 1) { const a = R[i], b = R[i + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (left <= L) { p = [a[0] + (b[0] - a[0]) * left / L, a[1] + (b[1] - a[1]) * left / L]; break; } left -= L; i++; p = b.slice(); }
+      // (dab every 2 cm along the way since the last frame, so a fast stretch leaves no gaps)
+      const last = H.lastDab || H.p, n = Math.ceil(Math.hypot(p[0] - last[0], p[1] - last[1]) / 0.02);
+      for (let k = 1; k <= n; k++) this.dab([last[0] + (p[0] - last[0]) * k / n, last[1] + (p[1] - last[1]) * k / n]);
+      H.lastDab = p; H.v = [(p[0] - H.p[0]) / Math.max(dt, 1e-4), (p[1] - H.p[1]) / Math.max(dt, 1e-4)]; H.p = p;
+      if (i >= R.length - 1) { H.mode = 'hop'; this.hops = []; H.lastDab = null; }
+    } else if (H.mode === 'hop') {
       moving = true;
       this.lanLight += (0.35 - this.lanLight) * Math.min(1, dt * 3);
       if (this.hops && this.hops.length) {
@@ -1366,12 +1410,19 @@ W.woodcut = {
     this.t += dt;
     if (!this.eave) this.eave = new Float32Array(32);
     for (let i = 0; i < 8; i++) if (this.eaveOn && this.eaveOn[i]) this.eave[i * 4] = Math.min(1, this.eave[i * 4] + dt / 0.35);
-    // the eye follows the light across the print (the film): it never jumps; it leans after it
+    // the eye follows the light across the print (the film): close in while it drifts down and goes from eave to eave
+    // through the village (the people, the windows lighting); back out to the whole sheet for the moon. It never jumps:
+    // it leans after the light
+    if (this.paintK > 0 && this.hero.mode !== 'paint') this.paintK = Math.max(0, this.paintK - dt / 0.6);
     if (this.panX !== undefined) {
-      const tgt = Math.max(0.68, Math.min(1.12, this.hero.p[0] * 0.65 + 0.90 * 0.35));
-      this.panX += (tgt - this.panX) * (1 - Math.exp(-dt * 0.9));
-      const zt = this.hero.mode === 'hop' ? 0.60 : 0.84;
-      this.panZ = (this.panZ ?? 0.84) + (zt - (this.panZ ?? 0.84)) * (1 - Math.exp(-dt * 0.7));
+      const H = this.hero, painting = H.mode === 'paint' || this.paintK > 0;
+      const close = painting ? 0.86 : H.mode === 'hop' ? 0.46 : (H.mode === 'fall' || H.mode === 'enter') ? 0.60 : 0.86;
+      const z = this.panZ = (this.panZ ?? 0.84) + (close - (this.panZ ?? 0.84)) * (1 - Math.exp(-dt * 1.1));
+      const half = 0.5 * Math.min(1.6, YL.canvasAspect() * Math.min(1, 1.6 / YL.canvasAspect())) * z;   // half the width on screen
+      const tx = painting ? 0.80 : Math.max(half, Math.min(1.6 - half, H.p[0] * 0.85 + 0.90 * 0.15));
+      this.panX += (tx - this.panX) * (1 - Math.exp(-dt * 1.4));
+      const ty = painting ? 0.49 : 0.49 + (H.p[1] - 0.49) * 0.6 * YL.smooth(0.84, 0.50, z), hv = 0.5 * Math.min(1, 1.6 / YL.canvasAspect()) * z;
+      this.panY = (this.panY ?? 0.49) + (Math.max(hv, Math.min(1 - hv, ty)) - (this.panY ?? 0.49)) * (1 - Math.exp(-dt * 1.4));
       this.whole = true;
     }
     if (this.stroke && !YL.ptrDown) this.endStroke();
@@ -1435,7 +1486,7 @@ W.woodcut = {
     const sz = Math.min(0.075 * h, 0.09 * w);
     U(pP, 'uSealBox', [1 - (sz + 0.03 * h) / w, 0.035, sz / w, sz / h]);
     U(pP, 'uShow', this.show);
-    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' || H.mode === 'hop' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
+    const H = this.hero, vis = H.mode === 'fall' || H.mode === 'out' || H.mode === 'leave' || H.mode === 'hop' || H.mode === 'paint' ? 1 : H.mode === 'enter' ? 1 - YL.smooth(0, 0.6, H.k) : H.mode === 'sink' ? 1 - H.k : 0;
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
     U(pP, 'uHero', [H.p[0], H.p[1], H.size * br * (H.mode === 'sink' ? 1 - 0.7 * H.k : 1), vis]);
     const tr = new Float32Array(64).fill(-1);
@@ -1448,6 +1499,12 @@ W.woodcut = {
     YL.bindTex(pP, 'uInk', this.inks[this.front].tex, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.seal); gl.uniform1i(pP.u.uSeal, 1);
     YL.bindTex(pP, 'uCarve', this.carve.tex, 2);
+    if (this.rev) {
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.rev.tex);
+      if (this.rev.dirty) { gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.rev.cv); this.rev.dirty = false; }
+      gl.uniform1i(pP.u.uRev, 3);
+    }
+    U(pP, 'uPaint', this.paintK || 0);
     YL.drawFull();
   },
 };

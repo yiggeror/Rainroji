@@ -459,13 +459,14 @@ const PUPPETS = (() => {
 YL.PUPPETS = PUPPETS;                            // (for looking at the atlas on its own)
 
 /* ---------------------------------------------------------------- the lantern, lit from inside */
-const NP = 96;                                   // most pieces of hide in sight at once (in front, and on the far side)
+const NP = 136;                                  // most pieces of hide in sight at once (in front, and on the far side)
 const DR = 0.45, DH = 0.30;                      // the paper drum: its radius, half its height
 const FS = `#version 300 es
 precision highp float;
 uniform vec2 uRes;
 uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
-uniform float uTime, uExp, uFade, uDbg, uShim, uSink;
+uniform float uTime, uExp, uFade, uDbg, uShim, uSink, uBare;
+uniform vec4 uReach;         // as the candle catches: the point on the paper nearest the flame, how far round it the light has reached (m)
 uniform vec3 uDot;           // the flame itself (一粒光): it stays when the paper goes dark
 uniform sampler2D uAtlas;
 uniform vec3 uF;             // the flame
@@ -565,18 +566,23 @@ void main(){
     float tau = fib * (1.0 - 0.22 * seam);
     vec3 paper = vec3(1.0, 0.90, 0.72);
     vec3 thr = through(S, 0.0, 0, uN);
-    col = E * thr * tau * paper * 0.072;
+    // as the candle catches, its light reaches out across the paper from the nearest point
+    vec3 rq = S - uReach.xyz;
+    float wob = 0.035 * (vnoise(vec2(atan(rq.y, length(rq.xz) * sign(dot(rq, vec3(-N.z, 0.0, N.x)))) * 3.0, uTime * 2.5)) - 0.5);
+    float reach = 1.0 - smoothstep(uReach.w - 0.12, uReach.w + 0.02, length(rq) + wob * smoothstep(0.0, 0.1, uReach.w));
+    col = E * thr * tau * paper * 0.072 * reach;
     // through this paper, faintly, the far side of the drum: its own shadows, running the other way
     vec3 S2 = ro + rd * hc.y;
     vec3 L2 = uF - S2;
-    if (abs(S2.y) < H) col += flameC / dot(L2, L2) * through(S2, 0.004, uN, uN + uNB) * paper * 0.072 * 0.20 * fib * mix(vec3(1.0), thr, 0.5);
+    if (abs(S2.y) < H) col += flameC / dot(L2, L2) * through(S2, 0.004, uN, uN + uNB) * paper * 0.072 * 0.20 * fib * mix(vec3(1.0), thr, 0.5) * smoothstep(0.3, 0.6, uReach.w);
     // the flame seen straight through the paper: a soft hot glow where it sits
     vec3 toF = normalize(uF - ro);
     float g = max(dot(rd, toF), 0.0);
-    col += flameC * thr * (0.10 * exp(-(1.0 - g) * 5000.0) + 0.020 * exp(-(1.0 - g) * 350.0)) * tau;
+    col += flameC * thr * (0.10 * exp(-(1.0 - g) * 5000.0) + 0.020 * exp(-(1.0 - g) * 350.0)) * tau * reach;
     // and the flame as a point behind the paper: the shadows cover it while the show goes on; as the candle gutters and
     // everything else goes dark, it is what is left
-    col += uDot * mix(thr, vec3(1.0), uSink) * (0.6 * exp(-(1.0 - g) * 60000.0) + 0.06 * exp(-(1.0 - g) * 6000.0) + uSink * (0.10 * exp(-(1.0 - g) * 1500.0) + 0.03 * exp(-(1.0 - g) * 200.0))) * mix(tau, 1.0, uSink);
+    float bare = max(uSink, uBare);                                       // (before the light has spread, and as it dies: nothing in its way)
+    col += uDot * mix(thr, vec3(1.0), bare) * (0.6 * exp(-(1.0 - g) * 60000.0) + 0.06 * exp(-(1.0 - g) * 6000.0) + bare * (0.10 * exp(-(1.0 - g) * 1500.0) + 0.03 * exp(-(1.0 - g) * 200.0))) * mix(tau, 1.0, bare);
     // the paper's edge darkens where it turns away (the light inside comes through it slantwise, through more paper)
     col *= 0.55 + 0.45 * pow(max(dot(N, -rd), 0.0), 0.6);
   } else {
@@ -665,7 +671,7 @@ W.shadow = {
   // the wheels stand still until the flame has caught; its heat sets them turning (and as it dies they slow)
   wheelT(t) {
     let w;
-    if (t <= 1) w = 0; else if (t >= 3) w = t - 2; else { const x = (t - 1) / 2; w = 2 * (x * x * x - x * x * x * x / 2); }
+    if (t <= 2.4) w = 0; else if (t >= 4.4) w = t - 3.4; else { const x = (t - 2.4) / 2; w = 2 * (x * x * x - x * x * x * x / 2); }
     return Math.max(0, w - this.slow);
   },
   // where the eye is, along the paper: it travels with the procession, a little faster, so the procession slips back
@@ -803,9 +809,11 @@ W.shadow = {
       if (Math.abs(x) < 0.40 + a.ext) a.fn(front);
       else if (Math.abs(wrap(x - C_ARC / 2)) < 0.22 + a.ext) a.fn(back);
     }
+    // (the far side is only seen faintly through the paper: its far and middle layers are enough)
+    { const keep = back.filter(q => q.r <= RM + 1e-6); back.length = 0; back.push(...keep); }
     const only = YL.QS.get('sonly');                                            // (debug: just the pieces of one name)
     if (only) { for (const L of [front, back]) { const keep = L.filter(q => q.name === only); L.length = 0; L.push(...keep); } }
-    const nf = Math.min(front.length, NP - 8), nb = Math.min(back.length, NP - nf);
+    const nf = Math.min(front.length, NP - 16), nb = Math.min(back.length, NP - nf);
     if (front.length > nf && !this.warned) { this.warned = true; console.warn('shadow: too many pieces in sight', front.length); }
     const all = front.slice(0, nf).concat(back.slice(0, nb));
     const a0 = new Float32Array(NP * 4), a1 = new Float32Array(NP * 4), a2 = new Float32Array(NP * 4), a3 = new Float32Array(NP * 4);
@@ -838,9 +846,11 @@ W.shadow = {
     const tg = ((t - 9.4) % 22 + 22) % 22, gust = smooth(-0.5, 0.0, tg - 0.0) * (1 - smooth(0.5, 1.9, tg));
     const sx = 0.004 * Math.sin(t * 1.7) + 0.002 * Math.sin(t * 4.3 + 1) + H.sway[0] + gust * (0.010 + 0.003 * Math.sin(t * 11)), sy = 0.002 * Math.sin(t * 2.3) - 0.004 * gust;
     let br = 1 + 0.07 * Math.sin(t * 2.1) + 0.03 * Math.sin(t * 5.3) + 0.05 * Math.sin(t * 13.0) * Math.sin(t * 3.1);   // the breathing every world shares, and a candle's flicker
-    br *= (0.40 + 0.60 * smooth(0.3, 1.4, t) + 0.35 * Math.exp(-Math.pow((t - 1.35) / 0.32, 2))) * (1 - 0.18 * gust + 0.08 * gust * Math.sin(t * 17));
+    const catchUp = smooth(0.9, 2.1, t) + 0.45 * Math.exp(-Math.pow((t - 1.1) / 0.22, 2));
+    const dotK = 0.7 + 0.3 * smooth(0.6, 1.0, t) + 1.2 * Math.exp(-Math.pow((t - 1.05) / 0.12, 2));      // the point flickers, flares
+    br *= catchUp * (1 - 0.18 * gust + 0.08 * gust * Math.sin(t * 17));
     const sink = this.sink || 0;
-    return { p: [sx * (1 - sink), YF + sy + H.sway[1] - 0.15 * sink, 0.004 * Math.sin(t * 1.1)], k: br * this.light, br, r: 0.0042 * (1 - 0.7 * sink), gust };
+    return { p: [sx * (1 - sink), YF + sy + H.sway[1] - 0.15 * sink, 0.004 * Math.sin(t * 1.1)], k: br * this.light, br: dotK * (1 + 0.07 * Math.sin(t * 2.1) + 0.04 * Math.sin(t * 13.0) * Math.sin(t * 3.1)), r: 0.0042 * (1 - 0.7 * sink), gust };
   },
   pointer(nx, ny, speed) {
     this.hero.aim = [Math.max(-1, Math.min(1, nx)), Math.max(-1, Math.min(1, ny))];
@@ -863,7 +873,8 @@ W.shadow = {
     const f = this.flame(this.t), P = this.pieces(this.t);
     const cam = this.cam = this.camera(aspect, this.t, YL.DBG.still, P.sc);
     U(p, 'uRes', [w, h]); U(p, 'uEye', cam.eye); U(p, 'uFwd', cam.fwd); U(p, 'uRight', cam.right); U(p, 'uUp', cam.up); U(p, 'uTan', cam.tan);
-    U(p, 'uTime', this.t); U(p, 'uDbg', YL.QS.has('sdbg') ? 1 : 0); U(p, 'uExp', 1.0); U(p, 'uFade', this.fade); U(p, 'uShim', 1 + 1.5 * f.gust); U(p, 'uSink', Math.min(1, (this.sink || 0) * 2.5));
+    U(p, 'uTime', this.t); U(p, 'uDbg', YL.QS.has('sdbg') ? 1 : 0); U(p, 'uExp', 1.0); U(p, 'uFade', this.fade); U(p, 'uShim', 1 + 1.5 * f.gust); U(p, 'uSink', Math.min(1, (this.sink || 0) * 2.5)); const rr = smooth(1.0, 3.2, this.t), ce = YL.V.norm([cam.eye[0], 0, cam.eye[2]]);
+    U(p, 'uReach', [ce[0] * DR, f.p[1], ce[2] * DR, 0.65 * rr * rr]); U(p, 'uBare', 1 - smooth(1.4, 2.4, this.t));
     U(p, 'uDot', YL.mulc(YL.bb(1900), 0.55 * f.br * (1 - 0.35 * (this.sink || 0))));
     U(p, 'uF', f.p); U(p, 'uFI', [...YL.mulc(YL.bb(2000), 1.15 * f.k), f.r * (1 + (this.gust || 0))]);
     gl.uniform4fv(p.u.uP0, P.a0); gl.uniform4fv(p.u.uP1, P.a1); gl.uniform4fv(p.u.uP2, P.a2); gl.uniform4fv(p.u.uP3, P.a3);
@@ -955,8 +966,8 @@ W.shadow = {
     S.wg.gain.setTargetAtTime(0.05 * (0.7 + 0.3 * Math.sin(t * 0.8)) * (1 - sink), now, 0.3);
     if ((S.next -= dt) <= 0) { this.crackle(); S.next = Math.random() < 0.4 ? 0.08 + Math.random() * 0.2 : 0.8 + Math.random() * 2.5; }
     // the flame catches: the gong; then the string begins (and again every twenty-odd seconds after)
-    once('gong', t > 1.25 && t < 3, () => this.gong(now + 0.02, 0.05));
-    once('erhu', (t - 3.2 + 40) % 24 < 0.5 && t > 3, () => this.phrase());
+    once('gong', t > 1.02 && t < 3, () => this.gong(now + 0.02, 0.05));
+    once('erhu', (t - 4.4 + 40) % 24 < 0.5 && t > 4, () => this.phrase());
     // the clappers keep the bearers' step (a lighter tick between)
     const step = Math.floor(2 * 1.17 * w + 0.25);
     if (step !== S.step) { if (S.step >= 0 && turning > 0.3) { const P = this.where(VW * w - 0.03); this.clapper(now + 0.01, (step % 2 ? 0.020 : 0.034) * (0.5 + 0.5 * P.near), step % 2, P.pan * 0.6); } S.step = step; }

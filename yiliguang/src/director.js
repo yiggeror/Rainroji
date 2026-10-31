@@ -57,7 +57,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-let T_SUMMER = 30, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_WHALE = 10, T_LURE = 24, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+let T_SUMMER = 30, T_PAPER = 3.8, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
 /* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
    深海里小鱼一齐受惊，然后鲸来了。 */
 const FILM = QS.has('film');
@@ -98,8 +98,8 @@ function camPath(keys, t) {
   const e = u * u * (3 - 2 * u);
   return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
 }
-if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 13.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_WHALE: 4.0, T_SEA: 15.0, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 14.5, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SEA: 16.6, T_BLOOM: 4.0, T_INK: 10.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -136,7 +136,7 @@ const D = YL.director = {
       YL.cam = FILM ? D.roomCam(D.phase === 'intro' ? D.t - 3.4 : D.t) : null;      // (it may have just jumped out)
       return;
     }
-    if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud') { D.toPrint(dt); return; }
+    if (D.phase === 'summer' || D.phase === 'updraft' || D.phase === 'cloud' || D.phase === 'paper') { D.toPrint(dt); return; }
     if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'inlantern' || D.phase === 'leave') { D.inPrint(dt); return; }
     if (D.phase === 'shadow' || D.phase === 'snuff') { D.inShadow(dt); return; }
     if (D.phase === 'inkbloom' || D.phase === 'ink' || D.phase === 'dawn') { D.inInk(dt); return; }
@@ -221,7 +221,27 @@ const D = YL.director = {
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
-    if (D.phase === 'summer') { if (FILM) summer.speed = 1.1; if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('updraft'); } return; }
+    if (D.phase === 'summer') { if (FILM) summer.speed = 1.1; if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('paper'); summer.startSheet(); } return; }
+    // ---- a sheet of paper comes blowing over the grass; the light goes after it, catches it up, and goes into it
+    if (D.phase === 'paper') {
+      const u = D.pt, sh = summer.sheetAt(), V = YL.V;
+      summer.speed = 1.1 * (1 - smooth(0, 1.4, u));
+      if (sh) {
+        const cam = summer.cam || summer.camera(YL.canvasAspect(), summer.t, YL.DBG.still);
+        summer.look = { p: sh.c, k: smooth(0.7, 2.3, u) };
+        summer.zoom = 0.972 * ease(clamp((u - 2.2) / 1.5, 0, 1));
+        const chase = V.add(sh.c, V.add(V.mul(cam.right, 0.55), V.add(V.mul(cam.fwd, -0.35), [0, 0.08, 0])));
+        const on = V.add(sh.c, V.mul(V.norm(V.sub(cam.eye, sh.c)), 0.015));
+        const k = smooth(1.1, 2.5, u);
+        H.fly = V.add(V.mul(chase, 1 - k), V.mul(on, k)); H.flyK = 1.4 + 5 * smooth(0.4, 2.0, u);
+        summer.heroK = 1 - smooth(2.55, 2.95, u);
+        summer.sheetGlow = [0, 0, 1.3 * smooth(2.5, 2.85, u) * (1 - 0.45 * smooth(3.0, 3.8, u)), 0.04 + 0.55 * smooth(2.6, 3.8, u)];
+      }
+      summer.vol = 1 - smooth(2.8, 3.8, u);
+      if (u > 0.8 && !wood.ready) wood.init();
+      if (D.pt > T_PAPER) { D.go('print'); D.world = 'woodcut'; wood.vol = 0; }
+      return;
+    }
     // the light is carried up toward the tower of cloud, further and further away; the eye follows it up
     const T = summer.tower, dir = [Math.sin(T[0]) * Math.cos(T[1]), Math.sin(T[1]), -Math.cos(T[0]) * Math.cos(T[1])];
     if (D.phase === 'updraft') {
@@ -250,7 +270,14 @@ const D = YL.director = {
   // ---- in the print: the blocks go on one after another; later, the way out
   inPrint(dt) {
     const wood = YL.worlds.woodcut;
-    if (D.phase === 'print') {
+    if (D.phase === 'print' && (wood.paintK > 0 || wood.hero.mode === 'paint')) {
+      // the light is printing the sheet; the vermilion goes on once it is home in the lantern
+      const H = wood.hero;
+      if ((H.mode === 'enter' || H.mode === 'home') && D.rOn === undefined) D.rOn = D.pt;
+      wood.show = [1, 1, D.rOn !== undefined ? ease(clamp((D.pt - D.rOn) / 0.7, 0, 1)) : 0];
+      wood.vol = ease(clamp(D.pt / 1.5, 0, 1));
+      if (H.mode === 'home' && D.rOn !== undefined && D.pt - D.rOn > 0.8) { wood.show = [1, 1, 1]; D.go('woodcut'); }
+    } else if (D.phase === 'print') {
       const t = D.pt;
       const k = T_PRINT / 4.8;
       wood.show = [ease(clamp(t / (1.6 * k), 0, 1)), ease(clamp((t - 1.3 * k) / (1.6 * k), 0, 1)), ease(clamp((t - 2.7 * k) / (1.3 * k), 0, 1))];
@@ -274,7 +301,7 @@ const D = YL.director = {
       const u = clamp(D.pt / T_ZOOM, 0, 1), sh = YL.worlds.shadow;
       wood.zoomIn = u; wood.whole = true;
       wood.vol = 1 - smooth(0.5, 1.0, u);
-      if (D.pt > T_ZOOM) { D.go('shadow'); D.world = 'shadow'; wood.vol = 0; sh.vol = 1; sh.pull = 0; sh.light = 1; }
+      if (D.pt > T_ZOOM) { D.go('shadow'); D.world = 'shadow'; wood.vol = 0; sh.vol = 1; sh.pull = 0.55; sh.light = 1; }
     } else if (D.phase === 'leave') {
       const sea = YL.worlds.deepsea;
       if (!sea.ready) sea.init();                                                // ready the water while it walks
@@ -285,7 +312,7 @@ const D = YL.director = {
   inShadow(dt) {
     const sh = YL.worlds.shadow, sea = YL.worlds.deepsea;
     if (D.phase === 'shadow') {
-      sh.pull = Math.min(1, D.pt / 3.4);
+      sh.pull = 0.55 + 0.45 * smooth(1.2, 4.0, D.pt);                           // in the dark close to the flame; back as its light spreads
       if (D.pt > T_SHADOW) { D.go('snuff'); if (!sea.ready) sea.init(); }
     } else if (D.phase === 'snuff') {
       const u = clamp(D.pt / T_SNUFF, 0, 1);
@@ -312,9 +339,11 @@ const D = YL.director = {
       if (D.pt > T_TEAR) { D.go('deepsea'); D.world = 'deepsea'; sea.vol = 1; }
     } else if (D.phase === 'deepsea') {
       sea.fade = Math.min(1, (sea.fade ?? 1) + dt / 1.2);
-      // the small lives come to look; then all at once they flash and scatter: something big is coming. It is the whale
-      if (FILM && D.pt > T_WHALE - 0.8 && !D.scared) { D.scared = true; sea.scare(); }
-      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 9.5 : 9.0);
+      // the small lives come to look; then all at once they flash and scatter: something big is coming. The whole whale
+      // goes by, a little way behind the light; then it comes back, close, to look at it
+      if (FILM && D.pt > T_GREAT - 0.3 && !D.scared) { D.scared = true; sea.scare(); }
+      if (D.pt > T_GREAT && !sea.great) sea.startGreat();
+      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 9.5 : 9.0, FILM ? 1.4 : 1);
       if (!FILM && D.pt > T_LURE && sea.lure.state === 'off' && (!sea.pass || sea.t - sea.pass.t0 > 12)) sea.startLure();
       if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) {
         // the black water breaks up into ink; the light keeps its place on the screen and turns to vermilion
@@ -639,6 +668,26 @@ D.renderFrame = (dt, realT) => {
     YL.roomTarget = I.A;
     return D.irisFrame = { I, u }, false;     // the room renders into A; the composite happens in afterRoom()
   }
+  if (D.phase === 'paper' && summer.ready && D.pt > T_PAPER - 0.6) {
+    const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, aspect = YL.canvasAspect();
+    summer.update(dt, YL.DBG.still); summer.render(I.A, aspect);
+    if (!wood.ready) wood.init();
+    if (!D.painting) {
+      // the light went in at the middle of the sheet: it is there on the blank print, about to set off
+      D.painting = true; D.rOn = undefined;
+      if (FILM) { wood.pace = 1.7; wood.panX = 0.80; wood.panZ = 0.86; wood.panY = 0.49; }
+      const sh = summer.sheetAt(), hp = sh ? summer.project(sh.c, aspect) : [0, 0];
+      wood.show = [1, 1, 0]; wood.paintFrom(hp[0], hp[1], aspect);
+    }
+    wood.update(dt); wood.render(I.B, aspect);
+    const p = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(p.p);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(T_PAPER - 0.6, T_PAPER, D.pt)); YL.U(p, 'uGlow', 0.10 * Math.exp(-Math.pow((D.pt - T_PAPER + 0.3) / 0.15, 2)));
+    YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
   if (D.phase === 'cloud' && summer.ready) {
     const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, aspect = YL.canvasAspect(), S = smooth;
     const u = clamp(D.pt / T_CLOUD, 0, 1);
@@ -689,11 +738,11 @@ D.renderFrame = (dt, realT) => {
     const I = irisTargets(), gl = YL.gl, wood = YL.worlds.woodcut, sh = YL.worlds.shadow, aspect = YL.canvasAspect();
     const u = clamp(D.pt / T_ZOOM, 0, 1), k = smooth(0.70, 1.0, u);
     wood.update(dt); wood.render(I.A, aspect);
-    if (k > 0) { if (!sh.ready) sh.init(); sh.pull = 0; sh.update(dt); sh.render(I.B, aspect); }
+    if (k > 0) { if (!sh.ready) sh.init(); sh.pull = 0.55; sh.update(dt); sh.render(I.B, aspect); }
     const p = mixP();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
     gl.useProgram(p.p);
-    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.55 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2)));
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.22 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2)));
     YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
@@ -788,14 +837,16 @@ if (QS.get('phase')) {
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
-    const later = ['summer', 'updraft', 'cloud', 'print', 'woodcut', 'inlantern', 'shadow', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];
+    const later = ['summer', 'paper', 'updraft', 'cloud', 'print', 'woodcut', 'inlantern', 'shadow', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];
     if (later.includes(ph)) {
       D.irisCenter = [0.1, 0.1]; D.enterSummer();
       if (ph === 'summer') D.pt = pt;
       else if (ph === 'updraft' || ph === 'cloud') { D.go(ph); D.pt = pt; }
+      else if (ph === 'paper') { D.go(ph); D.pt = pt; setTimeout(() => { const su = YL.worlds.summer; su.startSheet(); su.sheet.t0 -= pt; }, 0); }
       else {
         // straight into the print (once the GL context exists: see renderFrame)
         D.world = 'woodcut'; YL.roomVol = 0; D.jump = { ph, pt };
+        if (FILM && ['print', 'woodcut', 'inlantern'].includes(ph)) { const w = YL.worlds.woodcut; w.pace = 1.7; w.panX = 0.80; }   // (as the film sets it on the way in)
         if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
         if (ph === 'shadow' || ph === 'snuff') { D.world = 'shadow'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.shadow.t = 1 + pt; }
         if (ph === 'burst' || ph === 'pond' || ph === 'dew') { D.world = ph === 'burst' ? 'ink' : 'pond'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.ink.dawn = 1; }

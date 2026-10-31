@@ -532,6 +532,57 @@ function makeGrass(rnd, n) {
   return { B, C };
 }
 // the small lives: [kind, home x, y, z], [seed, size (m), colour, -]
+// --------------------------------------------------------------------------- a sheet of paper the wind is carrying
+// (the way out of this world: the light chases it, and goes into it.) Drawn like the rest: two flat tones of sunlight
+// and shade with a clean edge between; the sun shows through it where it is between us and the sun; the light, once
+// it has gone into it, warms it from inside.
+const VS_PAPER = HEAD + `
+layout(location = 0) in vec2 aUV;                 // across the sheet (-0.5…0.5, both ways)
+uniform vec3 uEye, uFwd, uRight, uUp; uniform vec2 uTan;
+uniform vec3 uSC, uSX, uSY, uSN;                  // its middle; its half width, half height and facing (m)
+uniform float uCurl;                              // how much it bends (m at its edges)
+out vec2 vUV; out vec3 vN; out vec3 vP;
+void main(){
+  vec2 q = aUV * 2.0;
+  // a sheet in the wind curls along its length and ripples a little
+  float c = uCurl * (q.x * q.x - 0.33) + 0.15 * uCurl * sin(q.y * 3.0 + q.x * 2.0);
+  vec3 p = uSC + uSX * q.x + uSY * q.y + normalize(uSN) * c;
+  vec3 dx = uSX + normalize(uSN) * uCurl * 2.0 * q.x, n = normalize(cross(dx, uSY));
+  if (dot(n, uSN) < 0.0) n = -n;
+  vUV = aUV; vN = n; vP = p;
+  vec3 v = p - uEye; float z = dot(v, uFwd);
+  vec2 ndc = vec2(dot(v, uRight) / (z * uTan.x), dot(v, uUp) / (z * uTan.y));
+  gl_Position = vec4(ndc, clamp(z / 80.0, 0.0, 1.0) * 2.0 - 1.0, 1.0);
+  if (z < 0.02) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+}`;
+const FS_PAPER = HEAD + `
+in vec2 vUV; in vec3 vN; in vec3 vP;
+uniform vec3 uEye, uSun;
+uniform vec4 uGlow;                               // the light inside it: where on the sheet (uv), how bright, how far it has spread
+out vec4 o;
+void main(){
+  vec3 n = normalize(vN), v = normalize(uEye - vP);
+  if (dot(n, v) < 0.0) n = -n;                                          // whichever side faces us
+  float lit = dot(n, uSun);
+  // two tones, a clean edge between (the way everything here is painted)
+  float tone = smoothstep(-0.02, 0.06, lit);
+  vec3 paperC = vec3(0.98, 0.96, 0.91);
+  vec3 shade = vec3(0.70, 0.76, 0.90);                                  // in shade it takes the sky's blue
+  vec3 c = mix(paperC * shade, paperC, tone);
+  // the sun through it, when it is behind the sheet: a warm glow, the fibres darker in it
+  float fibre = vnoise(vUV * vec2(260.0, 40.0)) * 0.6 + vnoise(vUV * vec2(40.0, 300.0)) * 0.4;
+  float through = smoothstep(0.0, 0.5, -lit) * (1.0 - tone);
+  c = mix(c, vec3(1.0, 0.94, 0.80) * (0.92 + 0.08 * fibre), through * 0.8);
+  c *= 0.97 + 0.03 * fibre;
+  // a thin edge line, darker, as an animator would draw it
+  vec2 e = 0.5 - abs(vUV);
+  c *= 1.0 - 0.35 * smoothstep(0.012, 0.004, min(e.x, e.y * 1.6));
+  // the light gone into it: a warm bloom spreading through the paper from where it went in
+  float d = length((vUV - uGlow.xy) * vec2(1.6, 1.0));
+  c += vec3(1.0, 0.78, 0.45) * uGlow.z * (exp(-d * d / max(uGlow.w * uGlow.w, 1e-4)) * 0.55 + exp(-d * 30.0) * 0.6);
+  o = vec4(c, 1.0);
+}`;
+
 function makeCritters(rnd) {
   const A = [], D = [];
   const add = (k, p, size, col) => { A.push(k, ...p); D.push(rnd() * 10, size, col, 0); };
@@ -560,7 +611,14 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     this.pRes = YL.makeProgram('summer-resolve', `#version 300 es
 void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, FS_RESOLVE);
     this.pCrit = YL.makeProgram('summer-critters', VS_CRIT, FS_CRIT);
-    [this.pBg, this.pGrass, this.pRes, this.pHero, this.pCrit].forEach(YL.checkProgram);
+    this.pPaper = YL.makeProgram('summer-paper', VS_PAPER, FS_PAPER);
+    [this.pBg, this.pGrass, this.pRes, this.pHero, this.pCrit, this.pPaper].forEach(YL.checkProgram);
+    // the sheet: a grid of 24 × 16 cells, as triangles
+    { const a = []; const nx = 24, ny = 16;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const u0 = i / nx - 0.5, u1 = (i + 1) / nx - 0.5, v0 = j / ny - 0.5, v1 = (j + 1) / ny - 0.5; a.push(u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1); }
+      this.nPaper = a.length / 2; this.pvao = gl.createVertexArray(); gl.bindVertexArray(this.pvao);
+      const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(a), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null); }
     const cr = makeCritters(YL.rnd); this.nCrit = cr.n;
     this.cvao = gl.createVertexArray(); gl.bindVertexArray(this.cvao);
     const c1 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, c1); gl.bufferData(gl.ARRAY_BUFFER, cr.A, gl.STATIC_DRAW);
@@ -681,7 +739,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     const H = this.hero; if (!H.on) return;
     const t = this.t, calm = this.calm || 0;
     // carried off by an updraft (the way out of this world): it just goes where the air takes it
-    if (H.fly) { for (let i = 0; i < 3; i++) H.p[i] += (H.fly[i] - H.p[i]) * Math.min(1, dt * 1.4); H.v = [0, 0, 0]; H.bob = 0; return; }
+    if (H.fly) { for (let i = 0; i < 3; i++) H.p[i] += (H.fly[i] - H.p[i]) * Math.min(1, dt * (H.flyK || 1.4)); H.v = [0, 0, 0]; H.bob = 0; return; }
     for (const s of this.strokes) {
       const dx = H.p[0] - s.x, dz = H.p[2] - s.z, r2 = dx * dx + dz * dz, l = Math.sqrt(r2) + 1e-3;
       const f = s.s * Math.exp(-r2 / 2) * Math.exp(-s.age * 1.2) * 2.4 * dt;
@@ -697,6 +755,27 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     for (let i = 0; i < 3; i++) { H.v[i] *= damp; H.p[i] += H.v[i] * dt; }
     H.p[1] = Math.max(H.p[1], 0.35);
     H.bob = 0.03 * Math.sin(t * 1.3) + 0.015 * Math.sin(t * 2.9 + 1);
+  },
+  /* ---- the sheet of paper. It comes blowing in from the right, low over the grass, tumbling end over end; it rises and
+     slows, and turns to face us, and hangs there in front of the eye. 0.48 × 0.30 m: the print's own shape. */
+  startSheet() { this.sheet = { t0: this.t }; },
+  sheetAt() {
+    const S = this.sheet; if (!S) return null;
+    const V = YL.V, tau = this.t - S.t0, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still);
+    const e = YL.smooth(0, 2.5, tau), e2 = YL.smooth(0.6, 2.5, tau);
+    // (relative to the eye: right, up, ahead)
+    const x = 1.9 * (1 - e) + 0.22 * Math.sin(tau * 2.1) * (1 - e), y = -0.40 + 0.45 * e + 0.10 * Math.sin(tau * 3.0) * (1 - e) + 0.008 * Math.sin(tau * 1.7), z = 3.8 - 2.2 * e;
+    const fl = [0, 0, -1], R = cam.right, Uv = V.norm(V.cross(R, cam.fwd));
+    const F = V.norm([cam.fwd[0], 0, cam.fwd[2]]);
+    const c = V.add(cam.eye, V.add(V.mul(R, x), V.add(V.mul([0, 1, 0], y), V.mul(F, z))));
+    // facing the eye, then turned end over end twice about its width, swung and rolled a little, all dying away
+    const flip = 4 * Math.PI * YL.smooth(0.0, 2.1, tau), sw = 0.6 * Math.sin(2.3 * tau) * (1 - e2), rl = 0.45 * Math.sin(1.7 * tau + 0.5) * (1 - e2);
+    const N0 = V.mul(F, -1), X0 = V.norm(V.cross([0, 1, 0], N0)), Y0 = [0, 1, 0];
+    const rot = (a, axis, ang) => { const c_ = Math.cos(ang), s_ = Math.sin(ang), d = V.dot(axis, a); return V.add(V.add(V.mul(a, c_), V.mul(V.cross(axis, a), s_)), V.mul(axis, d * (1 - c_))); };
+    let X = X0, Y = Y0, N = N0;
+    for (const [ax, ang] of [[X0, flip], [[0, 1, 0], sw], [N0, rl]]) { X = rot(X, ax, ang); Y = rot(Y, ax, ang); N = rot(N, ax, ang); }
+    void fl; void Uv;
+    return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.15), N, curl: (0.05 * Math.sin(tau * 4.0) + 0.03) * (1 - e2) + 0.012, tau };
   },
   // where the eye is: it travels forward over the field (this.speed m/s), weaving a little
   eyeAt(t) { const z = -(this.travel || 0); return [0.45 * Math.sin(z * 0.11), 0.80 + 0.05 * Math.sin(t * 0.55), z]; },
@@ -720,6 +799,11 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     // following the light up into the great cloud (TOWER: its azimuth and the height it rises to), then into it
     const lift = this.lift || 0, zoom = this.zoom || 0;
     yaw += (TOWER[0] - yaw) * lift; pitch += (TOWER[1] - 0.06 - pitch) * lift;
+    // (watching the sheet of paper: turning to it, then closing in on it)
+    if (this.look && this.look.k > 0) {
+      const d = YL.V.sub(this.look.p, this.eyeAt(t)), ty_ = Math.atan2(d[0], -d[2]), tp = Math.atan2(d[1], Math.hypot(d[0], d[2]));
+      yaw += (ty_ - yaw) * this.look.k; pitch += (tp - pitch) * this.look.k;
+    }
     const fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
     const right = YL.V.norm(YL.V.cross(fwd, [0, 1, 0])), up = YL.V.cross(right, fwd);
     const vfov = (aspect < 0.9 ? 68 : 52) * (1 - zoom) + 9 * zoom, ty = Math.tan(vfov * Math.PI / 360);
@@ -785,6 +869,14 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     U(this.pCrit, 'uTime', this.t); U(this.pCrit, 'uWind', wind);
     gl.bindVertexArray(this.cvao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.nCrit);
     gl.disable(gl.BLEND); gl.depthMask(true);
+    const sh = this.sheetAt();
+    if (sh) {
+      gl.useProgram(this.pPaper.p); gl.disable(gl.CULL_FACE);
+      U(this.pPaper, 'uEye', cam.eye); U(this.pPaper, 'uFwd', cam.fwd); U(this.pPaper, 'uRight', cam.right); U(this.pPaper, 'uUp', cam.up); U(this.pPaper, 'uTan', cam.tan);
+      U(this.pPaper, 'uSC', sh.c); U(this.pPaper, 'uSX', sh.X); U(this.pPaper, 'uSY', sh.Y); U(this.pPaper, 'uSN', sh.N); U(this.pPaper, 'uCurl', sh.curl);
+      U(this.pPaper, 'uSun', SUN); U(this.pPaper, 'uGlow', this.sheetGlow || [0, 0, 0, 0.1]);
+      gl.bindVertexArray(this.pvao); gl.drawArrays(gl.TRIANGLES, 0, this.nPaper);
+    }
     // the little light, in front of what is behind it and behind the blades in front of it
     if (H.on) {
       gl.useProgram(this.pHero.p);
@@ -792,7 +884,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
       U(this.pHero, 'uRes', [w, h]); U(this.pHero, 'uEye', cam.eye); U(this.pHero, 'uFwd', cam.fwd); U(this.pHero, 'uRight', cam.right); U(this.pHero, 'uUp', cam.up); U(this.pHero, 'uTan', cam.tan);
       const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);     // the same breathing as in the room
       const far = Math.hypot(hp[0] - cam.eye[0], hp[1] - cam.eye[1], hp[2] - cam.eye[2]);      // carried far off, it shrinks more slowly than it should, so the eye can follow it
-      U(this.pHero, 'uHP', hp); U(this.pHero, 'uHR', 0.018 * Math.pow(Math.max(1, far / 2.4), 0.7)); U(this.pHero, 'uTime', this.t); U(this.pHero, 'uBreath', br); U(this.pHero, 'uOn', 1);
+      U(this.pHero, 'uHP', hp); U(this.pHero, 'uHR', 0.018 * Math.pow(Math.max(1, far / 2.4), 0.7)); U(this.pHero, 'uTime', this.t); U(this.pHero, 'uBreath', br); U(this.pHero, 'uOn', this.heroK ?? 1);
       gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.disable(gl.BLEND); gl.depthMask(true);
     }
