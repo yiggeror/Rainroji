@@ -21,7 +21,8 @@ uniform vec2 uRes;
 uniform float uTime, uFade, uBloom, uDawn, uAspect;
 uniform vec4 uGrow;          // how far each layer of ink has spread: far peaks, middle range, the near cliff and its pine, the boat
 uniform vec4 uHero;          // the vermilion light: where (painting coords), how bright, how big
-uniform float uSunK;         // (at dawn it rises and becomes the sun: 0 … 1)
+uniform float uSunK;         // (at dawn a spark of it rises and becomes the sun: 0 … 1)
+uniform vec3 uSunP;          // where that spark is
 uniform vec2 uPan;
 uniform sampler2D uBrush;    // the painted layers: R rocks and cliffs and the built things, G trees, B the willow and reeds
 uniform sampler2D uWhen;     // when the light's brush reached each place (1 - the fraction of its way): R close by it, G within a wash's reach
@@ -253,10 +254,17 @@ void main(){
     float r = uHero.w;
     float core = exp(-dot(d, d) / (r * r)), halo = exp(-length(d) / (r * 5.0));
     float refl = exp(-pow(d.x / (r * 1.2), 2.0)) * smoothstep(0.0, -0.01, d.y) * exp(d.y / 0.05) * (0.6 + 0.4 * sin(p.y * 220.0 + uTime * 3.0)) * step(hp.y, 0.27);
-    vec3 cin = mix(vec3(0.90, 0.20, 0.08), vec3(1.0, 0.82, 0.48), uSunK);
-    refl *= 1.0 - uSunK;
-    c = mix(c, cin, sat(uHero.z * (core * 0.95 + halo * (0.25 + 0.5 * uSunK) + refl * 0.35)));
-    c += vec3(1.0, 0.55, 0.25) * uHero.z * core * 0.35 + vec3(1.0, 0.75, 0.40) * uSunK * exp(-length(d) / 0.12) * 0.35;
+    vec3 cin = vec3(0.90, 0.20, 0.08);
+    c = mix(c, cin, sat(uHero.z * (core * 0.95 + halo * 0.25 + refl * 0.35)));
+    c += vec3(1.0, 0.55, 0.25) * uHero.z * core * 0.35;
+    // the spark it sends up at dawn: vermilion as it leaves, gold as it rises, the sun
+    if (uSunK > 0.0){
+      vec2 ds = p - uSunP.xy; float rs = uSunP.z;
+      float cs = exp(-dot(ds, ds) / (rs * rs)), hs = exp(-length(ds) / (rs * 5.0));
+      vec3 sc = mix(cin, vec3(1.0, 0.82, 0.48), smoothstep(0.0, 0.6, uSunK));
+      c = mix(c, sc, sat(cs * 0.95 + hs * 0.6 * uSunK));
+      c += vec3(1.0, 0.75, 0.40) * uSunK * exp(-length(ds) / 0.12) * 0.35;
+    }
   }
   // the seal 「光」, red, the character left white in it (白文)
   {
@@ -583,9 +591,10 @@ W.ink = {
       if (s >= this.routeL && this.now >= 1.059) this.painting = false;
       this.reach = Math.max(this.reach || 0, p[0]);
     } else if (this.sunK > 0) {
-      // dawn: up off the skiff into the sky, to where the sun will be
+      // dawn: it stays, the skiff's lantern; a spark of it goes up into the sky, to where the sun will be
       const e = this.sunK * this.sunK * (3 - 2 * this.sunK), sp = [this.pan[0] + 1.0 + (1.7778 - YL.canvasAspect()) * 0.5, 0.86];
-      H.p = [H.home[0] + (sp[0] - H.home[0]) * e, H.home[1] + (sp[1] - H.home[1]) * e + 0.06 * Math.sin(Math.PI * e)];
+      this.sunP = [H.home[0] + (sp[0] - H.home[0]) * e, H.home[1] + (sp[1] - H.home[1]) * e + 0.06 * Math.sin(Math.PI * e)];
+      H.p = H.home.slice();
     } else {
       const tgt = H.aim && this.t - H.aimT < 3 ? H.aim : H.home;
       for (let i = 0; i < 2; i++) { H.v[i] += (tgt[i] - H.p[i]) * 3.0 * dt; H.v[i] *= Math.exp(-dt * 2.4); H.p[i] += H.v[i] * dt; }
@@ -611,7 +620,8 @@ W.ink = {
     U(p, 'uRes', [w, h]); U(p, 'uTime', this.t); U(p, 'uFade', this.fade); U(p, 'uAspect', aspect);
     U(p, 'uBloom', this.bloom); U(p, 'uDawn', this.dawn); U(p, 'uGrow', this.grow); U(p, 'uPan', this.pan || [0, 0]);
     const sk = this.sunK || 0;
-    U(p, 'uHero', [H.p[0], H.p[1], H.on ? br : 0, 0.0045 + 0.022 * sk * sk]); U(p, 'uSunK', sk);
+    U(p, 'uHero', [H.p[0], H.p[1], H.on ? br : 0, 0.0045]); U(p, 'uSunK', sk);
+    U(p, 'uSunP', this.sunP ? [this.sunP[0], this.sunP[1], 0.0045 + 0.022 * sk * sk] : [0, 0, 0]);
     U(p, 'uNow', this.now);
     const wt = this.walkT === undefined ? -1 : this.t - this.walkT;
     U(p, 'uWalker', wt < 0 ? [0, 0, 0, 0] : [Math.min(1, wt / 7.0), wt * 2 * Math.PI * 1.6, 0, 1 - YL.smooth(6.6, 7.0, wt)]);

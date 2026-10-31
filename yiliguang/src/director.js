@@ -57,7 +57,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-let T_SUMMER = 30, T_PAPER = 4.6, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+let T_SUMMER = 30, T_PAPER = 4.6, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SQUID = 41.3, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
 /* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
    深海里小鱼一齐受惊，然后鲸来了。 */
 const FILM = QS.has('film');
@@ -98,8 +98,8 @@ function camPath(keys, t) {
   const e = u * u * (3 - 2 * u);
   return { pos: cr('pos'), tgt: cr('tgt'), vfov: lerp(B.vfov, C.vfov, e) };
 }
-if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
-  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SEA: 16.6, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
+if (FILM) ({ T_HOLD, T_DAY, T_DIVE, T_SUMMER, T_UP, T_CLOUD, T_PRINT, T_ZOOM, T_SHADOW, T_SNUFF, T_TEAR, T_GREAT, T_WHALE, T_SQUID, T_SEA, T_BLOOM, T_INK, T_DAWN, T_BURST, T_POND, T_DEW, T_RISE, T_SURF } =
+  { T_HOLD: 0.0, T_DAY: 1.6, T_DIVE: 2.0, T_SUMMER: 7.6, T_UP: 3.2, T_CLOUD: 4.2, T_PRINT: 2.6, T_ZOOM: 2.6, T_SHADOW: 10.0, T_SNUFF: 2.2, T_TEAR: 3.2, T_GREAT: 3.3, T_WHALE: 9.4, T_SQUID: 15.8, T_SEA: 20.5, T_BLOOM: 4.0, T_INK: 9.0, T_DAWN: 3.2, T_BURST: 2.6, T_POND: 9.0, T_DEW: 2.8, T_RISE: 5.0, T_SURF: 3.0 });
 const ease = x => x * x * (3 - 2 * x), easeIn = x => x * x * x;
 
 // someone who has asked their system for less motion: the print stops 'boiling' between printings
@@ -381,14 +381,18 @@ const D = YL.director = {
       // the small lives come to look; then all at once they flash and scatter: something big is coming. The whole whale
       // goes by, a little way behind the light; then it comes back, close, to look at it
       if (FILM && D.pt > T_GREAT - 0.3 && !D.scared) { D.scared = true; sea.scare(); }
-      if (D.pt > T_GREAT && !sea.great) sea.startGreat();
-      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off') sea.startWhale(FILM ? 9.5 : 9.0, FILM ? 1.4 : 1);
+      const onlySquid = YL.QS.has('sqtest');                                      // (debug: just the squid)
+      if (D.pt > T_GREAT && !sea.great && !onlySquid) sea.startGreat();
+      if (D.pt > T_WHALE && !sea.pass && sea.lure.state === 'off' && !onlySquid) sea.startWhale(FILM ? 9.5 : 9.0, FILM ? 1.4 : 1);
       if (!FILM && D.pt > T_LURE && sea.lure.state === 'off' && (!sea.pass || sea.t - sea.pass.t0 > 12)) sea.startLure();
+      // a squid comes at the light, takes fright, squirts its ink; the light sends a spark into the ink
+      if (D.pt > T_SQUID && !sea.sq && sea.lure.state === 'off') sea.startSquid();
       if (D.pt > T_SEA && !['approach', 'reveal', 'snap'].includes(sea.lure.state)) {
-        // the black water breaks up into ink; the light keeps its place on the screen and turns to vermilion
+        // there is nothing but the ink now; it thins on paper, and the spark in it is a point of vermilion
         sea.hero.hold = null;
         const ink = YL.worlds.ink; if (!ink.ready) ink.init();
-        const c = sea.cam, v = YL.V.sub(sea.hero.p, c.eye), z = Math.max(YL.V.dot(v, c.fwd), 0.05), aspect = YL.canvasAspect();
+        const SQ = sea.squidState(), at = SQ && SQ.spark ? SQ.spark.p : sea.hero.p;
+        const c = sea.cam, v = YL.V.sub(at, c.eye), z = Math.max(YL.V.dot(v, c.fwd), 0.05), aspect = YL.canvasAspect();
         const P = ink.toPaint(YL.V.dot(v, c.right) / (z * c.tan[0]), YL.V.dot(v, c.up) / (z * c.tan[1]), aspect);
         ink.arrive(P[0], P[1]); ink.bloom = 1; ink.dawn = 0; ink.grow = [0, 0, 0, 0]; ink.vol = 0;
         D.go('inkbloom');
@@ -425,7 +429,7 @@ const D = YL.director = {
       ink.sunK = smooth(0.2, T_DAWN, D.pt);                                     // the light goes up and becomes the sun
       if (D.pt > T_DAWN) {
         const pond = YL.worlds.pond; if (!pond.ready) pond.init();
-        const aspect = YL.canvasAspect(), H = ink.hero.p;
+        const aspect = YL.canvasAspect(), H = ink.sunP || ink.hero.p;                // (the pond's light is the spark that became the sun)
         const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (ink.pan ? ink.pan[0] : 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
         pond.arrive(...pond.toPaint(nx, ny, aspect)); pond.reveal = 0; pond.dew = 0; pond.drop = 0; pond.white = 0; pond.vol = 0;
         pond.burstAt = pond.hero.p.slice();                                      // (the colour bursts out from the light, now the sun)

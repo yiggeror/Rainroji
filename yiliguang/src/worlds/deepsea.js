@@ -627,6 +627,88 @@ vec3 great(vec3 ro, vec3 rd, inout float T){
   return col * exp(-SIG_V * t);
 }
 
+/* ---- a squid, and the ink it squirts when it takes fright. Local frame: x toward the tip of its mantle (it jets that
+   way), y up. Its head at the origin; arms and two long tentacles trailing back from it. */
+uniform vec4 uSq;            // the squid: where its head is, shown
+uniform vec4 uSqF;           // which way its mantle points (it goes that way), how far its mantle is squeezed
+uniform vec4 uInkC;          // its ink: the cloud's middle, how far it has spread (m)
+uniform vec4 uInkK;          // how thick the ink is, how bright it glows inside (the spark), -, -
+float sdCap(vec3 p, vec3 a, vec3 b, float ra, float rb){ vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h) - mix(ra, rb, h); }
+float squidSDF(vec3 p, float pulse, out float part){
+  part = 0.0;
+  float m = (length(vec3((p.x - 0.085) / 0.088, p.y / (0.021 * (1.0 - 0.18 * pulse)), p.z / (0.020 * (1.0 - 0.18 * pulse)))) - 1.0) * 0.019;
+  float fin = (length(vec3((p.x - 0.140) / 0.032, p.y / 0.0025, p.z / 0.042)) - 1.0) * 0.0025;
+  float d = min(m, fin);
+  float head = length(p - vec3(-0.006, 0.0, 0.0)) - 0.016;
+  if (head < d){ d = head; part = 1.0; }
+  float eye = min(length(p - vec3(-0.004, 0.004, 0.014)), length(p - vec3(-0.004, 0.004, -0.014))) - 0.0062;
+  if (eye < d){ d = eye; part = 2.0; }
+  float t = uTime;
+  for (int k = 0; k < 8; k++){
+    float a = float(k) * 0.785 + 0.3, w = sin(t * 3.0 + float(k)) * 0.008;
+    vec3 e = vec3(-0.085, 0.014 * cos(a) + w, 0.014 * sin(a) + 0.5 * w);
+    d = min(d, sdCap(p, vec3(-0.012, 0.004 * cos(a), 0.004 * sin(a)), e, 0.0035, 0.0008));
+  }
+  for (int k = 0; k < 2; k++){
+    float sgn = float(k) * 2.0 - 1.0, w = sin(t * 2.2 + float(k) * 2.0) * 0.015;
+    d = min(d, sdCap(p, vec3(-0.012, 0.0, 0.004 * sgn), vec3(-0.16, 0.012 * sgn + w, 0.02 * sgn), 0.0022, 0.0018));
+  }
+  return d;
+}
+vec3 squid(vec3 ro, vec3 rd, inout float T){
+  if (uSq.w <= 0.0) return vec3(0.0);
+  vec3 F = uSqF.xyz, Up0 = vec3(0.0, 1.0, 0.0), Z = normalize(cross(F, Up0)), Up = cross(Z, F);
+  vec3 rl = ro - uSq.xyz;
+  vec3 o = vec3(dot(rl, F), dot(rl, Up), dot(rl, Z)), d = vec3(dot(rd, F), dot(rd, Up), dot(rd, Z));
+  vec3 oc = o - vec3(0.0, 0.0, 0.0); float b = dot(oc, d), cc = dot(oc, oc) - 0.20 * 0.20, h = b * b - cc;
+  if (h < 0.0) return vec3(0.0);
+  float t = max(-b - sqrt(h), 0.0), tEnd = min(-b + sqrt(h), T), part = 0.0; bool hit = false;
+  for (int i = 0; i < 56; i++){
+    float dd = squidSDF(o + d * t, uSqF.w, part);
+    if (dd < 0.0003 + 0.0003 * t){ hit = true; break; }
+    t += dd * 0.85;
+    if (t > tEnd) break;
+  }
+  if (!hit) return vec3(0.0);
+  vec3 p = o + d * t; float pp;
+  vec2 e = vec2(0.0008, -0.0008);
+  vec3 n = normalize(e.xyy * squidSDF(p + e.xyy, uSqF.w, pp) + e.yyx * squidSDF(p + e.yyx, uSqF.w, pp) + e.yxy * squidSDF(p + e.yxy, uSqF.w, pp) + e.xxx * squidSDF(p + e.xxx, uSqF.w, pp));
+  vec3 xw = ro + rd * t, Lw = uL - xw, Ld = normalize(vec3(dot(Lw, F), dot(Lw, Up), dot(Lw, Z)));
+  float ndl = dot(n, Ld), wrap = sat((ndl + 0.4) / 1.4);
+  vec3 E = lightAt(xw);
+  // translucent pink skin freckled with dark red chromatophores; the eye black with a silver ring
+  float spots = smoothstep(0.55, 0.75, vnoise(p.xz * 900.0 + p.y * 400.0));
+  vec3 alb = mix(vec3(0.55, 0.26, 0.24), vec3(0.30, 0.04, 0.04), spots * 0.8);
+  if (part > 1.5) alb = mix(vec3(0.004), vec3(0.35, 0.36, 0.38), smoothstep(0.0040, 0.0058, length(p.yz - vec2(0.004, sign(p.z) * 0.014))));
+  vec3 col = E * (alb * wrap * 0.9 + 0.25 * alb * pow(1.0 - abs(dot(n, -d)), 2.0));
+  T = t;
+  return col * exp(-SIG_V * t);
+}
+// the ink: a billowing cloud that swallows the light behind it; lit, a little, from outside; from inside, by the spark
+vec3 inkCloud(vec3 ro, vec3 rd, inout float T, vec3 c){
+  if (uInkC.w <= 0.0) return c;
+  vec3 oc = ro - uInkC.xyz; float R = uInkC.w * 1.35, b = dot(oc, rd), cc = dot(oc, oc) - R * R, h = b * b - cc;
+  if (h < 0.0) return c;
+  h = sqrt(h); float t0 = max(-b - h, 0.0), t1 = min(-b + h, T);
+  if (t1 <= t0) return c;
+  float dt = (t1 - t0) / 18.0, tr = 1.0, firstT = -1.0; vec3 sc = vec3(0.0);
+  for (int i = 0; i < 18; i++){
+    float t = t0 + (float(i) + 0.5) * dt; vec3 p = ro + rd * t;
+    float q = length(p - uInkC.xyz) / uInkC.w;
+    float billow = vnoise(p.xy * 9.0 + uTime * 0.25) * 0.6 + vnoise(p.yz * 17.0 - uTime * 0.18) * 0.4;
+    float dens = smoothstep(1.0, 0.30, q + 0.45 * (billow - 0.5)) * uInkK.x;
+    if (dens <= 0.0) continue;
+    float a = dens * dt * 28.0;
+    vec3 Ein = uLI2.r > 0.0 ? uLI2 * exp(-SIG_T * length(p - uL2)) / (dot(p - uL2, p - uL2) + 0.004) : vec3(0.0);
+    vec3 Eout = lightAt(p) - Ein;
+    sc += tr * a * (Eout * 0.010 * vec3(0.30, 0.24, 0.22) + Ein * 0.030 * vec3(1.0, 0.55, 0.25) * uInkK.y);
+    tr *= exp(-a);
+    if (firstT < 0.0 && tr < 0.3) firstT = t;
+  }
+  if (firstT > 0.0) T = min(T, firstT);
+  return c * tr + sc * exp(-SIG_V * t0);
+}
+
 /* ---- the anglerfish behind the lure: a dark head, a great open mouth ringed with needle teeth, one eye that shines back.
    Local frame: x toward the light it is hunting, y up. Only what our light reaches is seen. */
 uniform vec4 uFishP;         // head centre, shown (0/1)
@@ -718,6 +800,8 @@ void main(){
   if (Tg < T){ c = cg; T = Tg; }
   float Tf = T; vec3 cf = fish(ro, rd, Tf);
   if (Tf < T){ c = cf; T = Tf; }
+  float Ts = T; vec3 cs = squid(ro, rd, Ts);
+  if (Ts < T){ c = cs; T = Ts; }
   // the creatures, composited far to near (JS sends them in that order); what is behind the whale is hidden
   for (int k = 0; k < 3; k++){
     Hit h = creature(k, ro, rd);
@@ -768,6 +852,8 @@ void main(){
   // and the water between, lit; light scattered many times fills a wide, soft, cold sphere round it
   c += inscatter(ro, rd, T);
   if (t0 > 0.0) c += uLI.r * (vec3(0.0, 0.06, 0.20) * 0.010 / (hl2 + 0.10) + vec3(0.0, 0.03, 0.12) * 0.004 / (hl2 + 0.7)) * exp(-0.25 * t0);
+  // and over it all, the squid's ink where it is
+  c = inkCloud(ro, rd, T, c);
   o = vec4(c, T);
 }`;
 
@@ -1273,6 +1359,34 @@ W.deepsea = {
     if (!G.fin && s > -3.3) { G.fin = true; this.finSound(); }
   },
 
+  /* ---- the way on. A squid comes darting at the light, takes fright, squirts its ink and is gone. The light sends a spark
+     of itself into the ink; it glows from inside, and the ink billows out until there is nothing but ink. */
+  startSquid() {
+    const V = YL.V, cam = this.cam || this.camera(YL.canvasAspect(), this.t, YL.DBG.still), L = this.hero.p;
+    this.sq = { t0: this.t, L: L.slice(), R: cam.right.slice(), U: cam.up.slice(), F: cam.fwd.slice(), eye: cam.eye.slice() };
+    this.squidSound && this.squidSound();
+  },
+  squidState() {
+    const S = this.sq; if (!S) return null;
+    const V = YL.V, a = this.t - S.t0, at = (r, u, f) => V.add(S.L, V.add(V.mul(S.R, r), V.add(V.mul(S.U, u), V.mul(S.F, f))));
+    const P0 = at(1.5, 0.12, 0.25), Ps = at(0.42, 0.06, 0.22), e = YL.smooth(0, 1.3, a);
+    const away = V.norm(V.add(S.R, V.add(V.mul(S.U, 0.45), V.mul(S.F, -0.3))));
+    let p = V.add(V.mul(P0, 1 - e), V.mul(Ps, e)), dir = V.mul(S.R, -1);
+    const turn = YL.smooth(1.3, 1.6, a); dir = V.norm(V.add(V.mul(dir, 1 - turn), V.mul(away, turn)));
+    if (a > 1.6) p = V.add(Ps, V.mul(away, 1.8 * (a - 1.6) * (a - 1.6)));
+    if (a > 1.3 && a < 1.6) p = V.add(p, V.mul(S.U, 0.003 * Math.sin(a * 60)));        // (a shudder)
+    const pulse = a < 1.3 ? 0.5 + 0.5 * Math.sin(a * 14) : a > 1.6 ? 0.5 + 0.5 * Math.sin(a * 22) : 1;
+    // the ink: squirted out at its head, billowing; the spark goes in; then it comes on toward the eye, spreading, until
+    // there is nothing else (along the line from the eye through the spark, so the spark stays where it is in the picture)
+    let ink = null, spark = null;
+    if (a > 1.45) {
+      const c0 = V.add(Ps, V.add(V.mul(S.R, -0.03), V.mul(S.U, 0.01 * (a - 1.45)))), r0 = 0.04 + 0.24 * YL.smooth(1.45, 2.4, a);
+      const eng = YL.smooth(3.2, 4.7, a), toEye = V.add(S.eye, V.mul(V.norm(V.sub(c0, S.eye)), 0.35));
+      ink = { c: V.add(V.mul(c0, 1 - eng), V.mul(toEye, eng)), r: r0 + 2.6 * eng * eng, k: 1 };
+      if (a > 2.4) { const sp = YL.smooth(2.4, 3.0, a); spark = { p: V.add(V.mul(S.L, 1 - sp), V.mul(ink.c, sp)), glow: YL.smooth(2.9, 3.4, a) }; }
+    }
+    return { p, dir, pulse, shown: a < 3.0 ? 1 : 0, ink, spark, a };
+  },
   // the whole whale going by: the water it pushes, swelling and ebbing; a long low call, close; the plankton's hiss
   greatSound() {
     if (!this.snd) return;
@@ -1293,6 +1407,20 @@ W.deepsea = {
     const hp = ctx.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 5200; hp.Q.value = 1.2;
     const hg = ctx.createGain(); hg.gain.setValueAtTime(0, t0); hg.gain.linearRampToValueAtTime(0.05, t0 + 2.5); hg.gain.linearRampToValueAtTime(0, t0 + 8);
     hs.connect(hp); hp.connect(hg); hg.connect(S.wet); hs.start(t0, 1.3);
+  },
+  squidSound() {
+    if (!this.snd) return;
+    const S = this.snd, ctx = S.ctx, t0 = ctx.currentTime + 1.45, sr = ctx.sampleRate;
+    const n = Math.floor(sr * 1.2), buf = ctx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sr * 0.25));
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 380; bp.Q.value = 0.9;
+    const g = ctx.createGain(); g.gain.value = 0.22;
+    src.connect(bp); bp.connect(g); g.connect(S.bus); g.connect(S.wet); src.start(t0);
+    // the ink spreading: a low swell, and a warm tone as the spark lights it
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(98, t0 + 1.4); o.frequency.linearRampToValueAtTime(131, t0 + 3.2);
+    const og = ctx.createGain(); og.gain.setValueAtTime(0, t0 + 1.0); og.gain.linearRampToValueAtTime(0.05, t0 + 2.0); og.gain.linearRampToValueAtTime(0, t0 + 3.4);
+    o.connect(og); og.connect(S.wet); og.connect(S.bus); o.start(t0 + 1.0); o.stop(t0 + 3.5);
   },
   // the flipper going by close: a long soft rush of water
   finSound() {
@@ -1467,7 +1595,9 @@ W.deepsea = {
     const br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);       // the same breathing as in every world
     const LI = YL.mulc(YL.bb(2500), 0.30 * br * (this.light ?? 1) * (1 - 0.6 * (this.hero.fear || 0)));
     const Lr = this.lure, br2 = 1 + 0.07 * Math.sin(this.t * 2.1 + 0.9) + 0.03 * Math.sin(this.t * 5.3 + 2);
-    const LI2 = Lr.state !== 'off' && Lr.state !== 'gone' ? YL.mulc(YL.bb(2500), 0.30 * br2 * Lr.k) : [0, 0, 0];
+    let LI2 = Lr.state !== 'off' && Lr.state !== 'gone' ? YL.mulc(YL.bb(2500), 0.30 * br2 * Lr.k) : [0, 0, 0];
+    const SQ = this.squidState();
+    if (SQ && SQ.spark) { Lr.p = SQ.spark.p; LI2 = YL.mulc(YL.bb(2300), 0.10 * br2); }
     // the creatures, far to near
     const V = YL.V, J = this.jel.slice().sort((a, b) => V.dot(V.sub(b.p, cam.eye), cam.fwd) - V.dot(V.sub(a.p, cam.eye), cam.fwd));
     const jp = new Float32Array(12), ju = new Float32Array(12), jk = new Float32Array(12);
@@ -1489,6 +1619,8 @@ W.deepsea = {
     const gs = this.greatS(), G = this.great;
     const gw = gs === null ? [0, 0, 0, 0] : [...V.add(G.mid, V.mul(G.F, gs)), 1];
     U(this.pSea, 'uDown', 1.0);
+    U(this.pSea, 'uSq', SQ ? [...SQ.p, SQ.shown] : [0, 0, 0, 0]); U(this.pSea, 'uSqF', SQ ? [...SQ.dir, SQ.pulse] : [1, 0, 0, 0]);
+    U(this.pSea, 'uInkC', SQ && SQ.ink ? [...SQ.ink.c, SQ.ink.r] : [0, 0, 0, 0]); U(this.pSea, 'uInkK', SQ && SQ.ink ? [SQ.ink.k, SQ.spark ? SQ.spark.glow : 0, 0, 0] : [0, 0, 0, 0]);
     U(this.pSea, 'uGW', gw); U(this.pSea, 'uGF', G ? [...G.F, Math.sin(this.t * 1.3)] : [1, 0, 0, 0]); U(this.pSea, 'uGA', [...this.finDir(gs ?? 0), 0]);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2) the tentacles, added on
