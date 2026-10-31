@@ -391,21 +391,6 @@ void main(){
     lay(fill(abs(lan) - 0.0004), vec3(1.0, 0.0, 0.0));
     lay(fill(length(lc * vec2(1.4, 1.0)) - 0.0011 * F.w), vec3(0.0, 0.0, 0.0));
   }
-  // ---------------- the ice fisherman by the hole, hunched on his stool, his line down into the black water
-  {
-    vec2 q = P - (HOLE + vec2(0.072, -0.004));
-    if (abs(q.x) < 0.03 && q.y > -0.006 && q.y < 0.03){
-      float b = 0.0003 * sin(t * 0.8);
-      float body = length((q - vec2(0.0, 0.0085 + b)) / vec2(0.0062, 0.0075)) - 1.0;
-      float head = length(q - vec2(-0.0032, 0.0168 + b)) - 0.0024;
-      vec2 hq = q - vec2(-0.0032, 0.0180 + b);
-      float hat = max(abs(hq.x) * 0.40 + hq.y - 0.0016, -hq.y);
-      float stool = sdBox(q - vec2(0.0012, 0.0012), vec2(0.0032, 0.0012));
-      float rod = sdSeg(q, vec2(-0.0050, 0.0110 + b), vec2(-0.0220, 0.0190 + b)) - 0.00035;
-      float line_ = sdSeg(q, vec2(-0.0220, 0.0190 + b), vec2(-0.0235, -0.0030)) - 0.00018;
-      lay(fill(min(min(body * 0.006, head), min(hat, min(stool, min(rod, line_))))), vec3(1.0, 0.7, 0.0));
-    }
-  }
   // ---------------- the far bank: a lip of snow, the dark face under it
   float bF = bankFar(P.x);
   {
@@ -563,6 +548,21 @@ void main(){
     lay(fill(P.y - bN), vec3(K, B, 0.0));
   }
 
+  // ---------------- the ice fisherman by the hole, hunched on his stool, his line down into the black water
+  {
+    vec2 q = P - (HOLE + vec2(0.072, -0.004));
+    if (abs(q.x) < 0.03 && q.y > -0.006 && q.y < 0.03){
+      float b = 0.0003 * sin(t * 0.8);
+      float body = length((q - vec2(0.0, 0.0085 + b)) / vec2(0.0062, 0.0075)) - 1.0;
+      float head = length(q - vec2(-0.0032, 0.0168 + b)) - 0.0024;
+      vec2 hq = q - vec2(-0.0032, 0.0180 + b);
+      float hat = max(abs(hq.x) * 0.40 + hq.y - 0.0016, -hq.y);
+      float stool = sdBox(q - vec2(0.0012, 0.0012), vec2(0.0032, 0.0012));
+      float rod = sdSeg(q, vec2(-0.0050, 0.0110 + b), vec2(-0.0220, 0.0190 + b)) - 0.00035;
+      float line_ = sdSeg(q, vec2(-0.0220, 0.0190 + b), vec2(-0.0235, -0.0030)) - 0.00018;
+      lay(fill(min(min(body * 0.006, head), min(hat, min(stool, min(rod, line_))))), vec3(1.0, 0.7, 0.0));
+    }
+  }
   // ---------------- dry reeds in clumps along the near bank: curving, tapering strokes, some broken over; snow on the seed heads
   if (P.y < bN + 0.24 && ((P.x > 0.24 && P.x < 0.56) || (P.x > 1.08 && P.x < 1.44))){
     float dR = 1e9, dSnow = 1e9;
@@ -1026,7 +1026,7 @@ W.woodcut = {
     const pan = still ? 0 : 0.016 * Math.sin(t * 0.05);
     const narrow = Math.min(Math.max((1.0 - aspect) / 0.45, 0), 1);       // on a phone held upright, keep the lantern well inside
     const v = [0.80 - 0.06 * narrow + pan, 0.5, s];
-    if (this.panX !== undefined) { v[0] = this.panX; v[2] = s * 0.84; v[1] = 0.50 - 0.01; }
+    if (this.panX !== undefined) { v[0] = this.panX; v[2] = s * (this.panZ ?? 0.84); v[1] = 0.49 - 0.10 * (0.84 - (this.panZ ?? 0.84)); }
     // the way out: the eye goes into the lantern until its lit paper is all there is
     const z = this.zoomIn || 0;
     if (z > 0) {
@@ -1370,6 +1370,8 @@ W.woodcut = {
     if (this.panX !== undefined) {
       const tgt = Math.max(0.68, Math.min(1.12, this.hero.p[0] * 0.65 + 0.90 * 0.35));
       this.panX += (tgt - this.panX) * (1 - Math.exp(-dt * 0.9));
+      const zt = this.hero.mode === 'hop' ? 0.60 : 0.84;
+      this.panZ = (this.panZ ?? 0.84) + (zt - (this.panZ ?? 0.84)) * (1 - Math.exp(-dt * 0.7));
       this.whole = true;
     }
     if (this.stroke && !YL.ptrDown) this.endStroke();
