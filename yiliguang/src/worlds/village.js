@@ -64,10 +64,15 @@ const LANTERNS = []; for (let s = 0; s < NS; s++) for (let j = 0; j < LPER; j++)
 // villagers: waiting in the square, and walking up the lane toward it
 const PEOPLE = (() => {
   const P = [];
-  for (let i = 0; i < 30; i++) {
-    if (i < 18) { const a = rnd(i * 3.1) * Math.PI, r = 2.5 + rnd(i * 5.3) * 6.5; P.push({ x: STAGE[0] + Math.cos(a) * r * 1.2, z: STAGE[1] + 5.5 + Math.sin(a) * r * 0.55 + 1.5, walk: 0 }); }
-    else { const z = 12 - (i - 18) * 4.6 + rnd(i) * 2; P.push({ x0: (rnd(i * 7) - 0.5) * 2.2, z0: z, walk: 1, v: 0.9 + 0.3 * rnd(i * 17) }); }
-    P[i].h = 1.55 + rnd(i * 11) * 0.2 - (rnd(i * 13) < 0.12 ? 0.5 : 0); P[i].seed = i;
+  for (let i = 0; i < 48; i++) {
+    if (i < 32) {
+      // the crowd: rows in a loose fan before the stage, nearer rows fuller
+      const row = Math.floor(i / 8), k = i % 8, w = 3.4 + row * 1.6;
+      const x = STAGE[0] + (k / 7 - 0.5) * 2 * w + (rnd(i * 3.1) - 0.5) * 1.1;
+      const z = STAGE[1] + 6.2 + row * 1.7 + (rnd(i * 5.3) - 0.5) * 0.9 + 0.25 * Math.abs(k / 7 - 0.5) * 4;
+      P.push({ x, z, walk: 0 });
+    } else { const z = 12 - (i - 32) * 3.9 + rnd(i) * 2; P.push({ x0: (rnd(i * 7) - 0.5) * 2.4, z0: z, walk: 1, v: 0.9 + 0.3 * rnd(i * 17) }); }
+    P[i].h = 1.55 + rnd(i * 11) * 0.2 - (rnd(i * 13) < 0.16 ? 0.55 : 0); P[i].seed = i;
   }
   return P;
 })();
@@ -97,11 +102,12 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
 /* ---------------------------------------------------------------- pass 1: the blocks */
 const FS_G = HEAD + `
 uniform float uLit, uNH;
-uniform vec4 uHA[56], uHB[56], uPP[30], uSA[${NS}], uSB[${NS}], uTR[7];
+uniform vec4 uHA[56], uHB[56], uPP[48], uSA[${NS}], uSB[${NS}], uTR[7];
 uniform vec4 uLanOn[${Math.ceil(NL / 4)}];
 uniform vec4 uHero;                  // the light: where, how bright
 uniform sampler2D uScreen;           // the shadow play, as it is on the screen
 uniform float uScreenOn;             // (the screen's own picture is there at all)
+uniform float uGlowK;                // the glow in the air (gone by the time the eye is up against the screen)
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 oD;
 #define NS ${NS}
@@ -189,7 +195,7 @@ void stage(vec3 ro, vec3 rd, bool roofToo){
   vec3 o = ro - vec3(STAGE.x, 0.0, STAGE.y), d = rd;
   float tn0, tf0;
   if (!boxSpan(o, d, vec3(0.0, 4.6, 0.0), vec3(6.6, 4.7, 4.6), tn0, tf0) || tn0 > tBest) return;
-  vec3 C[9]; vec3 Sz[9];
+  vec3 C[11]; vec3 Sz[11];
   C[0] = vec3(0.0, 0.65, 0.0);     Sz[0] = vec3(4.8, 0.65, 3.2);
   C[1] = vec3(-4.2, 3.05, 2.8);    Sz[1] = vec3(0.20, 2.4, 0.20);
   C[2] = vec3(4.2, 3.05, 2.8);     Sz[2] = vec3(0.20, 2.4, 0.20);
@@ -199,9 +205,12 @@ void stage(vec3 ro, vec3 rd, bool roofToo){
   C[6] = vec3(-4.2, 3.05, -2.8);   Sz[6] = vec3(0.20, 2.4, 0.20);
   C[7] = vec3(4.2, 3.05, -2.8);    Sz[7] = vec3(0.20, 2.4, 0.20);
   C[8] = vec3(0.0, 1.45, 2.9);     Sz[8] = vec3(4.9, 0.12, 0.35);
+  C[9] = vec3(0.0, 5.82, 2.95);    Sz[9] = vec3(1.5, 0.32, 0.05);           // the plaque over the stage
+  C[10] = vec3(0.0, 2.9, 3.06);    Sz[10] = vec3(4.62, 1.45, 0.02);         // (the banners: only their two strips are kept)
   float t0; vec3 n;
-  for (int i = 0; i < 9; i++){
+  for (int i = 0; i < 11; i++){
     if (boxHit(o, d, C[i], Sz[i], t0, n) && t0 < tBest){
+      if (i == 10){ vec3 hp = o + d * t0; if (abs(abs(hp.x) - 4.62 + 0.20) > 0.20) continue; }
       tBest = t0; best = 1000 + i * 8 + (abs(n.y) > 0.5 ? 1 : abs(n.x) > 0.5 ? 2 : 0);
       bestN = n; bestL = o + d * t0; bestInfo = vec4(C[i].xy - Sz[i].xy, Sz[i].xy * 2.0);
     }
@@ -319,57 +328,172 @@ vec3 skyCol(vec3 rd, out float fid){
   }
   return c;
 }
-// ---- a villager (a flat figure standing on the snow): hat or hood, padded coat, snow on the shoulders, maybe a lantern or umbrella
-vec4 person(vec2 q, float seed, float h, float walk, out float fid){
+// ---- a villager: a figure standing on the snow, seen mostly from behind, drawn the way a printmaker would cut it.
+//   q: metres on the figure's own plane (origin at its feet); h its height; walk 0 standing … 1 walking;
+//   elev: how far the eye looks down on it (0 level … 1 straight down); look: its head turned (-1 left … 1 right);
+//   lit: which side the warm light is on (-1 … 1) and how warm (0 … 1). fid: which part (for the key block's lines)
+const vec3 SKIN = vec3(0.86, 0.66, 0.52);
+vec3 coatCol(float k){
+  return k < 0.18 ? vec3(0.14, 0.18, 0.32) : k < 0.34 ? vec3(0.12, 0.22, 0.40) : k < 0.50 ? vec3(0.30, 0.20, 0.15)
+       : k < 0.62 ? vec3(0.27, 0.28, 0.18) : k < 0.74 ? vec3(0.42, 0.13, 0.12) : k < 0.86 ? vec3(0.32, 0.33, 0.38) : vec3(0.20, 0.36, 0.30);
+}
+vec4 person(vec2 q, float seed, float h, float walk, float elev, float look, vec2 lit, out float fid){
   fid = 0.0;
-  float kind = hash11(seed + 21.0);
-  vec3 coat = kind < 0.45 ? vec3(0.15, 0.19, 0.33) : kind < 0.75 ? vec3(0.32, 0.22, 0.17) : kind < 0.88 ? vec3(0.33, 0.35, 0.42) : vec3(0.70, 0.17, 0.12);
-  if (h < 1.3) coat = vec3(0.72, 0.18, 0.12);
   vec2 u = q / h;
-  float ph = uTime * 3.4 + seed * 7.0;
-  u.y -= walk * 0.012 * abs(sin(ph));
+  if (abs(u.x) > 0.72 || u.y < -0.02 || u.y > 1.42) return vec4(0.0);
+  bool child = h < 1.3;
+  float kind = hash11(seed + 21.0);
+  float woman = step(0.55, hash11(seed + 41.0));
+  vec3 coat = coatCol(kind);
+  if (child) coat = hash11(seed + 5.0) < 0.5 ? vec3(0.78, 0.18, 0.12) : vec3(0.82, 0.42, 0.46);
+  float ph = uTime * 3.2 + seed * 7.0;
+  // a walk: a bob, a stride; standing: the weight shifting slowly from foot to foot
+  float sway = walk > 0.5 ? 0.0 : 0.012 * sin(uTime * 0.7 + seed * 3.0);
+  u.x -= sway * u.y;
+  u.y -= walk * 0.010 * abs(sin(ph));
   vec4 c = vec4(0.0);
-  float stride = walk * 0.05 * sin(ph);
-  float legs = min(sdSeg(u, vec2(-0.06 + stride, 0.02), vec2(-0.05, 0.22)), sdSeg(u, vec2(0.06 - stride, 0.02), vec2(0.05, 0.22))) - 0.045;
-  if (legs < 0.0){ c = vec4(vec3(0.09, 0.08, 0.10), 1.0); fid = 1.0; }
+  // boots, under the hem
+  float st = walk * 0.05 * sin(ph);
+  float boots = min(sdEll(u - vec2(-0.075 + st, 0.045), vec2(0.055, 0.05)), sdEll(u - vec2(0.075 - st, 0.045), vec2(0.055, 0.05)));
+  boots = min(boots, min(sdSeg(u, vec2(-0.07 + st, 0.04), vec2(-0.065, 0.16)), sdSeg(u, vec2(0.07 - st, 0.04), vec2(0.065, 0.16))) - 0.045);
+  if (boots < 0.0){ c = vec4(vec3(0.09, 0.075, 0.08), 1.0); fid = 1.0; }
+  // the padded robe: an A line from sloping shoulders to a full hem, a little wavy
   float y = u.y;
-  float hw = mix(0.29, 0.21, smoothstep(0.18, 0.80, y)) + 0.02 * sin(y * 9.0 + seed);
-  float coatD = max(abs(u.x) - hw, max(0.18 - y, y - 0.80));
-  coatD = smax(coatD, length(u - vec2(0.0, 0.66)) - 0.30, 0.06);
-  float sw = walk * 0.04 * sin(ph);
-  float arms = min(sdSeg(u, vec2(-0.20, 0.74), vec2(-0.27 + sw, 0.45)), sdSeg(u, vec2(0.20, 0.74), vec2(0.27 - sw, 0.45))) - 0.07;
-  if (min(coatD, arms) < 0.0){ c = vec4(coat, 1.0); fid = arms < coatD ? 3.0 : 2.0; if (abs(fract(y * 7.0) - 0.5) < 0.06 && arms > 0.0) c.rgb *= 0.78; }
-  float head = length(u - vec2(0.0, 0.87)) - 0.11;
-  if (head < 0.0){ c = vec4(vec3(0.12, 0.10, 0.10), 1.0); fid = 4.0; }
-  if (hash11(seed + 31.0) < 0.6){
-    float hat = max(abs(u.x) - 0.36 * (1.0 - (u.y - 0.90) / 0.16), max(0.90 - u.y, u.y - 1.06));
-    if (hat < 0.0){ c = vec4(vec3(0.62, 0.48, 0.30), 1.0); fid = 5.0; if (abs(fract((u.x / max(1.0 - (u.y - 0.90) / 0.16, 0.05)) * 9.0) - 0.5) < 0.08) c.rgb *= 0.75; }
-    if (hat < 0.0 && u.y > 0.955 + 0.025 * vnoise(vec2(u.x * 25.0, seed + 2.0))){ c = vec4(SNOW, 1.0); fid = 6.0; }
-  } else {
-    float hood = length(u - vec2(0.0, 0.88)) - 0.14;
-    if (hood < 0.0 && head >= -0.02){ c = vec4(coat * 0.85, 1.0); fid = 5.0; }
-    if (hood < 0.0 && u.y > 0.96 + 0.02 * vnoise(vec2(u.x * 30.0, seed))){ c = vec4(SNOW, 1.0); fid = 6.0; }
-  }
-  float sh = max(abs(u.x) - 0.27, abs(u.y - 0.79 - 0.03 * vnoise(vec2(u.x * 20.0, seed))) - 0.025);
-  if (sh < 0.0 && coatD < 0.02){ c = vec4(SNOW, 1.0); fid = 7.0; }
+  float hw = mix(0.27, 0.185, smoothstep(0.10, 0.76, y)) + 0.012 * sin(y * 11.0 + seed);
+  float shoulder = 0.80 - 0.55 * u.x * u.x;
+  float hem = 0.11 + 0.012 * sin(u.x * 26.0 + seed);
+  float robe = max(max(abs(u.x) - hw, hem - y), y - shoulder);
+  // sleeves hang beside it; the hands are tucked into them
+  float sw = walk * 0.05 * sin(ph);
+  float slL = sdSeg(u, vec2(-0.19, 0.74), vec2(-0.235 + sw, 0.42)) - 0.072;
+  float slR = sdSeg(u, vec2(0.19, 0.74), vec2(0.235 - sw, 0.42)) - 0.072;
   float extra = hash11(seed + 11.0);
+  bool lantern = extra > 0.45 && extra <= 0.72;
+  float side = hash11(seed + 3.0) < 0.5 ? -1.0 : 1.0;
+  if (lantern){
+    // the arm on that side goes forward and up, holding the stick
+    float arm = sdSeg(u, vec2(0.19 * side, 0.72), vec2(0.30 * side, 0.58)) - 0.065;
+    if (side < 0.0) slL = arm; else slR = arm;
+  }
+  float sleeves = min(slL, slR);
+  float body = min(robe, sleeves);
+  if (body < 0.0){
+    // two tones and a rim: the side toward the warm light catches it
+    float sideL = clamp(u.x / 0.26 * sign(lit.x + 1e-4), -1.0, 1.0);
+    vec3 cc = coat * mix(0.78, 1.0, smoothstep(-0.4, 0.4, sideL * abs(lit.x)));
+    float rim = smoothstep(-0.05, -0.008, body) * smoothstep(-0.1, 0.5, u.x * sign(lit.x + 1e-4) / 0.25);
+    cc = mix(cc, cc * 0.5 + vec3(1.0, 0.68, 0.36) * 0.75, rim * lit.y);
+    cc = mix(cc, cc * vec3(1.25, 1.08, 0.92), lit.y * 0.6);
+    // quilting and folds: a crease down the back, the sash, the sleeves' inner shadow
+    if (sleeves > 0.0 && abs(u.x) < 0.012 && y < 0.72) cc *= 0.72;
+    float sash = abs(y - 0.47) < 0.022 ? 1.0 : 0.0;
+    if (sleeves > 0.0 && sash > 0.5) cc = mix(cc, hash11(seed + 13.0) < 0.5 ? vec3(0.55, 0.16, 0.12) : vec3(0.20, 0.17, 0.16), 0.85);
+    if (sleeves < 0.0 && robe > -0.03 && robe < 0.02) cc *= 0.70;
+    if (woman > 0.5 && !child && sleeves > 0.0){
+      // a woman's jacket: a scatter of small flowers in its cloth
+      vec2 fg = u * vec2(22.0, 18.0); vec2 fi2 = floor(fg); vec2 ff = fract(fg) - 0.5;
+      if (hash12(fi2 + seed) < 0.18 && length(ff) < 0.11) cc = mix(cc, hash11(seed + 61.0) < 0.5 ? vec3(0.80, 0.55, 0.40) : vec3(0.70, 0.62, 0.48), 0.40);
+    }
+    c = vec4(cc, 1.0); fid = sleeves < robe ? 3.0 : 2.0;
+  }
+  // the collar
+  float collar = sdEll(u - vec2(0.0, 0.80), vec2(0.105, 0.040 + 0.03 * elev));
+  if (collar < 0.0){ c = vec4(vec3(0.52, 0.47, 0.42) * (1.0 + 0.2 * lit.y), 1.0); fid = 4.0; }
+  // the head; turned, the face shows in profile on that side
+  vec2 hc = vec2(0.012 * look, 0.885);
+  float head = length(u - hc) - 0.082;
+  float hatK = hash11(seed + 31.0);
+  if (head < 0.0){
+    vec3 hcol = vec3(0.10, 0.08, 0.08);
+    float face = smoothstep(0.0, 0.5, (u.x - hc.x) * sign(look) / 0.082 + 0.15) * abs(look);
+    hcol = mix(hcol, SKIN * (0.85 + 0.25 * lit.y), smoothstep(0.35, 0.6, face));
+    c = vec4(hcol, 1.0); fid = 5.0;
+  }
+  // nose and brow when it looks round
+  if (abs(look) > 0.4){
+    float nose = sdEll(u - hc - vec2(0.088 * sign(look), -0.01), vec2(0.018, 0.016));
+    if (nose < 0.0){ c = vec4(SKIN * (0.85 + 0.25 * lit.y), 1.0); fid = 5.0; }
+  }
+  // headwear: a felt cap; a hood; a headscarf; a child's tiger hat; now and then a bamboo hat
+  if (child){
+    float cap = max(length(u - vec2(0.0, 0.92)) - 0.10, -(u.y - 0.86));
+    float earL = length(u - vec2(-0.07, 1.00)) - 0.035, earR = length(u - vec2(0.07, 1.00)) - 0.035;
+    float tiger = min(cap, min(earL, earR));
+    if (tiger < 0.0){ vec3 tc = vec3(0.92, 0.55, 0.15); if (abs(fract(u.x * 18.0) - 0.5) < 0.12 && cap < 0.0 && u.y > 0.92) tc = vec3(0.12, 0.08, 0.06);
+      c = vec4(tc, 1.0); fid = 6.0; }
+  } else if (woman > 0.5 && hatK < 0.6){
+    float scarf = max(length((u - vec2(0.0, 0.89)) * vec2(1.0, 0.95)) - 0.105, -(u.y - 0.80));
+    if (scarf < 0.0 && abs(look) < 0.4){ vec3 sc = hash11(seed + 51.0) < 0.5 ? vec3(0.62, 0.16, 0.16) : vec3(0.20, 0.30, 0.52);
+      if (vnoise(u * 60.0) > 0.7) sc = mix(sc, vec3(0.9, 0.8, 0.6), 0.5); c = vec4(sc, 1.0); fid = 6.0; }
+    float bun = length(u - vec2(0.0, 0.875)) - 0.045;
+    if (scarf >= 0.0 && bun < 0.0){ c = vec4(vec3(0.07, 0.06, 0.07), 1.0); fid = 7.0; }
+    if (length(u - vec2(0.04, 0.90)) < 0.012){ c = vec4(SHU, 1.0); fid = 7.0; }                      // a hairpin
+  } else if (hatK < 0.45){
+    float cap = max(sdEll(u - vec2(0.0, 0.905), vec2(0.10, 0.075)), -(u.y - 0.86));
+    float flap = min(sdEll(u - vec2(-0.095, 0.86), vec2(0.03, 0.045)), sdEll(u - vec2(0.095, 0.86), vec2(0.03, 0.045)));
+    if (min(cap, flap) < 0.0){ c = vec4(vec3(0.20, 0.15, 0.12), 1.0); fid = 6.0; }
+  } else if (hatK < 0.78){
+    float hood = max(sdEll(u - vec2(0.0, 0.88), vec2(0.13, 0.13)), -(u.y - 0.76));
+    if (hood < 0.0 && !(abs(look) > 0.4 && u.x * sign(look) > 0.02)){ c = vec4(coat * 0.92, 1.0); fid = 6.0; }
+  } else {
+    // a bamboo hat, seen a little from above: its brim an ellipse, its crown a low cone
+    vec2 bq = u - vec2(0.0, 0.94);
+    float brim = sdEll(bq, vec2(0.30, 0.035 + 0.16 * elev));
+    float crown = max(abs(bq.x) - 0.16 * (1.0 - (bq.y) / 0.13), max(-bq.y, bq.y - 0.13));
+    float hat = min(brim, crown);
+    if (hat < 0.0){ vec3 hc2 = vec3(0.62, 0.48, 0.30); if (abs(fract(atan(bq.x, bq.y + 0.05) * 3.0) - 0.5) < 0.08) hc2 *= 0.8; c = vec4(hc2, 1.0); fid = 6.0; }
+  }
+  // snow on the shoulders and on whatever is on its head
+  float snowTop = 0.0;
+  if (c.a > 0.0 && fid >= 2.0){
+    // (the snow lies on the upward faces: the shoulders' slope, the tops of hats)
+    float sh = abs(u.y - (shoulder - 0.01)) - (0.016 + 0.04 * elev) * (0.6 + 0.6 * vnoise(vec2(u.x * 30.0, seed)));
+    if (sh < 0.0 && abs(u.x) < 0.23 && fid <= 4.0) snowTop = 1.0;
+    if (fid == 6.0 && u.y > 0.95 + 0.02 * vnoise(vec2(u.x * 25.0, seed)) - 0.03 * elev) snowTop = 1.0;
+  }
+  if (snowTop > 0.5){ c = vec4(SNOW, 1.0); fid = 8.0; }
+  // an umbrella of oiled paper, held up; seen from behind and a little above: its top, ribbed, snow on it
   if (extra > 0.72){
-    vec2 uq = rot(0.18 * (hash11(seed + 9.0) - 0.5)) * (u - vec2(0.06, 1.16));
-    float can = max(sdEll(uq, vec2(0.62, 0.24)), -uq.y);
-    float shaft = max(abs(u.x - 0.06) - 0.012, max(0.55 - u.y, u.y - 1.16));
-    if (shaft < 0.0 && can > 0.0){ c = vec4(vec3(0.15), 1.0); fid = 8.0; }
-    if (can < 0.0){ c = vec4(mix(vec3(0.76, 0.48, 0.24), vec3(0.62, 0.20, 0.14), step(0.5, hash11(seed + 9.0))), 1.0); fid = 9.0;
-      if (abs(fract(atan(uq.x, uq.y + 0.2) / PI * 7.0) - 0.5) < 0.05) c.rgb *= 0.55; }
-    if (can < 0.0 && uq.y > 0.10 + 0.03 * vnoise(vec2(uq.x * 12.0, seed))){ c = vec4(SNOW, 1.0); fid = 10.0; }
-  } else if (extra > 0.45){
-    float side = hash11(seed + 3.0) < 0.5 ? -1.0 : 1.0;
-    float pole = sdSeg(u, vec2(0.18 * side, 0.62), vec2(0.42 * side, 1.02)) - 0.012;
-    vec2 lc = vec2(0.42 * side, 0.86 + 0.01 * sin(ph * 0.5));
-    float lan = sdEll(u - lc, vec2(0.085, 0.11));
-    if (pole < 0.0){ c = vec4(vec3(0.15), 1.0); fid = 11.0; }
-    if (lan < 0.0){ c = vec4(mix(WARM, SHU, 0.25 + 0.6 * length((u - lc) / vec2(0.085, 0.11))), 1.0); fid = 12.0; }
+    vec2 uq = rot(0.15 * (hash11(seed + 9.0) - 0.5)) * (u - vec2(0.05, 1.17));
+    float ry = 0.10 + 0.32 * elev;
+    float can = sdEll(uq, vec2(0.58, ry)) + 0.012 * abs(sin(atan(uq.x, uq.y / ry * 0.58) * 8.0));
+    float shaft = max(abs(u.x - 0.05) - 0.012, max(0.50 - u.y, u.y - 1.17));
+    if (shaft < 0.0 && can > 0.0){ c = vec4(vec3(0.18, 0.12, 0.10), 1.0); fid = 9.0; }
+    if (can < 0.0){
+      vec3 pc = hash11(seed + 9.0) < 0.33 ? vec3(0.78, 0.48, 0.22) : hash11(seed + 9.0) < 0.66 ? vec3(0.66, 0.18, 0.13) : vec3(0.22, 0.32, 0.50);
+      float a = atan(uq.x, uq.y / ry * 0.58);
+      float rib = smoothstep(0.06, 0.0, abs(fract(a / PI * 8.0) - 0.5) - 0.0);
+      pc *= 1.0 - 0.30 * rib;
+      pc *= 0.85 + 0.3 * smoothstep(-ry, ry, uq.y) * (0.6 + 0.4 * lit.y);
+      // snow on its top, in drifts between the ribs
+      float drift = vnoise(uq * vec2(9.0, 22.0) + seed) - 0.25 * rib;
+      if (uq.y > -0.2 * ry && drift > 0.52) pc = SNOW;
+      c = vec4(pc, 1.0); fid = 10.0;
+    }
+  }
+  // a paper lantern on a stick, carried a little ahead
+  if (lantern){
+    vec2 tip = vec2(0.40 * side, 0.86);
+    float stick = sdSeg(u, vec2(0.28 * side, 0.58), tip) - 0.010;
+    vec2 lc = tip + vec2(0.0, -0.13 + 0.008 * sin(ph * 0.6));
+    float string_ = max(abs(u.x - tip.x) - 0.004, max(lc.y - u.y, u.y - tip.y));
+    float lan = sdEll(u - lc, vec2(0.065, 0.085));
+    if (stick < 0.0 || string_ < 0.0){ c = vec4(vec3(0.15, 0.10, 0.08), 1.0); fid = 11.0; }
+    if (lan < 0.0){ float rr = length((u - lc) / vec2(0.065, 0.085)); c = vec4(mix(vec3(1.0, 0.92, 0.66), SHU, smoothstep(0.1, 1.0, rr)) * 1.1, 1.0); fid = 12.0;
+      if (abs(u.y - lc.y) > 0.07) c.rgb = vec3(0.15, 0.10, 0.08); }
   }
   return c;
+}
+// breath in the cold: a little cloud from each mouth now and then, rising and thinning (soft: no key line)
+float breath(vec2 q, float seed, float h, float look){
+  vec2 u = q / h;
+  float cyc = fract(uTime * 0.33 + hash11(seed * 1.7));
+  if (cyc > 0.55) return 0.0;
+  float k = cyc / 0.55;
+  vec2 c = vec2(0.10 * (look != 0.0 ? sign(look) : (hash11(seed) < 0.5 ? -1.0 : 1.0)) * (1.0 + 1.6 * k), 0.90 + 0.18 * k);
+  float r = 0.04 + 0.10 * k;
+  float d = length((u - c) / vec2(1.4, 1.0)) - r * (0.8 + 0.4 * vnoise(u * 18.0 + k * 3.0));
+  return smoothstep(0.02, -0.04, d) * (1.0 - k) * 0.75;
 }
 float treeD(vec2 u, float seed){
   float d = max(abs(u.x - 0.03 * sin(u.y * 5.0 + seed)) - mix(0.035, 0.012, u.y), u.y - 0.62);
@@ -429,17 +553,41 @@ void main(){
   vec3 bn = normalize(vec3(-fw.x, 0.0, -fw.z));
   vec3 br = normalize(cross(vec3(0, 1, 0), bn));
   vec4 bb = vec4(0.0); float bfid = 0.0, bt = 1e9, smokeAcc = 0.0;
-  for (int i = 0; i < 30; i++){
+  float elevV = clamp(-rd.y * 1.6, 0.0, 1.0);
+  float breathAcc = 0.0;
+  for (int i = 0; i < 48; i++){
     vec4 P = uPP[i];
+    if (P.z <= 0.0) continue;
     vec3 c = vec3(P.x, 0.0, P.y);
     float t = dot(c - ro, bn) / dot(rd, bn);
     if (t < 0.0 || t > tBest || t > bt) continue;
     vec3 hp = ro + rd * t - c;
     vec2 q = vec2(dot(hp, -br), hp.y);
-    if (abs(q.x) > 1.2 || q.y < 0.0 || q.y > 2.0) continue;
+    if (abs(q.x) > 1.2 || q.y < -0.05 || q.y > 2.3) continue;
+    // its head turns to the light when the light comes near
+    vec3 toL = uHero.xyz - c;
+    float near = uHero.w * smoothstep(9.0, 3.0, length(toL.xz));
+    float look = clamp(dot(normalize(toL.xz + 1e-4), -br.xz) * 1.6, -1.0, 1.0) * near;
+    // the warm light on it: the lanterns it stands among, its own lantern, the stage once it burns, the light itself
+    vec3 wpos = c + vec3(0.0, 1.1, 0.0);
+    float warm = 0.0; vec2 wdir = vec2(0.0);
+    for (int s2 = 0; s2 < NS; s2++){
+      for (int j = 0; j < LPER; j++){
+        float on = lanOn(s2 * LPER + j); if (on <= 0.0) continue;
+        vec3 lp = strPt(s2, (float(j) + 0.5) / float(LPER)) - vec3(0.0, 0.42, 0.0);
+        float w = on * exp(-length(lp - wpos) / 2.2);
+        warm += w; wdir += w * vec2(dot(lp - wpos, -br), 0.0);
+      }
+    }
+    float ws = uLit * exp(-length((c.xz - STAGE - vec2(0.0, 2.0)) * vec2(0.4, 1.0)) / 9.0);
+    warm += ws * 1.5; wdir += ws * vec2(dot(vec3(STAGE.x, 3.0, STAGE.y) - wpos, -br), 0.0);
+    float wh = uHero.w * exp(-length(uHero.xyz - wpos) / 3.0) * 2.0;
+    warm += wh; wdir += wh * vec2(dot(uHero.xyz - wpos, -br), 0.0);
+    vec2 lit = vec2(clamp(wdir.x * 3.0, -1.0, 1.0), clamp(warm, 0.0, 1.0));
     float f;
-    vec4 pc = person(q, mod(P.w, 100.0), P.z, step(99.5, P.w), f);
+    vec4 pc = person(q, mod(P.w, 100.0), P.z, step(99.5, P.w), elevV, look, lit, f);
     if (pc.a > 0.5){ bb = pc; bt = t; bfid = 1400.0 + float(i) * 16.0 + f; }
+    breathAcc = max(breathAcc, breath(q, mod(P.w, 100.0), P.z, look) * step(t, tBest));
   }
   for (int i = 0; i < 7; i++){
     vec4 Tr = uTR[i];
@@ -479,9 +627,17 @@ void main(){
     col = mix(col, SNOWSH, laneM * 0.8);
     float ruts = smoothstep(0.07, 0.0, abs(dl - 0.55)) * laneM * (1.0 - sq);
     col = mix(col, SNOWDK, ruts * 0.55);
-    vec2 fp = vec2(p.x - cx, p.z) * vec2(3.0, 1.6);
-    vec2 fi = floor(fp); vec2 ff = fract(fp) - 0.5;
-    if (laneM > 0.5 && hash12(fi) < 0.35 && length(ff * vec2(1.0, 1.8)) < 0.22) col = mix(col, SNOWDK, 0.45);
+    // footprints: a few trails down the lane, left, right, left, each print a little oval
+    for (int k = 0; k < 3; k++){
+      float fk = float(k);
+      float tx = cx + (fk - 1.0) * 0.55 + 0.25 * sin(p.z * 0.21 + fk * 2.0);
+      float stepI = floor(p.z / 0.38 + fk * 0.3);
+      float sideF = mod(stepI, 2.0) < 1.0 ? -0.10 : 0.10;
+      vec2 pr = vec2(p.x - tx - sideF, (fract(p.z / 0.38 + fk * 0.3) - 0.5) * 0.38);
+      if (laneM * (1.0 - sq) > 0.5 && hash11(stepI + fk * 31.0) < 0.9 && length(pr / vec2(0.055, 0.11)) < 1.0) col = mix(col, SNOWDK, 0.40);
+    }
+    // the snow's surface: soft drifts the wind has laid, their lee sides a little blue
+    col = mix(col, SNOWSH, 0.20 * smoothstep(0.45, 0.78, fbm3(p.xz * vec2(0.18, 0.30) + 3.0)) * (1.0 - laneM));
     vec3 sro = p + vec3(0.0, 0.02, 0.0);
     float kT = tBest; int kB = best;
     tBest = 40.0; best = -1;
@@ -490,6 +646,13 @@ void main(){
     bool shadow = best >= 0;
     tBest = kT; best = kB;
     if (shadow) col = mix(col, SNOWDK, 0.80);
+    // each person's own small shadow on the snow, a little toward the side away from the sky-light
+    for (int i = 0; i < 48; i++){
+      vec4 P = uPP[i]; if (P.z <= 0.0) continue;
+      vec2 d = p.xz - P.xy - vec2(0.18, -0.10) * P.z * 0.4;
+      float e = length(d / vec2(0.42, 0.30) / (P.z / 1.6));
+      col = mix(col, SNOWDK * 0.95, 0.55 * smoothstep(1.0, 0.45, e));
+    }
     col += pools(p) * (shadow ? 0.7 : 1.0);
     col = mix(col, SKY1 * 1.2, smoothstep(40.0, 120.0, tBest) * 0.5);
     fid = shadow ? 5.0 : 4.0;
@@ -530,7 +693,34 @@ void main(){
       }
       if (face == 1 || face == 2){
         vec2 dq = vec2(u - w * 0.05, v - 0.95);
-        if (abs(dq.x) < 0.48 && abs(dq.y) < 0.95 && hash11(B.w + float(face) * 9.0) < 0.5) col = vec3(0.20, 0.13, 0.11);
+        bool door = hash11(B.w + float(face) * 9.0) < 0.5;
+        if (door && abs(dq.x) < 0.48 && abs(dq.y) < 0.95){ col = vec3(0.20, 0.13, 0.11); if (abs(dq.x) < 0.02) col *= 0.6; }
+        // New Year couplets either side of the door and a banner over it: vermilion paper, black characters
+        if (door){
+          vec2 cq = vec2(abs(dq.x) - 0.64, dq.y - 0.05);
+          bool strip = abs(cq.x) < 0.11 && abs(cq.y) < 0.82;
+          bool top = abs(dq.x) < 0.52 && abs(dq.y - 1.12) < 0.13;
+          if (strip || top){
+            col = mix(vec3(0.78, 0.17, 0.11), vec3(0.60, 0.12, 0.09), vnoise(vec2(u, v) * 9.0) * 0.6);
+            vec2 g = strip ? vec2(cq.x / 0.22 + 0.5, cq.y / 0.27) : vec2(dq.x / 0.26, (dq.y - 1.12) / 0.26 + 0.5);
+            vec2 gf = fract(g) - 0.5; vec2 gi = floor(g);
+            // each character a few brushed strokes
+            float ch = 1e9;
+            for (int k = 0; k < 3; k++){ vec2 a0 = (hash22(gi + float(k) * 7.0 + B.w) - 0.5) * 0.7, a1 = (hash22(gi + float(k) * 13.0 + B.w) - 0.5) * 0.7; ch = min(ch, sdSeg(gf, a0, a1)); }
+            if (ch < 0.06) col = vec3(0.10, 0.07, 0.07);
+          }
+        }
+      }
+      // the foot of the wall a shade darker, its top lighter under the eave (a bokashi on the block)
+      col *= mix(0.84, 1.04, smoothstep(0.0, Hh, v));
+      // the lanterns' warmth on the wall
+      for (int s2 = 0; s2 < NS; s2++){
+        for (int j = 0; j < LPER; j++){
+          float on = lanOn(s2 * LPER + j); if (on <= 0.0) continue;
+          vec3 lp = strPt(s2, (float(j) + 0.5) / float(LPER)) - vec3(0.0, 0.42, 0.0);
+          vec3 dl = lp - p; float dd = length(dl);
+          col += WARM2 * 0.55 * on * exp(-dd / 1.6) * max(dot(n, dl / dd), 0.0);
+        }
       }
       // the light passing close: its warmth on the wall
       col += vec3(1.0, 0.72, 0.40) * uHero.w * 0.55 * exp(-length(p - uHero.xyz) / 1.6) * max(dot(n, normalize(uHero.xyz - p)), 0.0);
@@ -544,6 +734,7 @@ void main(){
         float edge = W - abs(L.x);
         float ridges = smoothstep(0.42, 0.5, abs(fract(L.z / 0.32) - 0.5)) * 0.10;
         col *= 1.0 - ridges * smoothstep(0.0, 1.2, edge);
+        col = mix(col * vec3(0.92, 0.95, 1.02), col * 1.03, smoothstep(0.0, R + 0.5, L.y - Hh + 0.5));
         float lip = 0.26 + 0.10 * vnoise(vec2(L.z * 5.0, float(hi)));
         float droop = 0.13 + 0.07 * vnoise(vec2(L.z * 11.0, float(hi) + 4.0));
         if (edge < lip) col = TILE;
@@ -601,12 +792,29 @@ void main(){
       }
       else if (part == 5){ col = SHU; if (L.y < 5.02 + 0.06 * abs(sin(L.x * 6.0))) col = vec3(0.86, 0.66, 0.25); }
       else if (part == 8){ col = SHU * 0.85; if (bestN.y > 0.5) col = SNOW; }
+      else if (part == 9){
+        // the plaque: black lacquer, a gold rim, three gold characters
+        col = vec3(0.07, 0.06, 0.06);
+        vec2 pq = L.xy - vec2(0.0, 5.82);
+        if (abs(pq.x) > 1.40 || abs(pq.y) > 0.24) col = vec3(0.80, 0.62, 0.24);
+        vec2 g = vec2(pq.x / 0.62 + 1.5, pq.y / 0.40 + 0.5); vec2 gi = floor(g), gf = fract(g) - 0.5;
+        float ch = 1e9;
+        for (int k = 0; k < 4; k++){ vec2 a0 = (hash22(gi + float(k) * 7.0) - 0.5) * 0.7, a1 = (hash22(gi + float(k) * 13.0) - 0.5) * 0.7; ch = min(ch, sdSeg(gf, a0, a1)); }
+        if (ch < 0.055 && abs(pq.x) < 1.3 && abs(pq.y) < 0.2) col = vec3(0.92, 0.74, 0.30);
+      }
+      else if (part == 10){
+        // long red banners hanging down the front pillars, gold-edged, swaying a little
+        col = vec3(0.74, 0.15, 0.10);
+        if (abs(abs(L.x) - 4.42) > 0.17) col = vec3(0.85, 0.66, 0.26);
+        if (L.y < 1.6 + 0.08 * sin(L.x * 30.0)) col = vec3(0.85, 0.66, 0.26);
+      }
       if (part != 4) col += WARM2 * 0.35 * uLit * exp(-length(L - vec3(0.0, 3.0, 2.0)) / 3.0);
     }
     fid = float(best);
   }
   if (bt < tBest){ col = bb.rgb; fid = bfid; col = mix(col, SKY1 * 1.15, smoothstep(30.0, 130.0, bt) * 0.55); tBest = bt; }
   col = mix(col, vec3(0.56, 0.61, 0.73), smokeAcc * 0.45);
+  col = mix(col, vec3(0.88, 0.90, 0.95), breathAcc * 0.55);
   {
     float best2 = 1e9;
     for (int s = 0; s < NS; s++){
@@ -623,6 +831,24 @@ void main(){
       }
     }
     if (best2 < 0.9) col = mix(col, TIMB, 0.85);
+  }
+  // the snowy air glows round each lit lantern (a soft bokashi of warmth), hidden by what stands in front of it
+  {
+    vec3 glow = vec3(0.0);
+    for (int s2 = 0; s2 < NS; s2++){
+      for (int j = 0; j < LPER; j++){
+        float on = lanOn(s2 * LPER + j); if (on <= 0.0) continue;
+        vec3 lp = strPt(s2, (float(j) + 0.5) / float(LPER)) - vec3(0.0, 0.42, 0.0);
+        float tl = dot(lp - ro, rd);
+        if (tl < 0.3 || tl > tBest + 0.3) continue;
+        float dd = length(ro + rd * tl - lp);
+        glow += vec3(1.0, 0.62, 0.30) * on * (exp(-dd * dd / 0.35) * 0.55 + exp(-dd / 0.9) * 0.10);
+      }
+    }
+    vec3 sc = vec3(${SCR.c[0]}, ${SCR.c[1]}, ${SCR.c[2]});
+    float ts = dot(sc - ro, rd);
+    if (ts > 0.3){ float ds = length((ro + rd * ts - sc) * vec3(0.55, 0.9, 1.0)); glow += vec3(1.0, 0.75, 0.45) * uLit * exp(-ds / 2.6) * 0.30; }
+    col += glow * uGlowK;
   }
   o = vec4(col, fid);
   oD = vec4(tBest * dot(rd, fw), 0.0, 0.0, 1.0);          // depth along the view axis
@@ -644,9 +870,11 @@ void main(){
   vec4 s0 = texture(uA, uv);
   float id = s0.a;
   float key = 0.0;
+  float dep = texture(uD, uv).r;
+  float lw = mix(2.1, 1.1, smoothstep(5.0, 28.0, dep)) * uRes.y / 720.0;          // the cutter's line: heavier near, finer far
   for (int i = 0; i < 8; i++){
     float a = float(i) * PI * 0.25;
-    vec2 o2 = vec2(cos(a), sin(a)) * 1.2;
+    vec2 o2 = vec2(cos(a), sin(a)) * lw;
     float id2 = texture(uA, uv + o2 / uRes).a;
     if (abs(id2 - id) > 0.5 && max(id, id2) > 5.5) key += 0.25;
   }
@@ -801,15 +1029,24 @@ W.village = {
   },
   update(dt) {
     this.t += dt;
+    // (looking at it on its own: ?world=village&vcam=px,py,pz,tx,ty,tz,fov&vlit=1&vhero=x,y,z&vstage=1)
+    const Q = YL.QS;
+    if (Q.get('world') === 'village') {
+      if (Q.get('vcam')) { const v = Q.get('vcam').split(',').map(Number); this.cam = { pos: v.slice(0, 3), tgt: v.slice(3, 6), vfov: v[6] || 30 }; }
+      if (Q.get('vlit')) for (let i = 0; i < NL; i++) if (this.lanT[i] < 0) this.lanT[i] = 0;
+      if (Q.get('vhero')) { this.hero.p = Q.get('vhero').split(',').map(Number); this.hero.b = 1; }
+      if (Q.get('vstage')) this.lit = 1;
+    }
     for (let i = 0; i < NL; i++) this.lanOn[i] = this.lanT[i] < 0 ? 0 : smooth(0, 0.45, this.t - this.lanT[i]);
     // walkers come up the lane toward the stage, and stop at the back of the crowd
-    this.pp = this.pp || new Float32Array(30 * 4);
+    this.pp = this.pp || new Float32Array(48 * 4);
     PEOPLE.forEach((P, i) => {
       let x, z, w = 0;
       if (!P.walk) { x = P.x; z = P.z; }
       else {
-        z = Math.max(P.z0 - P.v * this.t, -46 - (i - 18) * 0.9);
-        w = z > -46 - (i - 18) * 0.9 + 0.05 ? 1 : 0;
+        const stop = STAGE[1] + 6.2 + 4 * 1.7 + (i - 32) * 0.55;
+        z = Math.max(P.z0 - P.v * this.t, stop);
+        w = z > stop + 0.05 ? 1 : 0;
         x = laneAt(z) + P.x0;
       }
       this.pp.set([x, z, P.h, P.seed + w * 100], i * 4);
@@ -836,9 +1073,9 @@ W.village = {
       this.uni = { a: new Float32Array(a), b: new Float32Array(b), sa: new Float32Array(sa), sb: new Float32Array(sb), tr: new Float32Array(tr) };
     }
     U(this.pG, 'uHA', this.uni.a); U(this.pG, 'uHB', this.uni.b); U(this.pG, 'uSA', this.uni.sa); U(this.pG, 'uSB', this.uni.sb); U(this.pG, 'uTR', this.uni.tr);
-    U(this.pG, 'uPP', this.pp || new Float32Array(120)); U(this.pG, 'uLanOn', this.lanOn);
+    U(this.pG, 'uPP', this.pp || new Float32Array(192)); U(this.pG, 'uLanOn', this.lanOn);
     U(this.pG, 'uHero', [...this.hero.p, this.hero.b]);
-    U(this.pG, 'uScreenOn', this.screenTex ? 1 : 0);
+    U(this.pG, 'uScreenOn', this.screenTex ? 1 : 0); U(this.pG, 'uGlowK', this.pure);
     YL.bindTex(this.pG, 'uScreen', this.screenTex || this.black, 0);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2) the printing

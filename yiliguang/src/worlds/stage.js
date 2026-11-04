@@ -162,8 +162,8 @@ W.stage = {
       out.push([x, y, s, mpp * flip, ang, ox + px * 0.512, oy + py * 0.512, dens, ...rectOf(name)]);
     };
     // far mountains, soft
-    put('mountains', -0.62, -0.06, 0.28, 0.0017, 0, 1000, 560, 1, 0.40);
-    put('mountains', 1.05, -0.08, 0.26, 0.0017, 0, 1000, 560, -1, 0.38);
+    put('mountains', -0.62, -0.10, 0.36, 0.0017, 0, 1000, 560, 1, 0.26);
+    put('mountains', 1.05, -0.12, 0.34, 0.0017, 0, 1000, 560, -1, 0.24);
     // clouds drifting across the top
     put('clouds', -0.75 + 0.02 * t, 0.66, 0.03, 0.00095, 0, 1000, 500, 1, 0.9);
     put('clouds', 1.05 + 0.015 * t, 0.70, 0.04, 0.00095, 0, 1000, 500, -1, 0.9);
@@ -183,6 +183,25 @@ W.stage = {
     put('dhead', joints[0][0], joints[0][1], 0.012, mpp, ang(joints[0], hp) + 0.18, 230, 530);
     for (let i = 0; i < 8; i++) put('dbody', joints[i][0], joints[i][1], 0.012, mpp, ang(joints[i], joints[i + 1]) + Math.PI, 900, 530);
     put('dtail', joints[8][0], joints[8][1], 0.012, mpp, ang(joints[8], joints[9]), 100, 530);
+    // a horseman at the gallop along the far bank and over the bridge: the legs swing on their rivets, the body rocks,
+    // the rider rises and falls
+    {
+      const hx = -2.2 + 0.36 * Math.max(0, t - 1.0);
+      if (hx > -2.3 && hx < 2.3) {
+        const mppH = 0.00105, g = t * 9.0, rock = 0.05 * Math.sin(g), bob = 10 * Math.sin(2 * g + 0.5);
+        const bridge = 0.11 * Math.max(0, 1 - Math.pow((hx - 0.95) / 0.42, 2));
+        const yg = -0.50 + bridge;
+        const sg = 0.512 * mppH, oy = 300, ox = 500, rootY = yg + sg * (316 + bob);
+        const f = (name, x, y, px, py, turn = 0, kk = 1) => {
+          const dx = (x - ox) * sg, dy = -(y - oy) * sg, c = Math.cos(rock), s_ = Math.sin(rock);
+          put(name, hx + c * dx - s_ * dy, rootY + s_ * dx + c * dy, 0.02, mppH * kk, turn + rock, px, py, 1, 1);
+        };
+        f('hleg', 330, 380, 500, 100, 0.45 * Math.sin(g + 2.4)); f('fleg', 700, 390, 500, 120, 0.55 * Math.sin(g - 0.6));
+        f('horse', 500, 300, 500, 300);
+        f('hleg', 334, 380, 500, 100, 0.45 * Math.sin(g + 1.6)); f('fleg', 696, 390, 500, 120, 0.55 * Math.sin(g + 0.4));
+        f('rider', 520, 282 - 4 * Math.sin(2 * g + 1.5), 500, 620, -0.5 * rock - 0.04 * Math.sin(g), 1.45);
+      }
+    }
     // two cranes crossing high up, right to left, their wings beating
     for (let k = 0; k < 2; k++) {
       const x = 2.1 - 0.30 * (t - 1.5 - k * 1.1), y = 0.52 + 0.05 * k + 0.02 * Math.sin(t * 0.9 + k);

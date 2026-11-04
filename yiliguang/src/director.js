@@ -316,8 +316,8 @@ const D = YL.director = {
       const look = smooth(6.0, 7.5, tw) * (1 - smooth(9.2, 10.6, tw));
       sea.whaleB = [1 - 0.95 * Math.exp(-Math.pow((tw - 8.1) / 0.12, 2)), 0, look, 0];
       const eyeW = [wx + eyeOff, wy - 0.024 * L];
-      const mid = [eyeW[0] + (P.x - eyeW[0]) * 0.35, eyeW[1] + (P.y - eyeW[1]) * 0.35];
-      sea.zoom = 1 / lerp(1, 1 / 0.075, look * look * (3 - 2 * look));
+      const mid = [eyeW[0] + (P.x - eyeW[0]) * 0.45, eyeW[1] + (P.y - eyeW[1]) * 0.45 - 0.012];
+      sea.zoom = 1 / lerp(1, 1 / 0.17, look * look * (3 - 2 * look));
       cam = [lerp(cam[0], mid[0], look), lerp(cam[1], mid[1], look)];
       sea.cam = cam;
       // ---- the squid: up out of the deep, startled; it jets off and leaves its ink, which blooms over everything

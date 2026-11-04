@@ -54,6 +54,12 @@ float spread(vec2 p, vec2 seed, float r, float seedN){
 }
 // a mountain's outline: peaks with rounded tops (height h at x = c, flanks falling at slope k)
 float peak(float x, float c, float h, float k){ float d = abs(x - c); return h - k * d * d / (d + 0.03); }
+// the skyline's crags: ridged noise, so a range reads as rock — shoulders, notches, a second summit — not as cones
+float crag(float x, float seed){
+  float r = 0.0, a = 0.5, f = 6.0;
+  for (int i = 0; i < 4; i++){ r += a * (1.0 - abs(2.0 * vnoise(vec2(x * f + seed, seed)) - 1.0)); f *= 2.15; a *= 0.5; }
+  return r;
+}
 // dry brush (飞白): streaks where the hairs of a nearly dry brush skipped the paper, running along dir
 float dry(vec2 p, vec2 dir, float amt){
   vec2 q = vec2(dot(p, dir), dot(p, vec2(-dir.y, dir.x)));
@@ -71,7 +77,13 @@ float ink(vec2 p, out float tone){
   float t = uTime, D = 0.0;
   // ---- the far peaks: pale, slender, rising out of the mist
   {
-    float x = p.x, n = 0.012 * (fbm(vec2(x * 9.0, 1.0)) - 0.5);
+    float x = p.x, n = 0.012 * (fbm(vec2(x * 9.0, 1.0)) - 0.5) + 0.045 * (crag(x, 2.0) - 0.55);
+    // (a paler range still further back, seen between them)
+    {
+      float rb = 0.72 + 0.10 * sin(x * 2.3 + 1.0) + 0.07 * sin(x * 5.1) + 0.05 * (crag(x * 0.7, 9.0) - 0.5);
+      float db = wash(p, rb - p.y, 2.0, 21.0) * smoothstep(0.50, 0.72, p.y) * 0.07;
+      D = max(D, db * max(spread(p, vec2(0.62, 0.80), uGrow.x * 1.3, 1.0) * step(x, 1.6), painted(p, when(p, 1))));
+    }
     float r = max(max(peak(x, 0.62, 0.92, 2.6), peak(x, 0.76, 0.80, 3.0)), max(peak(x, 0.47, 0.71, 3.2), max(peak(x, 0.93, 0.68, 2.8), peak(x, 1.10, 0.60, 2.4))));
     r = max(r, max(max(peak(x, 2.05, 0.80, 2.2), peak(x, 2.35, 0.97, 2.6)), max(peak(x, 2.95, 0.84, 2.4), peak(x, 3.30, 0.70, 2.8))));
     r = max(r, max(max(peak(x, 3.75, 0.76, 2.4), peak(x, 4.20, 0.66, 2.6)), max(peak(x, 4.80, 0.62, 2.2), peak(x, 5.30, 0.56, 2.6))));
@@ -86,7 +98,7 @@ float ink(vec2 p, out float tone){
   // ---- the middle range on the right: a long ridge, hemp-fibre strokes down its slopes, moss dots along its top
   {
     float x = p.x;
-    float r = max(peak(x, 1.25, 0.63, 1.2), max(peak(x, 1.52, 0.55, 1.5), peak(x, 1.05, 0.47, 2.0))) + 0.015 * (fbm(vec2(x * 7.0, 3.0)) - 0.5);
+    float r = max(peak(x, 1.25, 0.63, 1.2), max(peak(x, 1.52, 0.55, 1.5), peak(x, 1.05, 0.47, 2.0))) + 0.015 * (fbm(vec2(x * 7.0, 3.0)) - 0.5) + 0.035 * (crag(x, 5.0) - 0.55);
     float sd = r - p.y;
     float base = smoothstep(0.33, 0.50, p.y);
     float d = wash(p, sd, 1.2, 7.0) * base * 0.32;
@@ -100,7 +112,7 @@ float ink(vec2 p, out float tone){
     d = max(d, dot_ * 0.75 * base);
     D = max(D, d * spread(p, vec2(1.30, 0.58), uGrow.y * 1.2, 7.0));
     // and the hills behind the village, further on
-    float r2 = max(peak(x, 4.05, 0.50, 1.6), max(peak(x, 4.45, 0.46, 1.8), peak(x, 3.55, 0.44, 2.2))) + 0.015 * (fbm(vec2(x * 7.0, 5.0)) - 0.5);
+    float r2 = max(peak(x, 4.05, 0.50, 1.6), max(peak(x, 4.45, 0.46, 1.8), peak(x, 3.55, 0.44, 2.2))) + 0.015 * (fbm(vec2(x * 7.0, 5.0)) - 0.5) + 0.03 * (crag(x, 8.0) - 0.55);
     float d2 = wash(p, r2 - p.y, 1.2, 9.0) * smoothstep(0.30, 0.45, p.y) * 0.24;
     D = max(D, d2 * painted(p, when(p, 1)));
   }
