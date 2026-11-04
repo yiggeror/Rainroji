@@ -569,7 +569,7 @@ const D = YL.director = {
       ink.grow = [G(0.35, 0.85, u), G(0.55, 1.0, u), 0, 0];
       ink.vol = smooth(0.1, 0.8, u); sea.vol = 1 - smooth(0.0, 0.3, u);
       // out of the settling ink the light sets off as the brush, and paints the scroll as it goes
-      if (D.pt > 1.2 && !ink.painting && ink.now === 0) ink.startPaint();
+      if (D.pt > 1.2 && !ink.painting && ink.now <= 0) ink.startPaint();
       if (D.pt > T_BLOOM) { D.go('ink'); D.world = 'ink'; ink.bloom = 0; sea.vol = 0; }
     } else if (D.phase === 'ink') {
       const t = D.pt;
