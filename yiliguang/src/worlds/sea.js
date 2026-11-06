@@ -62,6 +62,8 @@ const vec3 PAPER = vec3(0.965, 0.952, 0.915);
 `;
 const FS = HEAD + `
 uniform vec2 uCam; uniform float uZoom;
+uniform sampler2D uSeaImg; uniform float uSeaImgK;   // the water painted (generated): from just under the surface down into the deep
+uniform sampler2D uEyeImg; uniform float uEyeImgK;   // the skin round the whale's eye and the eye, painted close (generated)
 uniform vec2 uPearl; uniform float uPearlB;
 uniform vec4 uWhale;          // whale: centre xy, length, heading
 uniform vec4 uWhaleB;         // its eye's lid (1 open), its flipper's beat phase, how close the eye is looked at, -
@@ -416,6 +418,25 @@ void bigEye(vec2 p, vec2 c, float r, float lid, vec2 pearl, inout vec3 K){
     K = mix(K, eK, smoothstep(0.03, -0.03, almond));
   }
 }
+// ---- the whale's eye, painted close (generated): once the eye is close the drawn eye gives way to it. The painted eye is
+// larger than the drawn one: the drawn one grows a little as the eye comes close, and the middle of the picture is drawn
+// in a little closer (the folds round it ease out to their own size over a wide ring, so nothing smears), and the two
+// eyes are one. It blinks by pulling the lids' skin, above and below, together over the eye.
+void eyePainted(vec2 p, vec2 c, float k, inout vec3 K){
+  vec2 q = rot(-uWhale.w) * (p - c) / (uWhale.z / 1.6);
+  q *= mix(1.45, 1.0, smoothstep(0.02, 0.20, length(q)));          // (the drawn eye grows the rest of the way: see main)
+  vec2 e = q * (1536.0 / 0.36);                       // (the picture's pixels: it is 0.36 across, its eye at 910, 510)
+  float cl = 1.0 - uWhaleB.x;
+  float ay = abs(e.y), ax = sqrt(max(1.0 - e.x * e.x / (97.0 * 97.0), 0.0));
+  ay += cl * 27.0 * ax * 1.05 * exp(-max(ay - 27.0, 0.0) / 40.0);
+  e.y = e.y >= 0.0 ? ay : -ay;
+  vec2 uv = vec2((910.0 + e.x) / 1536.0, (514.0 + e.y) / 1024.0);
+  float m = smoothstep(0.0, 0.08, uv.x) * smoothstep(1.0, 0.92, uv.x) * smoothstep(0.0, 0.1, uv.y) * smoothstep(1.0, 0.9, uv.y);
+  vec3 Ki = -log(clamp(texture(uEyeImg, uv).rgb / PAPER, 0.02, 1.0));
+  vec2 pd = normalize(uPearl - c + 1e-5) * 26.0 - vec2(20.0, -2.0);   // (and in it, small and warm, the pearl)
+  Ki = mix(Ki, GAMB * 0.25, 0.8 * exp(-dot(e - pd, e - pd) / 81.0) * (1.0 - cl));
+  K = mix(K, Ki, k * m);
+}
 void main(){
   vec2 px = gl_FragCoord.xy;
   vec2 s = (px - 0.5 * uRes) / uRes.y;
@@ -444,6 +465,15 @@ void main(){
   K *= 1.0 - 0.16 * bl.x; K += ULTR * bl.y * 0.22;
   vec2 bl2 = bloom(w, vec2(0.62, -1.62), 0.055, 7.0);
   K *= 1.0 - 0.14 * bl2.x; K += ULTR * bl2.y * 0.18;
+  // the painted water, laid over the procedural wash (both in pigment: what the paint takes out of the paper's white).
+  // It hangs in the water's own (slower) frame; past its sides it repeats mirrored; the wash breathes a little, still wet
+  if (uSeaImgK > 0.0){
+    vec2 su = vec2((w.x + 0.925) / 1.85, (w.y + 5.1) / 5.55);
+    su += 0.0035 * vec2(fbm3(w * 2.0 + vec2(uTime * 0.04, 0.0)) - 0.5, fbm3(w * 2.0 + vec2(5.0, -uTime * 0.03)) - 0.5);
+    su.x = 1.0 - abs(1.0 - mod(su.x, 2.0)); su.y = clamp(su.y, 0.001, 0.999);
+    vec3 Ki = -log(clamp(texture(uSeaImg, su).rgb / PAPER, 0.02, 1.0));
+    K = mix(K, Ki, 0.85 * uSeaImgK);
+  }
   // shafts of light from the surface, lifted out
   vec2 sun = vec2(-0.55, 1.35);
   vec2 rd = p - sun;
@@ -451,7 +481,7 @@ void main(){
   float shafts = smoothstep(0.55, 0.95, vnoise(vec2(ang * 22.0 + uTime * 0.05, 0.5)));
   shafts += 0.6 * smoothstep(0.5, 0.9, vnoise(vec2(ang * 47.0 - uTime * 0.07, 3.5)));
   shafts *= (exp(-max(depth - 0.1, 0.0) * 1.0) * 0.8 + 0.2 * exp(-max(depth - 0.1, 0.0) * 0.35)) * (0.75 + 0.5 * vnoise(vec2(ang * 30.0, length(rd) * 3.0)));
-  K *= 1.0 - 0.5 * clamp(shafts, 0.0, 1.2);
+  K *= 1.0 - 0.5 * (1.0 - 0.45 * uSeaImgK) * clamp(shafts, 0.0, 1.2);      // (the painting has its own, still)
   // near the surface the light comes through in a net of caustic lines
   float caus = 1.0 - abs(vnoise(p * vec2(9.0, 14.0) + vec2(uTime * 0.3, 0.0)) * 2.0 - 1.0);
   K *= 1.0 - 0.35 * smoothstep(0.82, 0.97, caus) * exp(-max(depth, 0.0) / 0.25);
@@ -516,7 +546,8 @@ void main(){
     // its eye (in the whale's frame)
     vec2 eyeL = (vec2(0.245, -0.024) - vec2(0.5, 0.0)) * uWhale.z;
     vec2 eyeW = uWhale.xy + rot(uWhale.w) * eyeL;
-    bigEye(p, eyeW, 0.0060 * uWhale.z, uWhaleB.x, uPearl, K);
+    bigEye(p, eyeW, 0.0060 * uWhale.z * (1.0 + 0.19 * uEyeImgK * smoothstep(0.0, 0.85, uWhaleB.z)), uWhaleB.x, uPearl, K);
+    if (uEyeImgK > 0.0 && uWhaleB.z > 0.7) eyePainted(p, eyeW, uEyeImgK * smoothstep(0.75, 0.95, uWhaleB.z), K);
   }
   // ===== near kelp, wet-on-dry (near the surface)
   vec2 pn = s * uZoom + uCam * vec2(1.15, 1.25);
@@ -630,6 +661,8 @@ W.sea = {
     U(p, 'uSquid', this.squid); U(p, 'uSquidB', this.squidB);
     U(p, 'uInk', this.ink);
     { const wc = YL.paperTex('paper_watercolor'); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, wc || null); gl.uniform1i(this.p.u.uWC, 7); }
+    { const si = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_water'); gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, si || null); gl.uniform1i(this.p.u.uSeaImg, 8); U(this.p, 'uSeaImgK', si ? 1 : 0); }
+    { const ei = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_eye'); gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, ei || null); gl.uniform1i(this.p.u.uEyeImg, 9); U(this.p, 'uEyeImgK', ei ? 1 : 0); }
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   toNdc(q, aspect) { return [(q[0] - this.cam[0]) / this.zoom / (aspect * 0.5), (q[1] - this.cam[1]) / this.zoom / 0.5]; },

@@ -36,6 +36,9 @@ uniform vec3 uGeese;         // a skein of geese crossing the sky: where its lea
 const float SL = 5.6;
 uniform sampler2D uSeal;
 uniform sampler2D uXuan;           // a scan of xuan paper (it moves with the scroll)
+uniform sampler2D uScA, uScB;      // the painted handscroll, in two halves: how much ink lies at each place (0 bare paper)
+uniform float uScK;                // 1: show the painted scroll (0: the brush's own painting, from inkscroll.js)
+uniform vec4 uScSw[3];             // where things on it sway in the wind (bamboo, the willow, the reeds): x0, x1, foot, top
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -91,6 +94,62 @@ vec4 nearAt(vec2 p, float sway){
   float Wd = 1.0 - (1.0 - sat(wv.r)) * (1.0 - sat(wv.g));
   return vec4(S, Wd, w0.b * rw.r, tw.b);
 }
+// ---- the painted scroll. It was painted over this scroll's own layout, so everything that moves on it (the traveller,
+// the skiff, the smoke, the egrets, the falling water) still stands where it should. The two halves meet down the white
+// of the waterfall; the right one ends in open water and mist.
+const float SC_SEAM = 2.50, SC_B0 = 2.45, SC_END = 5.45;
+float scAt(vec2 p, float lod){
+  float wa = smoothstep(SC_SEAM + 0.008, SC_SEAM - 0.008, p.x);
+  vec2 ua = vec2(p.x / 3.0, p.y), ub = vec2((p.x - SC_B0) / 3.0, p.y);
+  float a = lod < 0.0 ? texture(uScA, ua).r : textureLod(uScA, ua, lod).r;
+  float b = lod < 0.0 ? texture(uScB, ub).r : textureLod(uScB, ub, lod).r;
+  return mix(b, a, wa) * smoothstep(SC_END, SC_END - 0.09, p.x) * step(0.0, p.x) * step(0.0, p.y) * step(p.y, 1.0);
+}
+// where the open water is (under it what stands at its edge hangs upside down, and the ripples break it up)
+float scWater(float x){ return x < 0.55 ? -1.0 : x < 2.28 ? 0.292 : x < 2.98 ? 0.145 : x < 3.42 ? 0.10 : 0.198; }
+float scrollInk(vec2 p){
+  float t = uTime;
+  vec2 q = p;
+  // the bamboo, the willow's long strands and the reeds move in the wind; the far hills behind them don't (only the ink of
+  // the strokes themselves is moved: pale washes stay put)
+  float gate = smoothstep(0.16, 0.38, scAt(p, 2.0));
+  for (int i = 0; i < 3; i++){
+    vec4 b = uScSw[i];
+    float inb = smoothstep(b.x - 0.02, b.x + 0.02, p.x) * smoothstep(b.y + 0.02, b.y - 0.02, p.x) * smoothstep(b.w + 0.02, b.w - 0.04, p.y);
+    if (inb <= 0.0) continue;
+    float h = sat((p.y - b.z) / (b.w - b.z));
+    float k = i == 1 ? smoothstep(0.0, 0.3, h) * (1.15 - 0.75 * h) : h * h;         // (the willow hangs: its tips move most)
+    float gust = 0.55 + 0.7 * smoothstep(0.3, 0.8, vnoise(vec2(t * 0.35 + float(i) * 3.0, p.x * 2.0)));
+    q.x += gate * inb * k * gust * (0.0045 * sin(t * 1.3 + p.x * 9.0 + p.y * 4.0 + float(i) * 2.0) + 0.0011 * sin(t * 3.7 + p.y * 60.0 + p.x * 30.0));
+  }
+  if (p.y < scWater(p.x)){
+    float wob = 1.0 - smoothstep(0.22, 0.5, scAt(p, 1.5));
+    q.x += wob * (0.0025 * sin(p.y * 240.0 + t * 1.7) + 0.0015 * sin(p.y * 77.0 - t * 1.1));
+  }
+  float dS = scAt(q, -1.0), dB = scAt(q, 2.2);
+  // the painting reaches here from where the light passed, spreading out with a wet, uneven front
+  float age = uNow - whenF(p) - 0.010 * (fbm3(p * 24.0) - 0.5) - 0.005 * (vnoise(p * 140.0) - 0.5);
+  float wet = smoothstep(0.0, 0.012, age);
+  // the pale washes go down first, then darker ink over them, the darkest accents last; fresh ink is soft, bleeding into
+  // the paper, then settles
+  float cap = pow(smoothstep(0.0, 0.11, age), 0.8);
+  float settle = smoothstep(0.0, 0.07, age);
+  float d = mix(max(dB, dS * 0.7), dS, settle);
+  float sh = min(d, 0.04 + cap) * wet;
+  sh += 0.10 * exp(-max(age, 0.0) / 0.012) * wet * smoothstep(0.03, 0.15, dB);     // (a darker tide-line at the wet front)
+  // before the light comes, the far peaks and the far shore breathe out of the black, pale
+  float g = max(spread(p, vec2(0.62, 0.80), uGrow.x * 1.1, 1.0) * smoothstep(1.9, 1.3, p.x) * smoothstep(0.42, 0.66, p.y),
+                spread(p, vec2(1.0, 0.30), uGrow.y * 1.6, 11.0) * exp(-pow((p.y - 0.30) / 0.03, 2.0)) * smoothstep(0.5, 0.8, p.x));
+  return max(sh, min(dS, 0.20) * g);
+}
+// mist flowing across the middle distance: bands over the far hills and the mountain, never over what is near
+float mistAt(vec2 p){
+  float t = uTime;
+  float m1 = smoothstep(0.35, 0.7, fbm(vec2(p.x * 2.2 - t * 0.018, p.y * 7.0 + 1.0))) * exp(-pow((p.y - 0.47) / 0.07, 2.0)) * smoothstep(0.8, 1.1, p.x) * smoothstep(2.95, 2.75, p.x);
+  float m2 = smoothstep(0.45, 0.75, fbm(vec2(p.x * 1.6 - t * 0.011 + 4.0, p.y * 5.0))) * exp(-pow((p.y - 0.70) / 0.08, 2.0)) * smoothstep(0.72, 0.95, p.x) * smoothstep(2.95, 2.75, p.x);
+  float m3 = smoothstep(0.4, 0.75, fbm(vec2(p.x * 2.0 - t * 0.02 + 9.0, p.y * 6.0))) * exp(-pow((p.y - 0.355) / 0.045, 2.0)) * smoothstep(0.9, 1.2, p.x) * smoothstep(2.3, 2.0, p.x);
+  return max(max(m1, m2 * 0.8), m3);
+}
 // ---- the skiff on the water: a dark sliver of a hull, a fisherman in a broad hat, a pole
 float boatD(vec2 p){
   float t = uTime;
@@ -107,6 +166,20 @@ float boatD(vec2 p){
 float ink(vec2 p, out float tone){
   tone = 0.0;
   float t = uTime, D = 0.0;
+  if (uScK > 0.5){
+    // ---- the painted scroll, with mist flowing over the mountain and along the far hills behind the village
+    D = scrollInk(p);
+    float m4 = smoothstep(0.42, 0.75, fbm(vec2(p.x * 1.8 - t * 0.016 + 2.0, p.y * 6.0))) * exp(-pow((p.y - 0.47) / 0.06, 2.0)) * smoothstep(3.5, 3.8, p.x) * smoothstep(5.5, 5.2, p.x);
+    float m5 = smoothstep(0.45, 0.8, fbm(vec2(p.x * 2.6 - t * 0.024 + 6.0, p.y * 9.0))) * exp(-pow((p.y - 0.215) / 0.025, 2.0)) * smoothstep(3.95, 4.2, p.x) * smoothstep(5.4, 5.1, p.x);
+    float mk = max(max(mistAt(p), m4 * 0.85), m5 * 0.6);
+    D *= 1.0 - 0.8 * mk * (1.0 - smoothstep(0.45, 0.85, D));
+    // the skiff, and its reflection broken by the ripples
+    D = max(D, boatD(p));
+    if (p.y < 0.205){
+      vec2 q = vec2(p.x + 0.0025 * sin(p.y * 240.0 + t * 1.7), 0.41 - p.y);
+      D = 1.0 - (1.0 - D) * (1.0 - 0.30 * boatD(q) * exp(-(0.205 - p.y) / 0.05));
+    }
+  } else {
   // ---- the far peaks: pale, slender, rising out of the mist (between and behind what the brush paints)
   {
     float x = p.x, n = 0.012 * (fbm(vec2(x * 9.0, 1.0)) - 0.5) + 0.045 * (crag(x, 2.0) - 0.55);
@@ -143,11 +216,7 @@ float ink(vec2 p, out float tone){
   // ---- the brush's painting over it all: what is solid hides the far washes behind it; ink laid over ink darkens
   float sw = 0.0019 / SL * sin(uTime * 1.4 + p.x * 40.0 + p.y * 12.0) * smoothstep(0.12, 0.45, p.y) * (0.6 + 0.6 * vnoise(vec2(uTime * 0.35, p.x * 3.0)));
   vec4 N = nearAt(p, sw);
-  // mist: bands flowing across the middle distance — over the far hills and the mountain, never over what is near
-  float m1 = smoothstep(0.35, 0.7, fbm(vec2(p.x * 2.2 - t * 0.018, p.y * 7.0 + 1.0))) * exp(-pow((p.y - 0.47) / 0.07, 2.0)) * smoothstep(0.8, 1.1, p.x) * smoothstep(2.95, 2.75, p.x);
-  float m2 = smoothstep(0.45, 0.75, fbm(vec2(p.x * 1.6 - t * 0.011 + 4.0, p.y * 5.0))) * exp(-pow((p.y - 0.70) / 0.08, 2.0)) * smoothstep(0.72, 0.95, p.x) * smoothstep(2.95, 2.75, p.x);
-  float m3 = smoothstep(0.4, 0.75, fbm(vec2(p.x * 2.0 - t * 0.02 + 9.0, p.y * 6.0))) * exp(-pow((p.y - 0.355) / 0.045, 2.0)) * smoothstep(0.9, 1.2, p.x) * smoothstep(2.3, 2.0, p.x);
-  float mk = max(max(m1, m2 * 0.8), m3);
+  float mk = mistAt(p);
   D *= (1.0 - N.z) * (1.0 - 0.9 * mk);
   float nd = 1.0 - (1.0 - N.x) * (1.0 - N.y);
   nd *= 1.0 - 0.85 * mk * (1.0 - smoothstep(0.6, 0.95, N.z));
@@ -164,6 +233,7 @@ float ink(vec2 p, out float tone){
     float brk = 0.5 + 0.5 * smoothstep(0.25, 0.65, vnoise(vec2(p.x * 30.0 - uTime * 0.25, p.y * 380.0)));
     D = 1.0 - (1.0 - D) * (1.0 - sat(rd * 0.34 * exp(-dy / 0.10) * brk * (1.0 - N.z)));
   }
+  }
   // ---- the waterfall: the white of the paper between the dark lips of the rock, streaming; spray where it lands
   {
     float xf = p.x - 2.490, up = step(0.555, p.y), lo = step(0.17, p.y) * step(p.y, 0.50);
@@ -171,11 +241,12 @@ float ink(vec2 p, out float tone){
     if ((up + lo) > 0.0 && abs(xf) < hw){
       float st = vnoise(vec2(xf * 260.0, p.y * 7.0 + t * 2.6)) * 0.7 + vnoise(vec2(xf * 600.0, p.y * 16.0 + t * 4.0)) * 0.3;
       float streak = smoothstep(0.62, 0.9, st) * 0.20 + smoothstep(hw * 0.55, hw, abs(xf)) * 0.14;
+      if (uScK > 0.5) streak *= 0.8 * (1.0 - smoothstep(0.10, 0.30, scAt(p, 1.0)));    // (only on the painted water's white)
       D = max(D, streak * painted(p, whenF(p)));
     }
     float pool = exp(-pow((p.x - 2.49) / 0.16, 2.0) - pow((p.y - 0.17) / 0.05, 2.0)), ledge = exp(-pow((p.x - 2.49) / 0.07, 2.0) - pow((p.y - 0.535) / 0.022, 2.0));
     float bil = fbm(vec2(p.x * 9.0, p.y * 9.0 - t * 0.35));
-    D *= 1.0 - 0.85 * sat(pool * 1.3 + ledge);
+    D *= 1.0 - (uScK > 0.5 ? 0.35 * pool : 0.85 * sat(pool * 1.3 + ledge));
     D = max(D, 0.07 * smoothstep(0.45, 0.75, bil) * pool * painted(p, whenF(p)));
   }
   // ---- smoke from two of the houses, rising, leaning in the wind, thinning
@@ -190,7 +261,8 @@ float ink(vec2 p, out float tone){
   // ---- the traveller under an umbrella, crossing the bridge
   if (uWalker.w > 0.0){
     float u = uWalker.x;
-    vec2 base = vec2(3.62 + 0.40 * u, 0.255 + 0.07 * sin(3.14159 * u) + 0.004);
+    vec2 base = uScK > 0.5 ? vec2(3.61 + 0.40 * u, 0.270 + 0.054 * sin(3.14159 * u))      // (the painted bridge's deck)
+                           : vec2(3.62 + 0.40 * u, 0.255 + 0.07 * sin(3.14159 * u) + 0.004);
     vec2 q = p - base;
     float lean = 0.12;
     float body = smoothstep(0.0024, 0.0010, sdSeg(q, vec2(0.0, 0.006), vec2(lean * 0.02, 0.020)) - 0.0018);
@@ -328,6 +400,8 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
 const ROUTE = [[0.62, 0.58], [0.35, 0.57], [0.15, 0.46], [0.30, 0.30], [0.75, 0.30], [1.15, 0.45], [1.45, 0.72], [1.62, 0.90], [1.85, 0.70], [2.15, 0.88],
   [2.49, 0.96], [2.49, 0.55], [2.49, 0.24], [2.75, 0.16], [3.08, 0.30], [3.28, 0.42], [3.62, 0.27], [3.82, 0.34], [4.02, 0.27], [4.20, 0.38], [4.45, 0.40],
   [4.70, 0.35], [4.86, 0.25], [5.10, 0.24], [5.314, 0.232]];
+// on the painted scroll, what moves in the wind: the bamboo grove, the willow by the bridge, the reeds (x0, x1, foot, top)
+const SWAY = new Float32Array([2.97, 3.38, 0.03, 0.72,  3.38, 3.70, 0.20, 0.43,  4.97, 5.45, 0.0, 0.34]);
 const WS = 144 / 1152;                           // (the map of when, for the far washes, at an eighth of the brush's resolution)
 const SPREAD = 5.5;                              // how fast the painting spreads out from the light's way (painting units per unit of its time)
 W.ink = {
@@ -460,6 +534,11 @@ W.ink = {
     gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.ts); gl.uniform1i(p.u.uTS, 4);
     gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.tw); gl.uniform1i(p.u.uTW, 5);
     { const xt = YL.paperTex('paper_xuan'); gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, xt || null); gl.uniform1i(p.u.uXuan, 6); }
+    // the painted scroll (generated; see assets/prompts/in_A.txt, in_B.txt), when it has loaded (?inkgen=0: the brush's own)
+    const sa = YL.assetTex('ink_a'), sb = YL.assetTex('ink_b'), scOn = !!(sa && sb) && YL.QS.get('inkgen') !== '0';
+    gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, sa || this.ts); gl.uniform1i(p.u.uScA, 7);
+    gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, sb || this.ts); gl.uniform1i(p.u.uScB, 8);
+    U(p, 'uScK', scOn ? 1 : 0); gl.uniform4fv(p.u.uScSw, SWAY);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: rain on water, the lap of it; the waterfall as it comes into view; a guqin (古琴) plucked now and then, its notes sliding */

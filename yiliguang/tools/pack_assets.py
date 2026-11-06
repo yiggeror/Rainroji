@@ -1,6 +1,6 @@
 """Pack the generated pictures for the new worlds into the page as data URIs.
 usage: python3 tools/pack_assets.py <dir with the generated PNGs>
-Writes src/assets/conte.js, stop.js, paper.js, summer.js, pond.js, village.js and piying.js. Each layer is cropped to what it covers (transparent ones), split where
+Writes src/assets/conte.js, stop.js, paper.js, summer.js, pond.js, village.js, piying.js, ink.js and sea.js (or only the bundles named after the directory). Each layer is cropped to what it covers (transparent ones), split where
 one picture holds several separate things, and stored as JPEG (opaque, grey or colour) or WebP (with transparency)."""
 import base64, io, json, os, sys
 from PIL import Image
@@ -85,60 +85,89 @@ def write(name, items):
     print(name, f'{total / 1e6:.2f} MB', {k: v for k, v in meta.items()})
 
 L = lambda n: Image.open(os.path.join(SRC, n + '.png'))
+ONLY = sys.argv[2:]                         # (optionally just these bundles: conte stop paper summer pond village piying ink sea)
+want = lambda name: not ONLY or name in ONLY
 # ---- conté: the drawing is grey; the transparent layers keep their alpha
-items = {}
-pano = L('ct_pano').convert('L'); items['conte_pano'] = (uri(pano, 'jpeg', 88), pano.size)
-paper = L('ct_paper').convert('L'); items['conte_paper'] = (uri(paper, 'jpeg', 90), paper.size)
-for n in ['ct_lamp', 'ct_umb', 'ct_tree']:
-    im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
-    items['conte_' + n[3:]] = (uri(im, 'webp', 88), im.size)
-for i, im in enumerate(split_columns(L('ct_river_figs').convert('RGBA'), 3)):
-    im = scale(im, h=900); items['conte_' + ['woman', 'man', 'dog'][i]] = (uri(im, 'webp', 88), im.size)
-write('conte', items)
+if want('conte'):
+    items = {}
+    pano = L('ct_pano').convert('L'); items['conte_pano'] = (uri(pano, 'jpeg', 88), pano.size)
+    paper = L('ct_paper').convert('L'); items['conte_paper'] = (uri(paper, 'jpeg', 90), paper.size)
+    for n in ['ct_lamp', 'ct_umb', 'ct_tree']:
+        im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
+        items['conte_' + n[3:]] = (uri(im, 'webp', 88), im.size)
+    for i, im in enumerate(split_columns(L('ct_river_figs').convert('RGBA'), 3)):
+        im = scale(im, h=900); items['conte_' + ['woman', 'man', 'dog'][i]] = (uri(im, 'webp', 88), im.size)
+    write('conte', items)
 # ---- stop-motion: colour, the cut-outs keep their alpha
-items = {}
-sky = L('sm_sky').convert('RGB'); items['stop_sky'] = (uri(sky, 'jpeg', 86), sky.size)
-for n in ['sm_moon', 'sm_boat']:
-    im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
-    items['stop_' + n[3:]] = (uri(im, 'webp', 86), im.size)
-for i, im in enumerate(split_columns(L('sm_clouds').convert('RGBA'), 3)):
-    im = scale(im, h=900); items[f'stop_cloud{i}'] = (uri(im, 'webp', 86), im.size)
-for n in ['sm_wave_back', 'sm_wave_mid', 'sm_wave_front']:
-    im = L(n).convert('RGBA'); a = im.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
-    im = im.crop((0, max(0, bb[1] - 8), im.width, im.height)); im = scale(im, w=2560)
-    items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
-write('stop', items)
+if want('stop'):
+    items = {}
+    sky = L('sm_sky').convert('RGB'); items['stop_sky'] = (uri(sky, 'jpeg', 86), sky.size)
+    for n in ['sm_moon', 'sm_boat']:
+        im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
+        items['stop_' + n[3:]] = (uri(im, 'webp', 86), im.size)
+    for i, im in enumerate(split_columns(L('sm_clouds').convert('RGBA'), 3)):
+        im = scale(im, h=900); items[f'stop_cloud{i}'] = (uri(im, 'webp', 86), im.size)
+    for n in ['sm_wave_back', 'sm_wave_mid', 'sm_wave_front']:
+        im = L(n).convert('RGBA'); a = im.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
+        im = im.crop((0, max(0, bb[1] - 8), im.width, im.height)); im = scale(im, w=2560)
+        items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
+    write('stop', items)
 # ---- papers and a canvas for the older worlds (watercolour paper for the sea, washi for the print, xuan for the ink,
 # linen for the Kandinsky): the middle of each scan, grey, 1024 square; the shaders tile it (mirrored) and take its relief
-items = {}
-for n, key in [('tx_watercolor', 'paper_watercolor'), ('tx_washi', 'paper_washi'), ('tx_xuan', 'paper_xuan'), ('tx_canvas', 'paper_canvas')]:
-    im = L(n).convert('L'); c = im.width // 2
-    im = im.crop((c - 768, c - 768, c + 768, c + 768)).resize((1024, 1024), Image.LANCZOS)
-    items[key] = (uri(im, 'jpeg', 90), im.size)
-write('paper', items)
+if want('paper'):
+    items = {}
+    for n, key in [('tx_watercolor', 'paper_watercolor'), ('tx_washi', 'paper_washi'), ('tx_xuan', 'paper_xuan'), ('tx_canvas', 'paper_canvas')]:
+        im = L(n).convert('L'); c = im.width // 2
+        im = im.crop((c - 768, c - 768, c + 768, c + 768)).resize((1024, 1024), Image.LANCZOS)
+        items[key] = (uri(im, 'jpeg', 90), im.size)
+    write('paper', items)
 # ---- the summer sky (opaque, painted) and its far land (transparent strip); the pond's painted study
-items = {}
-sky = L('su_sky').convert('RGB'); items['summer_sky'] = (uri(sky, 'jpeg', 88), sky.size)
-if os.path.exists(os.path.join(SRC, 'su_land.png')):
-    land = L('su_land').convert('RGBA')
-    a = land.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
-    land = land.crop((0, max(0, bb[1] - 8), land.width, land.height))      # keep the full width (it is mapped by azimuth)
-    items['summer_land'] = (uri(land, 'webp', 88), land.size)
-write('summer', items)
-items = {}
-st = L('po_base').convert('RGB').resize((1344, 614), Image.LANCZOS); items['pond_study'] = (uri(st, 'jpeg', 88), st.size)
-write('pond', items)
+if want('summer'):
+    items = {}
+    sky = L('su_sky').convert('RGB'); items['summer_sky'] = (uri(sky, 'jpeg', 88), sky.size)
+    if os.path.exists(os.path.join(SRC, 'su_land.png')):
+        land = L('su_land').convert('RGBA')
+        a = land.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
+        land = land.crop((0, max(0, bb[1] - 8), land.width, land.height))      # keep the full width (it is mapped by azimuth)
+        items['summer_land'] = (uri(land, 'webp', 88), land.size)
+    write('summer', items)
+if want('pond'):
+    items = {}
+    st = L('po_base').convert('RGB').resize((1344, 614), Image.LANCZOS); items['pond_study'] = (uri(st, 'jpeg', 88), st.size)
+    write('pond', items)
 # ---- the snowy night's sky and ranges, printed (shin-hanga): opaque
-items = {}
-vs = L('vl_sky').convert('RGB'); items['village_sky'] = (uri(vs, 'jpeg', 88), vs.size)
-write('village', items)
+if want('village'):
+    items = {}
+    vs = L('vl_sky').convert('RGB'); items['village_sky'] = (uri(vs, 'jpeg', 88), vs.size)
+    write('village', items)
 # ---- carved and dyed hide for the lantern's shadow play: scenery pieces and the dragon's three segments (with alpha)
-items = {}
-for i, im in enumerate(split_components(L('sh_set').convert('RGBA'), 5)):
-    im = scale(im, h=640); items['pi_' + ['pagoda', 'willow', 'pine', 'boat', 'lotus'][i]] = (uri(im, 'webp', 88), im.size)
-for i, im in enumerate(split_components(L('sh_dragon').convert('RGBA'), 3)):
-    im = scale(im, h=640); items['pi_' + ['dhead', 'dbody', 'dtail'][i]] = (uri(im, 'webp', 88), im.size)
-for n in ['wall', 'bridge', 'clouds', 'mountains']:
-    im, _ = crop_alpha(L('sh_' + n).convert('RGBA')); im = scale(im, w=1280)
-    items['pi_' + n] = (uri(im, 'webp', 88), im.size)
-write('piying', items)
+if want('piying'):
+    items = {}
+    for i, im in enumerate(split_components(L('sh_set').convert('RGBA'), 5)):
+        im = scale(im, h=640); items['pi_' + ['pagoda', 'willow', 'pine', 'boat', 'lotus'][i]] = (uri(im, 'webp', 88), im.size)
+    for i, im in enumerate(split_components(L('sh_dragon').convert('RGBA'), 3)):
+        im = scale(im, h=640); items['pi_' + ['dhead', 'dbody', 'dtail'][i]] = (uri(im, 'webp', 88), im.size)
+    for n in ['wall', 'bridge', 'clouds', 'mountains']:
+        im, _ = crop_alpha(L('sh_' + n).convert('RGBA')); im = scale(im, w=1280)
+        items['pi_' + n] = (uri(im, 'webp', 88), im.size)
+    write('piying', items)
+# ---- the ink handscroll, in two halves (painted over the scroll's own layout, so everything that moves on it still
+# stands where it should): kept as how much ink lies on the paper (0 bare paper … 1 the blackest), grey
+def ink_density(im):
+    import numpy as np
+    Lm = np.asarray(im.convert('L')).astype(np.float32)
+    paper = np.percentile(Lm, 97)                                             # (the paper is flat and takes most of it)
+    d = np.clip((paper - Lm) / (paper - 22.0), 0, 1)
+    d = np.clip((d - 0.012) / 0.988, 0, 1)                                    # (the paper's own grain is not ink)
+    return Image.fromarray((d * 255 + 0.5).astype('uint8'), 'L')
+if want('ink'):
+    items = {}
+    for n, key in [('in_A', 'ink_a'), ('in_B', 'ink_b')]:
+        im = ink_density(L(n)); items[key] = (uri(im, 'jpeg', 92), im.size)
+    write('ink', items)
+# ---- the sea's water, painted in watercolour from just under the surface down into the deep (opaque, tall)
+if want('sea'):
+    items = {}
+    sw = L('se_water').convert('RGB'); items['sea_water'] = (uri(sw, 'jpeg', 88), sw.size)
+    se = L('se_eye').convert('RGB'); items['sea_eye'] = (uri(se, 'jpeg', 90), se.size)       # (the whale's eye, close)
+    write('sea', items)
