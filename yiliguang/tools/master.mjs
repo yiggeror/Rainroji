@@ -22,6 +22,12 @@ const probe = (f) => +spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'for
 // ---- the music and the font
 const music = resolve(cache, 'Dreamy Flashback.mp3');
 if (!existsSync(music)) run('curl', ['-sfL', '-o', music, 'https://incompetech.com/music/royalty-free/mp3-royaltyfree/Dreamy%20Flashback.mp3']);
+// the film is longer than the piece: one passage of it, 64 beats (17.62 s to 52.62 s), is played twice. The bars after
+// 52.62 s and after 17.62 s are almost the same (found by comparing their spectra beat by beat), so the jump back is
+// not heard; a 40 ms cross-fade covers the join.
+const musicLong = resolve(cache, 'Dreamy Flashback (long).wav');
+if (!existsSync(musicLong)) run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', music, '-filter_complex',
+  '[0:a]atrim=0:52.66,asetpts=PTS-STARTPTS[a];[0:a]atrim=start=17.62,asetpts=PTS-STARTPTS[b];[a][b]acrossfade=d=0.04:c1=qsin:c2=qsin', musicLong]);
 const font = resolve(cache, 'noto-serif-sc');
 if (!existsSync(font)) {
   mkdirSync(font, { recursive: true });
@@ -66,7 +72,7 @@ const af = [
   `[amb][mus]amix=inputs=2:normalize=0:duration=longest,apad=whole_dur=${END},atrim=0:${END},afade=t=out:st=${END - 3}:d=3,loudnorm=I=-16:LRA=11:TP=-1.5,aresample=48000[a]`,
 ];
 run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
-  '-i', film, '-i', amb, '-i', music, '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'title.png'), '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'credit.png'),
+  '-i', film, '-i', amb, '-i', (probe(film) + 7.5 - 3.4 > probe(music) - 1 ? musicLong : music), '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'title.png'), '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'credit.png'),
   '-filter_complex', [...vf, ...af].join(';'), '-map', '[v]', '-map', '[a]',
   '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-t', String(END), out]);
 console.log(out, (END).toFixed(1) + ' s');
