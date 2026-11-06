@@ -57,7 +57,7 @@ const ROUTE = [
   { p: [0.20, 1.42, -0.098], travel: 2.8, dwell: 0 },       // to the glass, among the drops
 ];
 let T_HOLD = 2.5, T_DAY = 4.5, T_DIVE = 2.6;
-let T_SUMMER = 30, T_PAPER = 6.2, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SQUID = 41.3, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
+let T_CONTE = 12.5, T_SUMMER = 30, T_PAPER = 6.2, T_UP = 6.5, T_CLOUD = 6.0, T_PRINT = 4.8, T_WOOD = 50, T_ZOOM = 3.0, T_SHADOW = 36, T_SNUFF = 2.6, T_TEAR = 4.4, T_GREAT = 5, T_WHALE = 14, T_LURE = 28, T_SQUID = 41.3, T_SEA = 46, T_BLOOM = 4.5, T_INK = 30, T_DAWN = 4.0, T_BURST = 3.0, T_POND = 30, T_DEW = 3.0, T_RISE = 8, T_SURF = 4.5;
 /* ---- 成片（?film）：没有人要等，每个世界只演最好的两三拍就走。观众的手也编好了：夏天里一阵风扫过、按住不动；
    深海里小鱼一齐受惊，然后鲸来了。 */
 const FILM = QS.has('film');
@@ -157,16 +157,20 @@ const D = YL.director = {
     if (D.phase === 'print' || D.phase === 'woodcut' || D.phase === 'inlantern' || D.phase === 'spark' || D.phase === 'leave') { D.inPrint(dt); return; }
     if (D.phase === 'shadow' || D.phase === 'snuff' || D.phase === 'drop') { D.inShadow(dt); return; }
     if (D.phase === 'inkbloom' || D.phase === 'ink' || D.phase === 'dawn') { D.inInk(dt); return; }
+    if (D.phase === 'conte') { D.inConte(dt); return; }
+    if (D.phase === 'kand') { D.inKand(dt); return; }
+    if (D.phase === 'stop') { D.inStop(dt); return; }
     if (D.phase === 'burst' || D.phase === 'pond' || D.phase === 'dew') { D.inPond(dt); return; }
     if (D.phase === 'tear' || D.phase === 'deepsea' || D.phase === 'rise') { D.inSea(dt); return; }
     if (D.phase === 'surface' || D.phase === 'home' || D.phase === 'end') { D.inRoom(dt, realT); return; }
     YL.hero.update(dt, realT);
     const L = YL.hero.routeLength(), Tw = L - (FILM ? 2.4 : 2.0), Tww = FILM ? 2.8 : 3.5;
     if (D.phase === 'wander' && D.t > L) D.go('window');
-    if (D.phase === 'window' && D.pt > 0.2 && !summer.ready) summer.init();                 // compile the next world early
-    if (D.phase === 'window' && D.pt > T_HOLD) D.go('daydrops');
+    if (D.phase === 'window' && D.pt > 0.2 && !summer.ready) summer.init();                 // compile the next worlds early
+    if (D.phase === 'window' && D.pt > 0.2 && !YL.worlds.conte.ready) YL.worlds.conte.init();
+    if (D.phase === 'window' && D.pt > T_HOLD) { D.go('daydrops'); YL.worlds.conte.start(null); YL.worlds.conte.t = -1.2; }
     if (D.phase === 'daydrops' && D.pt > T_DAY) D.go('dive');
-    if (D.phase === 'dive' && D.pt > T_DIVE) { D.enterSummer(); return; }
+    if (D.phase === 'dive' && D.pt > T_DIVE) { D.enterConte(); return; }
     // ---- the shot
     if (FILM) { YL.cam = D.roomCam(D.t); D.dayDrops(); return; }
     const aspect = YL.canvasAspect();
@@ -205,8 +209,24 @@ const D = YL.director = {
     if (D.phase === 'daydrops' || D.phase === 'dive') {
       const u = D.phase === 'daydrops' ? ease(clamp(D.pt / T_DAY, 0, 1)) : 1;
       YL.sharpMix = u; YL.sharpGain = 0.45;
-      summer.vol = 0.35 * u + (D.phase === 'dive' ? 0.65 * ease(clamp(D.pt / T_DIVE, 0, 1)) : 0);
+      YL.worlds.conte.vol = 0.35 * u + (D.phase === 'dive' ? 0.65 * ease(clamp(D.pt / T_DIVE, 0, 1)) : 0);
       YL.roomVol = 1 - (D.phase === 'dive' ? ease(clamp(D.pt / T_DIVE, 0, 1)) : 0);
+    }
+  },
+  // ---- the conté street: in through the drop; out through white, into the summer
+  enterConte() {
+    const ct = YL.worlds.conte;
+    D.go('conte');
+    YL.sharpMix = 0; YL.roomTarget = null; YL.roomVol = 0;
+    D.world = 'conte'; ct.vol = 1;
+    ct.entry = D.irisCenter ? D.irisCenter.slice() : [0.1, 0.1];
+  },
+  inConte(dt) {
+    const ct = YL.worlds.conte;
+    if (ct.t >= ct.T) {
+      D.irisCenter = ct.ndcOfHero(YL.canvasAspect());
+      ct.vol = 0;
+      D.enterSummer(); D.whiteIn = 1;
     }
   },
   enterSummer() {
@@ -596,7 +616,7 @@ const D = YL.director = {
       pond.reveal = smooth(0.15, 1.0, u); pond.vol = smooth(0.0, 0.8, u); ink.vol = 1 - smooth(0.0, 0.5, u);
       if (D.pt > T_BURST) { D.go('pond'); D.world = 'pond'; pond.reveal = 1; ink.vol = 0; }
     } else if (D.phase === 'pond') {
-      if (D.pt > T_POND) D.go('dew');
+      if (D.pt > T_POND) D.enterKand();                                       // (the pond turns into a painting of points, lines and planes)
     } else if (D.phase === 'dew') {
       const t = D.pt;
       pond.dew = smooth(0.0, 1.2, t);
@@ -605,6 +625,26 @@ const D = YL.director = {
       if (t > 1.7 && !D.dropSound) { D.dropSound = true; pond.plip && pond.plip(0.14); }
       if (D.pt > T_DEW) { D.dropSound = false; pond.vol = 0; D.surface(); }
     }
+  },
+  // ---- the pond becomes a Kandinsky; the Kandinsky's yellow circle becomes a cardboard moon over a little paper sea
+  enterKand() {
+    const pond = YL.worlds.pond, kd = YL.worlds.kand;
+    if (!kd.ready) kd.init();
+    const aspect = YL.canvasAspect(), H = pond.hero.p;
+    const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (pond.pan || 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
+    kd.start([nx * aspect * 0.5, ny * 0.5]);
+    D.go('kand'); D.world = 'kand'; kd.vol = 1; kd.bg = 1;
+  },
+  inKand(dt) {
+    const kd = YL.worlds.kand, pond = YL.worlds.pond, st = YL.worlds.stop;
+    kd.bg = 1 - smooth(0.3, 2.4, kd.t);
+    pond.vol = 1 - smooth(0.0, 2.0, kd.t);
+    if (kd.t > 7 && !st.ready) st.init();
+    if (kd.t >= kd.T) { D.go('stop'); D.world = 'stop'; st.start(); st.vol = 1; kd.vol = 0; pond.vol = 0; }
+  },
+  inStop(dt) {
+    const st = YL.worlds.stop;
+    if (st.t >= st.T) { st.vol = 0; D.surface(); }
   },
   // ---- back in the room: out of the tea, home to the lamp
   surface() {
@@ -875,10 +915,11 @@ D.renderFrame = (dt, realT) => {
   const summer = YL.worlds.summer;
   // drops showing the summer: keep its panorama fresh
   if ((D.phase === 'daydrops' || D.phase === 'dive') && !summer.ready) summer.init();
-  if ((D.phase === 'daydrops' || D.phase === 'dive') && summer.ready) {
+  if (D.phase === 'daydrops' || D.phase === 'dive') {
+    // the drops on the glass show the street outside as it is being drawn (the conté world, laid down in them)
+    const ct = YL.worlds.conte; if (!ct.ready) ct.init();
     if (!YL.sharp2) YL.sharp2 = YL.makeTarget(768, 576, ['rgba8']);
-    summer.update(dt, YL.DBG.still);
-    summer.renderEquirect(YL.sharp2);
+    ct.update(dt); ct.render(YL.sharp2, 768 / 576);
   }
   if (D.phase === 'dive' && summer.ready) {
     const I = irisTargets(), gl = YL.gl;
@@ -993,6 +1034,40 @@ D.renderFrame = (dt, realT) => {
     YL.roomTarget = I.A; D.flashFrame = { I, f: 1 - smooth(0.0, 1.0, D.pt) };
     return false;
   } else if (YL.roomTarget && D.phase !== 'dive') YL.roomTarget = null;
+  if (D.phase === 'kand') {
+    const kd = YL.worlds.kand;
+    if (kd.t < 2.6) {
+      const pond = YL.worlds.pond, I = irisTargets(); if (!pond.ready) pond.init();
+      pond.update(dt); pond.render(I.B, YL.canvasAspect()); kd.pondTex = I.B.tex;
+    } else kd.pondTex = null;
+  }
+  if (D.phase === 'stop' && YL.worlds.stop.t < 0.9) {
+    const st = YL.worlds.stop, kd = YL.worlds.kand, I = irisTargets(), gl = YL.gl, aspect = YL.canvasAspect();
+    if (!st.ready) st.init(); if (!kd.ready) kd.init();
+    st.update(dt);
+    kd.pondTex = null; kd.render(I.A, aspect); st.render(I.B, aspect);
+    const mp = mixP();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(mp.p);
+    YL.U(mp, 'uRes', [I.w, I.h]); YL.U(mp, 'uK', smooth(0.0, 0.9, st.t)); YL.U(mp, 'uGlow', 0);
+    YL.bindTex(mp, 'uA', I.A.tex, 0); YL.bindTex(mp, 'uB', I.B.tex, 1);
+    YL.drawFull();
+    return true;
+  }
+  if (D.phase === 'summer' && D.whiteIn > 0) {
+    // out of the white page the conté light rubbed clean: the summer, from white
+    const su = YL.worlds.summer; if (!su.ready) su.init();
+    if (D.placeHero) { D.placeHero = false; D.placeLight(); }
+    D.whiteIn = 1 - smooth(0.0, 1.6, D.pt);
+    const I = irisTargets(), gl = YL.gl;
+    su.update(dt, YL.DBG.still); su.render(I.A, YL.canvasAspect());
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
+    gl.useProgram(I.p.p);
+    YL.U(I.p, 'uRes', [I.w, I.h]); YL.U(I.p, 'uC', [-10, -10]); YL.U(I.p, 'uR', 0); YL.U(I.p, 'uFlash', D.whiteIn);
+    YL.bindTex(I.p, 'uA', I.A.tex, 0); YL.bindTex(I.p, 'uB', I.A.tex, 1);
+    YL.drawFull();
+    return true;
+  }
   if (D.world === 'room') return false;
   const w = YL.worlds && YL.worlds[D.world];
   if (!w) return false;
@@ -1067,8 +1142,8 @@ D.afterRoom = () => {
   }
   const F = D.irisFrame; if (!F || D.phase !== 'dive') return;
   D.irisFrame = null;
-  const { I, u } = F, gl = YL.gl, summer = YL.worlds.summer;
-  summer.render(I.B, YL.canvasAspect());
+  const { I, u } = F, gl = YL.gl;
+  YL.worlds.conte.render(I.B, YL.canvasAspect());
   // the iris opens from the light's own drop: slowly, then all at once
   const c = D.irisCenter, w = I.w, h = I.h;
   const cpx = [(c[0] * 0.5 + 0.5) * w, (c[1] * 0.5 + 0.5) * h];
@@ -1098,6 +1173,18 @@ if (QS.get('phase')) {
   LIGHT.level = 0; HERO.glow = 1;
   const L = YL.hero.routeLength();
   if (ph === 'wander') { YL.hero.t = pt; D.t = pt; }
+  else if (ph === 'kand' || ph === 'stop') {
+    YL.hero.t = L + 5; D.t = L + 5; YL.roomVol = 0;
+    const kd = YL.worlds.kand, st = YL.worlds.stop;
+    if (ph === 'kand') { kd.start([0.2, -0.1]); kd.t = pt; kd.vol = 1; D.go('kand'); D.world = 'kand'; }
+    else { st.start(); st.t = pt; st.vol = 1; kd.t = kd.T; D.go('stop'); D.world = 'stop'; }
+    D.pt = pt;
+  }
+  else if (ph === 'conte') {
+    YL.hero.t = L + 5; D.t = L + 5;
+    const ct = YL.worlds.conte; ct.start([0.1, 0.1]); ct.t = pt; ct.vol = 1;
+    D.go('conte'); D.world = 'conte'; YL.roomVol = 0; D.pt = pt;
+  }
   else {
     YL.hero.t = L + 5; D.t = L + 5;
     const later = ['summer', 'paper', 'updraft', 'cloud', 'print', 'woodcut', 'spark', 'inlantern', 'shadow', 'drop', 'snuff', 'leave', 'tear', 'deepsea', 'inkbloom', 'ink', 'dawn', 'burst', 'pond', 'dew', 'rise', 'surface'];

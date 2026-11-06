@@ -4888,6 +4888,7 @@ function stop() { running = false; }
 AUDIO.recDur = +(QS.get('dur') || 60);
 async function recRun() {
   const F = DBG.rec, N = Math.round(AUDIO.recDur * F);
+  if (YL.assetsReady) await YL.assetsReady;         // (the generated pictures, decoded before the first frame)
   document.getElementById('veil').style.display = 'none';
   AUDIO.unlock();
   const ctx = AUDIO.recCtx();
