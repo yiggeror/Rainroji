@@ -328,7 +328,7 @@ const D = YL.director = {
       }
       // ---- the whale: in from the right, slowing, until its eye is beside the pearl; it looks; it blinks; it goes on
       const tw = tau - 2.5;
-      const L = 1.6, eyeOff = (0.245 - 0.5) * L;
+      const L = 1.6, eyeOff = (sea.eyeU - 0.5) * L;
       const arrive = smooth(1.0, 6.5, tw), leave = smooth(9.0, 13.0, tw);
       const eyeX = P.x + 0.075, wx = lerp(eyeX - eyeOff + 2.4, eyeX - eyeOff, arrive) - 2.6 * leave * leave;
       const wy = P.y + 0.024 * L + 0.005 + 0.02 * Math.sin(tw * 0.4);

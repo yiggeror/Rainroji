@@ -170,4 +170,14 @@ if want('sea'):
     items = {}
     sw = L('se_water').convert('RGB'); items['sea_water'] = (uri(sw, 'jpeg', 88), sw.size)
     se = L('se_eye').convert('RGB'); items['sea_eye'] = (uri(se, 'jpeg', 90), se.size)       # (the whale's eye, close)
+    # the whole whale (transparent): rows 200 … 760 of it; the paint's colour bled out past its edge, so the edge
+    # doesn't filter to a dark fringe
+    import numpy as np
+    from PIL import ImageFilter
+    wh = L('se_whale').convert('RGBA').crop((0, 200, 3072, 760)); A = np.asarray(wh).astype(np.float32); a = A[..., 3:] / 255.0
+    pm = Image.fromarray(np.clip(A[..., :3] * a, 0, 255).astype('uint8')).filter(ImageFilter.GaussianBlur(6))
+    am = Image.fromarray((a[..., 0] * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(6))
+    fill = np.asarray(pm).astype(np.float32) / np.maximum(np.asarray(am).astype(np.float32)[..., None] / 255.0, 1e-3)
+    rgb = np.where(a > 0.5, A[..., :3], np.clip(fill, 0, 255))
+    wh = Image.fromarray(np.concatenate([rgb, A[..., 3:]], -1).astype('uint8'), 'RGBA'); items['sea_whale'] = (uri(wh, 'webp', 88), wh.size)
     write('sea', items)

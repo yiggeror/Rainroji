@@ -63,6 +63,8 @@ const vec3 PAPER = vec3(0.965, 0.952, 0.915);
 const FS = HEAD + `
 uniform vec2 uCam; uniform float uZoom;
 uniform sampler2D uSeaImg; uniform float uSeaImgK;   // the water painted (generated): from just under the surface down into the deep
+uniform sampler2D uWhaleImg; uniform float uWhaleImgK;   // the whole whale, painted side-on (generated; no near flipper: that one is drawn, and rows)
+uniform float uEyeU;          // how far back from the snout its eye is (0.245 drawn; 0.2015 painted)
 uniform sampler2D uEyeImg; uniform float uEyeImgK;   // the skin round the whale's eye and the eye, painted close (generated)
 uniform vec2 uPearl; uniform float uPearlB;
 uniform vec4 uWhale;          // whale: centre xy, length, heading
@@ -256,7 +258,8 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   vec3 wK = mix(INDI * 0.55 + ULTR * 0.55 + SIEN * 0.12, INDI * 0.6 + VIOL * 0.45 + SIEN * 0.2, smoothstep(0.35, 0.65, hueN));
   wK = mix(wK, INDI * 0.55 + TURQ * 0.35 + SIEN * 0.25, smoothstep(0.6, 0.95, u) * 0.7);
   // the flipper: long and white, knobbly along its leading edge, rowing slowly
-  vec2 root = vec2(0.255, -rv * 0.55 + wOff(0.255));
+  float ru = uEyeU + (uWhaleImgK > 0.0 ? 0.025 : 0.01);
+  vec2 root = vec2(ru, -prof(ru, false) * 0.55 + wOff(ru));
   float fa = -0.80 + 0.18 * sin(uTime * 0.7);
   vec2 fd = rot(-fa) * (vec2(u, q.y) - root);
   float fu = fd.x / 0.31;
@@ -269,8 +272,17 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   flip += rough(fd, 30.0, 0.002, 8.0);
   float fpx = flip * L;
   float flipD = wash(fpx, 0.0015, 1.3, 0.004);
-  float flipIn = smoothstep(0.0015, -0.0015, fpx);
+  float flipIn = smoothstep(0.0015, -0.0015, fpx) * (uWhaleImgK > 0.0 ? smoothstep(0.0, 0.07, fu) : 1.0);   // (its root grows out of the flank)
   vec3 add = wK * bodyD * dens + (INDI * 0.65 + SIEN * 0.15) * (mouthL * 1.1 + eyeD * 1.7) * inB;
+  // the painted whale: sampled along its own body (so its tail still flexes with the beat), its outline its own
+  float covI = -1.0;
+  if (uWhaleImgK > 0.0){
+    vec2 iu = vec2((16.0 + u * 2983.0) / 3072.0, 1.0 - (365.4 - v * 2983.0 - 200.0) / 560.0);
+    vec4 wc = texture(uWhaleImg, clamp(iu, vec2(0.0), vec2(1.0)));
+    covI = smoothstep(0.12, 0.88, wc.a) * step(0.0, iu.x) * step(iu.x, 1.0) * step(0.0, iu.y) * step(iu.y, 1.0);
+    add = -log(clamp(wc.rgb / PAPER, 0.02, 1.0));
+    inB = covI;
+  }
   // over the body the flipper is lifted nearly to white, mottled; its leading edge darker
   float trail = smoothstep(0.0, -0.02, fd.y);
   vec3 flipK = (INDI * 0.20 + CERU * 0.15 + VIOL * 0.08) * flipD * (0.5 + 0.7 * fbm3(fd * 25.0)) * (0.5 + 0.9 * trail)
@@ -284,6 +296,13 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   // the body is painted round, not over: inside it, the water's colour is mostly gone (a little stays: the water between us)
   float cov = max(clamp(bodyD, 0.0, 1.0) * smoothstep(0.004, -0.002, dPx + 0.004 * lost), flipIn);
   cov = max(cov, smoothstep(0.0015, -0.0015, dPx));
+  if (covI >= 0.0){
+    // (painted: nothing of it outside its own outline)
+    cov = max(covI, flipIn);
+    K = mix(Kw, add + Kw * (0.22 + 0.5 * far), cov);
+    body = max(body, cov);
+    return;
+  }
   vec3 inside = add + Kw * (0.22 + 0.5 * far);
   K = mix(Kw + add * (1.0 - cov), inside, cov);
   body = max(body, cov);
@@ -391,7 +410,7 @@ void bigEye(vec2 p, vec2 c, float r, float lid, vec2 pearl, inout vec3 K){
   // barnacles, a crusted patch below and behind it: grey-white and rough-edged, crowded together, a dark pit in each
   vec2 bq = q - vec2(3.4, -2.6);
   float patch_ = fbm3(bq * 0.9 + 4.0) - 0.62 * length(bq * vec2(0.8, 1.2)) / 2.0;
-  if (patch_ > 0.05){
+  if (patch_ > 0.05 && uWhaleImgK <= 0.0){            // (the painted whale has its own)
     vec2 bg = bq * 1.7, bi = floor(bg), bf = fract(bg) - 0.5;
     vec2 bo = (hash22(bi + 2.0) - 0.5) * 0.45;
     float br = 0.22 + 0.16 * hash12(bi + 5.0);
@@ -544,7 +563,7 @@ void main(){
   if (uWhale.z > 0.0) whale(p, uWhale, 0.0, uPearl, K, wb);
   if (uWhale.z > 0.0){
     // its eye (in the whale's frame)
-    vec2 eyeL = (vec2(0.245, -0.024) - vec2(0.5, 0.0)) * uWhale.z;
+    vec2 eyeL = (vec2(uEyeU, -0.024) - vec2(0.5, 0.0)) * uWhale.z;
     vec2 eyeW = uWhale.xy + rot(uWhale.w) * eyeL;
     bigEye(p, eyeW, 0.0060 * uWhale.z * (1.0 + 0.19 * uEyeImgK * smoothstep(0.0, 0.85, uWhaleB.z)), uWhaleB.x, uPearl, K);
     if (uEyeImgK > 0.0 && uWhaleB.z > 0.7) eyePainted(p, eyeW, uEyeImgK * smoothstep(0.75, 0.95, uWhaleB.z), K);
@@ -638,6 +657,8 @@ const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0),
 W.sea = {
   ready: false, t: 0, vol: 1, fade: 1,
   cam: [0, 0], zoom: 1,
+  // how far back from the snout the whale's eye is: on the painted whale (generated), or the drawn one
+  get eyeU() { return YL.QS.get('seagen') !== '0' && YL.img('sea_whale') && YL.img('sea_whale').naturalWidth ? 0.2015 : 0.245; },
   pearl: [0, 0.1], pearlB: 1,
   whale: [9, 9, 0, 0], whaleB: [1, 0, 0, 0],
   squid: [9, 9, 0.12, 0], squidB: [0, 0, 0, 0],
@@ -662,6 +683,7 @@ W.sea = {
     U(p, 'uInk', this.ink);
     { const wc = YL.paperTex('paper_watercolor'); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, wc || null); gl.uniform1i(this.p.u.uWC, 7); }
     { const si = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_water'); gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, si || null); gl.uniform1i(this.p.u.uSeaImg, 8); U(this.p, 'uSeaImgK', si ? 1 : 0); }
+    { const wi = this.eyeU === 0.2015 ? YL.assetTex('sea_whale') : null; gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, wi || null); gl.uniform1i(this.p.u.uWhaleImg, 10); U(this.p, 'uWhaleImgK', wi ? 1 : 0); U(this.p, 'uEyeU', wi ? 0.2015 : 0.245); }
     { const ei = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_eye'); gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, ei || null); gl.uniform1i(this.p.u.uEyeImg, 9); U(this.p, 'uEyeImgK', ei ? 1 : 0); }
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
