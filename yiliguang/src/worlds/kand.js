@@ -61,6 +61,19 @@ float rough(){ return (vnoise(P * 140.0) - 0.5) * 0.0028 + (vnoise(P * 31.0) - 0
 vec3 brush(vec3 col){ vec2 q = P * mat2(0.8, -0.6, 0.6, 0.8); return col * (0.94 + 0.10 * fbm(vec2(q.x * 60.0, q.y * 9.0))); }
 void fillSd(float sd, vec3 col, float k){ if (k <= 0.0) return; float a = smoothstep(0.0016, -0.0016, sd + rough()) * k; C = mix(C, brush(col), a); }
 void fillA(float a, vec3 col){ C = mix(C, brush(col), sat(a)); }
+const vec3 TEAL = vec3(0.17, 0.43, 0.44), OLIVE = vec3(0.66, 0.64, 0.25), DEEPG = vec3(0.24, 0.40, 0.25);
+void pad(vec2 p, vec2 c, vec2 r, int kind, float contour){
+  if (r.x <= 0.0) return;
+  vec3 band = kind == 0 ? TEAL : kind == 1 ? OLIVE : LILAC;
+  fillSd(sdEll(p, c, r), GREEN, 1.0);
+  fillSd(sdEll(p, c + vec2(0.04, 0.10) * r, r * 0.74), band, 1.0);
+  fillSd(sdEll(p, c + vec2(0.07, 0.16) * r, r * 0.46), kind == 2 ? GREEN : DEEPG, 1.0);
+  fillSd(sdEll(p, c + vec2(0.09, 0.20) * r, r * 0.22), kind == 1 ? TEAL : OLIVE, 1.0);
+  if (contour > 0.0){
+    float d = abs(sdEll(p, c, r)) - 0.0022;
+    fillA(smoothstep(0.0012, -0.0012, d + rough() * 0.4) * smoothstep(-0.2, 0.5, (p.y - c.y) / r.y) * smoothstep(1.0, 0.6, abs(p.x - c.x) / r.x), INK);
+  }
+}
 void main(){
   vec2 sp = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
   P = uView.xy + sp / uView.z;
@@ -73,14 +86,15 @@ void main(){
   // ---- shapes, back to front
   // the lilac horizon, drawn out from the point both ways
   { float k = ap(0.6, 1.0); float d = abs(p.y - 0.024); float reach = k * 1.4; fillA(smoothstep(0.0030, 0.0012, d + rough()) * step(abs(p.x + 0.43), reach), LILAC); }
-  // lily pads, as they were: flat green ellipses (and the pink buds on them, glowing)
-  fillSd(sdEll(p, vec2(-0.61, -0.17), vec2(0.26, 0.06) * pop(0.8) * breathe(0.0)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(-0.10, -0.06), vec2(0.15, 0.035) * pop(1.1) * breathe(1.0)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(0.42, -0.22), vec2(0.47, 0.12) * pop(1.35) * breathe(2.0)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(0.46, -0.05), vec2(0.11, 0.02) * pop(1.6)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(0.76, -0.10), vec2(0.13, 0.03) * pop(1.9)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(-0.76, -0.02), vec2(0.07, 0.012) * pop(2.1)), GREEN, 1.0);
-  fillSd(sdEll(p, vec2(0.21, 0.0), vec2(0.055, 0.010) * pop(2.2)), GREEN, 1.0);
+  // lily pads, turned into his concentric rings: a green ellipse, a band of another colour inside it, a darker heart, and
+  // on the big ones a black contour along the far edge (the pink buds on them glow, below)
+  pad(p, vec2(-0.61, -0.17), vec2(0.26, 0.06) * pop(0.8) * breathe(0.0), 0, 1.0);
+  pad(p, vec2(-0.10, -0.06), vec2(0.15, 0.035) * pop(1.1) * breathe(1.0), 1, 0.0);
+  pad(p, vec2(0.42, -0.22), vec2(0.47, 0.12) * pop(1.35) * breathe(2.0), 2, 1.0);
+  pad(p, vec2(0.46, -0.05), vec2(0.11, 0.02) * pop(1.6), 0, 0.0);
+  pad(p, vec2(0.76, -0.10), vec2(0.13, 0.03) * pop(1.9), 1, 1.0);
+  pad(p, vec2(-0.76, -0.02), vec2(0.07, 0.012) * pop(2.1), 2, 0.0);
+  pad(p, vec2(0.21, 0.0), vec2(0.055, 0.010) * pop(2.2), 0, 0.0);
   // the big blue circle, its lilac halo, the yellow in it; the black arc sweeping over
   {
     vec2 c = vec2(-0.68, 0.33); float k = pop(2.7);

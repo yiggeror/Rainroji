@@ -95,8 +95,32 @@ void main(){
   // ---- coming in: the drawing is laid down patch by patch; going out: the light rubs the whole page back to white
   float n = fbm(p * 3.5 + 2.0) * 0.7 + 0.3 * hash12(floor(gl_FragCoord.xy / 2.0));
   D *= smoothstep(n - 0.08, n + 0.08, uBuild * 1.25 - 0.1);
-  float R = uWhite * 2.6;
-  D *= smoothstep(R - 0.25, R + 0.02, hr + 0.12 * (fbm(p * 6.0 + 5.0) - 0.5));
+  // the light as an eraser: it rubs the page outward from itself in short strokes, each one going over a patch a few
+  // times (streaks along it, the crayon only partly lifted), the strokes overlapping into a ragged white; well behind
+  // the rubbing, the page is clean. (It takes the whole of the going-white to reach the corners.)
+  if (uWhite > 0.0){
+    float R = pow(uWhite, 1.4) * 1.35, er = 0.0;
+    for (int L = 0; L < 2; L++){
+      float fl = float(L), cs = 7.0 + fl * 1.7;
+      vec2 q = p * cs + fl * vec2(0.37, 0.61), qi = floor(q);
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+        vec2 c = qi + vec2(float(i), float(j));
+        float h1 = hash12(c + fl * 13.1), h2 = hash12(c + 4.3 + fl * 7.7), h3 = hash12(c + 9.1 + fl * 3.3);
+        vec2 ctr = (c + vec2(h1, h2) - fl * vec2(0.37, 0.61)) / cs;
+        float on = smoothstep(0.0, 0.07, R - length(ctr - uHero.xy) - 0.10 * h3);
+        if (on <= 0.0) continue;
+        float ang = 0.35 + 0.9 * (h1 - 0.5);
+        vec2 dir = vec2(cos(ang), sin(ang)), d = p - ctr;
+        float al = dot(d, dir), ac = dot(d, vec2(-dir.y, dir.x));
+        float len = 0.045 + 0.035 * h2, wd = 0.016 + 0.012 * h3;
+        float cap = smoothstep(wd, wd * 0.55, abs(ac) + max(abs(al) - len, 0.0));
+        float st = 0.55 + 0.45 * smoothstep(0.3, 0.7, vnoise(vec2(al * 40.0, ac * 520.0) + c * 3.1));
+        er = 1.0 - (1.0 - er) * (1.0 - cap * on * st * (0.65 + 0.3 * h1));
+      }
+    }
+    D *= 1.0 - er;
+    D *= 1.0 - smoothstep(R - 0.08, R - 0.38, hr + 0.06 * (fbm(p * 5.0 + 5.0) - 0.5));
+  }
   // ---- the crayon on the paper: the paper's grain stays where it is on the screen, the drawing moves over it
   vec2 pp = gl_FragCoord.xy / 1024.0;
   float pl = texture(uPaper, pp * 1.15).r, pb = textureLod(uPaper, pp * 1.15, 4.5).r;
