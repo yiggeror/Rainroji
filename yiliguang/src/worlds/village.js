@@ -108,6 +108,8 @@ uniform vec4 uHero;                  // the light: where, how bright
 uniform sampler2D uScreen;           // the shadow play, as it is on the screen
 uniform float uScreenOn;             // (the screen's own picture is there at all)
 uniform float uGlowK;                // the glow in the air (gone by the time the eye is up against the screen)
+uniform sampler2D uVSky;             // the night sky and the snowy ranges, cut and printed (a generated shin-hanga panorama)
+uniform float uVSkyK;                // (0 until it is decoded)
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 oD;
 #define NS ${NS}
@@ -325,6 +327,13 @@ vec3 skyCol(vec3 rd, out float fid){
   if (e < hh || (pine < 0.0 && hash11(gi + 3.0) < 0.8)){
     c = mix(vec3(0.27, 0.32, 0.46), vec3(0.11, 0.15, 0.25), smoothstep(hh - 0.05, hh, e));
     fid = 3.0;
+  }
+  if (uVSkyK > 0.0){
+    // the printed panorama: 1.5 rad across (mirrored past its ends), its foot a little under the horizon
+    vec2 su = vec2(a / 1.5 + 0.5, (asin(clamp(e, -1.0, 1.0)) + 0.048) / 0.5);
+    su.x = 1.0 - abs(1.0 - mod(su.x, 2.0));
+    c = mix(c, textureLod(uVSky, clamp(su, vec2(0.0005), vec2(0.9995)), 0.0).rgb * vec3(0.84, 0.87, 0.96), uVSkyK);   // (a shade deeper: it is night)
+    fid = 0.0;
   }
   return c;
 }
@@ -1082,6 +1091,8 @@ W.village = {
     U(this.pG, 'uHero', [...this.hero.p, this.hero.b]);
     U(this.pG, 'uScreenOn', this.screenTex ? 1 : 0); U(this.pG, 'uGlowK', this.pure);
     YL.bindTex(this.pG, 'uScreen', this.screenTex || this.black, 0);
+    const vsky = YL.assetTex && YL.assetTex('village_sky');
+    YL.U(this.pG, 'uVSkyK', vsky ? 1 : 0); YL.bindTex(this.pG, 'uVSky', vsky || this.black, 3);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     // 2) the printing
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);

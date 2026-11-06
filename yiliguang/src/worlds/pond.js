@@ -39,10 +39,18 @@ uniform vec4 uRing[8];       // rings spreading on the water: where, how long ag
 uniform vec4 uFly[4];        // dragonflies: where, which way, their colour (0 blue … 1 red)
 uniform vec4 uFrog;          // the frog: where, how far through its jump (0 sitting … 1 in), shown
 uniform vec4 uGust;          // a gust crossing the water: where its front is (x), how strong
+uniform sampler2D uImg;      // the painted study of the place (sky, far bank, open water), the strokes take their colour from it
+uniform float uImgK;         // (0 until the picture is decoded)
 layout(location = 0) out vec4 oC;    // colour (sRGB-ish, 0…1)
 layout(location = 1) out vec4 oP;    // the brush: direction (angle / π, 0…1), size (0…1), kind (0 water, .33 pad, .66 flower, 1 willow), -
 ` + COMMON + `
 const float HZ = 0.745;      // the far bank's foot: where the water starts
+// the study: 2240 × 1024, so 2.1875 painting units across; its water starts 0.652 up from its foot — mapped onto HZ
+const float IMG_W = 2.1875, IMG_HZ = 0.652;
+vec3 study(vec2 p){
+  float y = p.y > HZ ? IMG_HZ + (p.y - HZ) / (1.0 - HZ) * (1.0 - IMG_HZ) : p.y / HZ * IMG_HZ;
+  return textureLod(uImg, vec2(clamp(p.x / IMG_W, 0.001, 0.999), clamp(y, 0.001, 0.999)), 0.0).rgb;
+}
 void main(){
   vec2 p = vec2(gl_FragCoord.x / uRes.y, gl_FragCoord.y / uRes.y) * vec2(1.0, 1.0);
   p.x += (1.7778 - uAspect) * 0.5 + uPan;
@@ -63,6 +71,13 @@ void main(){
     vec3 trees = mix(vec3(0.46, 0.46, 0.66), vec3(0.62, 0.58, 0.72), smoothstep(HZ, bank, p.y));
     trees = mix(trees, vec3(0.86, 0.72, 0.62), exp(-abs(p.x - S.x) / 0.18) * 0.55);       // the sun's glow through them
     c = mix(c, trees, inB * 0.85);
+    if (uImgK > 0.0){
+      vec3 s = study(p);
+      // where the study has its trees (cooler and darker than the sky round them, low over the water) the brush dabs
+      float tr = smoothstep(-0.06, 0.06, s.b - s.r + 0.10 * (0.8 - dot(s, vec3(0.33)))) * smoothstep(HZ + 0.21, HZ + 0.13, p.y) * step(HZ + 0.012, p.y);
+      inB = mix(inB, tr, uImgK);
+      c = mix(c, s + vec3(0.10, 0.07, 0.02) * exp(-length((p - S) * vec2(1.0, 1.3)) / 0.05) * uSun.z, uImgK);
+    }
     ang = inB > 0.5 ? vnoise(p * 25.0) : 0.05 * (vnoise(p * 10.0) - 0.5);
     size = inB > 0.5 ? 0.35 : 0.9;
     kind = inB > 0.5 ? 0.66 : 0.0;                                          // (dabs, not long strokes)
@@ -76,9 +91,14 @@ void main(){
     // the trees' reflections: dark, broken verticals hanging down from the far bank
     float refl = smoothstep(0.12, 0.0, z) * (0.6 + 0.4 * fbm(vec2(p.x * 3.0, 1.0)));
     c = mix(c, vec3(0.40, 0.42, 0.58), refl * 0.6);
+    if (uImgK > 0.0){
+      // the study's water, rocking a little on the ripples (its reflections waver), lit and shaded by them
+      vec2 wv = vec2(0.006 * (rip - 0.5) * (0.4 + z), 0.0);
+      c = mix(c, study(p + wv) * (0.94 + 0.12 * rip), uImgK);
+    }
     // the sun's road: a column of broken gold down the water from under the sun, widening as it comes
     float road = exp(-pow((p.x - uSun.w) / (0.03 + 0.10 * z), 2.0)) * (0.35 + 0.65 * smoothstep(0.35, 0.8, vnoise(vec2(p.x * 40.0, p.y * 140.0 / (0.3 + z)) + t * 0.6)));
-    c = mix(c, vec3(1.0, 0.86, 0.50), sat(road * uSun.z * 1.1));
+    c = mix(c, vec3(1.0, 0.86, 0.50), sat(road * uSun.z * (1.1 - 0.55 * uImgK)));
     // 一粒光: the first light on the water: a hot point, ringed with glitter
     vec2 hd = p - uHero.xy;
     float hp = exp(-dot(hd * vec2(1.0, 2.5), hd * vec2(1.0, 2.5)) / 0.0006) * uHero.z;
@@ -125,6 +145,10 @@ void main(){
       if (pad > 0.0){
         vec3 g = mix(vec3(0.26, 0.48, 0.30), vec3(0.50, 0.66, 0.34), vnoise(P.xy * 40.0) * 0.7 + 0.3 * (e.x * 0.5 + 0.5));
         g = mix(g, vec3(0.72, 0.62, 0.38), smoothstep(0.6, 1.0, r) * 0.35);                     // the rim catches the light
+        // the leaf's far half takes the sky's light (the water's colour round it), its near half sinks into a violet shade
+        g = mix(g, c * vec3(0.95, 1.02, 0.95), 0.18 + 0.20 * smoothstep(-0.2, 0.9, e.y));
+        g = mix(g, vec3(0.24, 0.30, 0.46), smoothstep(0.1, -0.9, e.y) * 0.35);
+        g = mix(g, vec3(0.80, 0.84, 0.42), smoothstep(0.55, 0.95, vnoise(q * 90.0 + P.w * 7.0)) * 0.30);
         c = mix(c, g, pad);
         ang = mix(ang, 0.12 * sin(a) + 0.04 * (vnoise(p * 50.0) - 0.5), pad);   // the brush lies along the leaf, bending a little round it
         size = mix(size, 0.25 + 0.4 * P.z / 0.06, pad);
@@ -223,7 +247,7 @@ void main(){
   hsv.x += (r1 - 0.5) * 0.06;
   hsv.y = clamp(hsv.y * (0.85 + 0.5 * r2), 0.0, 1.0);
   hsv.z = clamp(hsv.z * (0.88 + 0.24 * hash12(aS.zw * 1.3 + b * 0.7)), 0.0, 1.0);
-  if (r2 > 0.975 && kind < 0.9){ hsv.x = fract(hsv.x + 0.5); hsv.y *= 0.45; }
+  if (r2 > 0.988 && kind < 0.9){ hsv.x = fract(hsv.x + 0.5); hsv.y *= 0.35; hsv.z = mix(hsv.z, 0.75, 0.3); }
   vec3 col = hsv2rgb(hsv);
   // on the sun's road, the strokes are short, fat and bright, and flicker
   float road = exp(-pow((aS.x * uRes.x / uRes.y - uSun.w) / 0.08, 2.0)) * step(aS.y, 0.74) * uSun.z;
@@ -263,6 +287,7 @@ void main(){
 const FS_FINAL = `#version 300 es
 precision highp float;
 uniform sampler2D uA; uniform vec2 uRes; uniform float uTime, uFade, uWhite; uniform vec4 uDew;
+uniform sampler2D uCanvas; uniform float uCanvasK;   // a scanned linen canvas (its relief), tiled
 uniform vec4 uHeroS;         // 一粒光 on the screen (0…1), how bright
 out vec4 o;
 ` + COMMON + `
@@ -272,6 +297,11 @@ void main(){
   // the canvas under the paint: its weave shows through a little
   vec2 g = gl_FragCoord.xy / uRes.y * 420.0;
   float weave = 0.5 + 0.25 * sin(g.x * 3.14159) * sin(g.y * 3.14159) + 0.25 * vnoise(g * 0.5);
+  if (uCanvasK > 0.0){
+    vec2 cu = gl_FragCoord.xy / uRes.y * 1.15;
+    float rel = texture(uCanvas, cu).r - textureLod(uCanvas, cu, 4.0).r;
+    weave = mix(weave, 0.5 + rel * 3.2, uCanvasK);
+  }
   c *= 0.95 + 0.07 * weave;
   // 一粒光: the first light on the water, skimming; a glitter of reflection under it
   {
@@ -353,7 +383,7 @@ W.pond = {
     const P = this.pads, buds = [];
     for (let i = 0; i < NPAD; i++) if (P[i * 4 + 2] > 0 && P[i * 4 + 3] > 0.72) buds.push(i);
     const pick = buds.filter(i => P[i * 4] > 0.35 && P[i * 4] < 1.75 && P[i * 4 + 1] < 0.66).sort((a, b) => P[b * 4 + 1] - P[a * 4 + 1]);
-    const way = [[1.0, 0.86], [1.0, 0.70], [1.0, 0.52]];
+    const way = [[1.0, 0.83], [1.0, 0.70], [1.0, 0.52]];
     let x = 1.0;
     for (const i of pick) { const px = P[i * 4], py = P[i * 4 + 1]; if (Math.abs(px - x) < 0.6) { way.push([px, py + P[i * 4 + 2] * 0.12]); x = px; } if (way.length > 7) break; }
     way.push([this.dewPad[0] + 0.004, this.dewPad[1] + this.dewPad[2] * 0.12]);
@@ -415,7 +445,7 @@ W.pond = {
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
     this.targets(w, h);
     const t = this.t, H = this.hero, br = 1 + 0.07 * Math.sin(t * 2.1) + 0.03 * Math.sin(t * 5.3);
-    const sun = [1.0, 0.86, 1.0, 1.0];
+    const sun = [1.0, 0.83, 1.0, 1.0];
     // 1) the underpainting
     const B = this.base;
     gl.bindFramebuffer(gl.FRAMEBUFFER, B.fb); gl.viewport(0, 0, B.w, B.h);
@@ -430,6 +460,8 @@ W.pond = {
     gl.uniform4fv(this.pBase.u.uFly, this.flies());
     const fa = this.frogAt(); U(this.pBase, 'uFrog', [fa[0], fa[1], this.frogK || 0, this.frogIn && (this.frogK || 0) >= 1 ? 0 : 1]);
     const gp = ((t + 3) % 7.5) / 7.5; U(this.pBase, 'uGust', [-0.3 + 2.8 * gp + (this.pan || 0), Math.sin(Math.PI * gp) * 0.9, 0, 0]);
+    const st = YL.assetTex && YL.assetTex('pond_study');
+    U(this.pBase, 'uImgK', st ? 1 : 0); if (st) YL.bindTex(this.pBase, 'uImg', st, 2);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3);
     for (const tx of B.texs) { gl.bindTexture(gl.TEXTURE_2D, tx.t); gl.generateMipmap(gl.TEXTURE_2D); }
     // 2) the ground, then the strokes over it, big ones first
@@ -461,6 +493,8 @@ W.pond = {
     U(this.pFinal, 'uDew', [dx, dy, 0.0045 + 0.002 * this.dew, this.dew * br]);
     U(this.pFinal, 'uHeroS', [dx, H.p[1], (1 - this.dew) * br * (0.4 + 0.6 * this.reveal), 0]);
     YL.bindTex(this.pFinal, 'uA', Cv.tex, 0);
+    const cv = YL.paperTex && YL.paperTex('paper_canvas');
+    U(this.pFinal, 'uCanvasK', cv ? 1 : 0); if (cv) YL.bindTex(this.pFinal, 'uCanvas', cv, 1);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: morning birds, a breath of wind in the willow, now and then a drop into the water */

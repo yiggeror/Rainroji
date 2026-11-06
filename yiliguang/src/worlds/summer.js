@@ -18,7 +18,9 @@
 const YL = window.YL;
 const W = (YL.worlds = YL.worlds || {});
 
-const TOWER = [-0.30, 0.36];        // the great cumulus: azimuth, and the elevation the light flies up into
+const TOWER = [-0.30, 0.36];
+const LAND_FOOT = -0.040, LAND_HALF = 0.85;   // the painted land's lowest edge (behind the near grass), half the azimuth it spans
+const TREE_BOX = [0.530, 0.716, 0.44, 0.98];   // the camphor's crown in the strip (u0, u1, v where the crown starts, its top)        // the great cumulus: azimuth, and the elevation the light flies up into
 const SUN = (() => { const az = -0.75, el = 0.62; return [Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)]; })();
 
 const HEAD = `#version 300 es
@@ -51,6 +53,13 @@ uniform float uGust;          // phase of the travelling gust bands
 uniform int uMode;            // 0: the camera's view; 1: an equirect panorama seen from the room's window (for its drops)
 uniform vec3 uEq;             // (azimuth range, elevation min, elevation max) of that panorama
 uniform vec3 uEye;            // where the eye is over the field (it travels)
+// the painted sky (sky and clouds, 3072 × 1024, mapped by azimuth and elevation) and the painted far land (a transparent
+// strip of mountains, the green rise and its camphor tree), each faded in once its picture is decoded
+uniform sampler2D uSkyImg, uLandImg;
+uniform float uSkyK, uLandK;
+uniform vec4 uLandMap;        // the land strip: half its azimuth range, the elevation of its foot, of its top; -
+uniform vec4 uTreeBox;        // the tree in the strip (u0, u1, v0 of its crown, v1 of its top): its crown tosses in the wind
+const float SKY_AZ = 1.0, SKY_EL0 = -0.03, SKY_EL1 = 0.637;     // half the azimuth the sky picture spans; its foot and top
 out vec4 o;
 // a cloud's shadow on the field (shared with the grass): big soft-edged patches sailing downwind at a few m/s
 float cloudShade(vec2 p, float t){ return smoothstep(0.50, 0.60, fbm3(p * 0.012 + vec2(t * 0.040, t * 0.012))); }
@@ -146,8 +155,22 @@ void main(){
   float az = atan(rd.x, -rd.z), el = asin(clamp(rd.y, -1.0, 1.0));
   vec3 col = skyCol(el, az);
   float aaE = max(fwidth(el), 1e-4) * 1.2;                         // (derivatives taken here, in uniform control flow)
+  if (uSkyK > 0.0){
+    // the painted sky drifts very slowly downwind; its clouds boil a little (a slow flow through the picture, stronger in the
+    // billows than in the open blue)
+    vec2 su = vec2((az + 0.0011 * uTime) / (2.0 * SKY_AZ) + 0.5, (el - SKY_EL0) / (SKY_EL1 - SKY_EL0));
+    vec2 fl = vec2(fbm3(su * vec2(14.0, 4.6) + vec2(uTime * 0.035, 0.0)), fbm3(su * vec2(14.0, 4.6) + vec2(5.2, -uTime * 0.03))) - 0.5;
+    vec3 sk0 = textureLod(uSkyImg, clamp(su, vec2(0.0), vec2(1.0)), 0.0).rgb;
+    float cl = smoothstep(0.55, 0.85, dot(sk0, vec3(0.3, 0.4, 0.3)) - 0.6 * (sk0.b - sk0.r) + 0.35);     // white, unsaturated: cloud
+    vec2 sw = su + fl * vec2(0.0030, 0.0075) * (0.35 + 0.65 * cl);
+    vec3 sk = texture(uSkyImg, clamp(sw, vec2(0.0), vec2(1.0))).rgb;
+    // in the billows the light shifts a little as they turn (a slow breathing of their sunlit tops)
+    sk *= 1.0 + 0.035 * cl * (fbm3(su * vec2(30.0, 10.0) + uTime * 0.06) - 0.5);
+    float inside = smoothstep(0.0, 0.04, su.x) * smoothstep(1.0, 0.96, su.x) * smoothstep(1.02, 0.96, su.y);
+    col = mix(col, sk, uSkyK * inside);
+  }
   // ---- clouds, far to near; each only inside its own bounds
-  if (el > 0.0){
+  if (el > 0.0 && uSkyK < 1.0){
     vec2 q0 = vec2(az, el);
     vec2 rag = (vec2(fbm3(q0 * 34.0), fbm3(q0 * 34.0 + 7.0)) - 0.5) * 0.008 + (vec2(vnoise(q0 * 150.0), vnoise(q0 * 150.0 + 3.0)) - 0.5) * 0.002;
     for (int ci = 0; ci < 6; ci++){
@@ -157,11 +180,12 @@ void main(){
       vec4 B = uCBox[ci];
       if (q.x < B.x || q.x > B.y || q.y < B.z || q.y > B.w) continue;
       vec4 cl = cloud(q, q + rag, int(C.z), uCCount[ci], C, B, aaE);
-      col = mix(col, cl.rgb, cl.a);
+      col = mix(col, cl.rgb, cl.a * (1.0 - uSkyK));
     }
   }
   // ---- three mountain ranges: the farthest palest and highest, nearer ones darker and lower
   for (int m = 0; m < 3; m++){
+    if (uLandK >= 1.0) break;
     float fm = float(m);
     float fq = 1.3 + fm * 1.1;
     float rg = ridge(az * fq + 2.0 + fm, 11.0 + fm * 7.0);
@@ -177,14 +201,15 @@ void main(){
   }
   // ---- the near hill: a long green rise with a lone camphor tree on its crest
   float hill = 0.004 + 0.020 * smoothstep(-1.0, 0.3, az) * smoothstep(1.2, 0.3, az) + 0.003 * sin(az * 6.0 + 1.0) + 0.002 * fbm3(vec2(az * 9.0, 1.0));
-  float onHill = smoothstep(aaE, -aaE, el - hill);
+  if (uLandK >= 1.0) hill = 0.0;
+  float onHill = uLandK >= 1.0 ? 0.0 : smoothstep(aaE, -aaE, el - hill);
   if (onHill > 0.0){
     float below = hill - el;
     vec3 g = mix(vec3(0.58, 0.76, 0.28), vec3(0.32, 0.56, 0.22), smoothstep(0.0, 0.04, below));
     g *= 0.94 + 0.07 * sin(az * 140.0 + below * 380.0 + vnoise(vec2(az * 30.0, below * 80.0)) * 3.0);
     col = mix(col, mix(g, SKY_H, 0.12), onHill);
   }
-  {
+  if (uLandK < 1.0) {
     // the tree: a dark trunk, a crown of round clumps lit from the left; its shadow pools on the slope to the right
     vec2 tq = vec2(az - 0.26, el - 0.021);
     tq.x -= (0.0012 * sin(uTime * 1.1) + 0.0007 * sin(uTime * 2.3 + 1.0)) * smoothstep(0.02, 0.06, tq.y);   // the crown tossing in the wind
@@ -228,6 +253,21 @@ void main(){
     g = mix(g, SKY_H * 0.96, sat(tg / 700.0) * 0.5);
     col = mix(col, g, (el < 0.0 ? 1.0 : 0.0) * (1.0 - onHill * step(0.0, el)));
     if (el < 0.0 && onHill > 0.0 && tg > 300.0) col = mix(col, g, 0.0);
+  }
+  if (uLandK > 0.0){
+    // the painted far land: mountains, the green rise, the camphor tree. Its foot sinks into the field (the strip's lowest
+    // part fades out); the crown of the tree tosses; cloud shadows sail over it all
+    vec2 lu = vec2(az / (2.0 * uLandMap.x) + 0.5, (el - uLandMap.y) / (uLandMap.z - uLandMap.y));
+    vec4 TB = uTreeBox;
+    float inTree = smoothstep(TB.x - 0.004, TB.x + 0.006, lu.x) * smoothstep(TB.y + 0.004, TB.y - 0.006, lu.x) * smoothstep(TB.z, TB.w, lu.y);
+    float gustT = 0.6 + 0.4 * sin(uGust * 0.9);
+    lu.x += inTree * gustT * (0.0019 * sin(uTime * 1.1) + 0.0009 * sin(uTime * 2.3 + 1.0) + 0.0005 * sin(uTime * 4.1 + lu.y * 40.0));
+    lu.x = 1.0 - abs(1.0 - mod(lu.x, 2.0));                          // past its ends it goes on mirrored (mountains and hedges)
+    vec4 L = texture(uLandImg, clamp(lu, vec2(0.0), vec2(1.0)));
+    L.a *= step(lu.y, 1.0) * smoothstep(0.0, 0.10, lu.y);
+    vec2 gp = uEye.xz + normalize(vec2(rd.x, rd.z) + 1e-5) * mix(260.0, 1400.0, sat(lu.y * 1.6));
+    L.rgb *= 1.0 - 0.22 * cloudShade(gp * 0.6, uTime) * (1.0 - 0.6 * sat(lu.y * 1.6));
+    col = mix(col, L.rgb, L.a * uLandK);
   }
   col *= 0.985 + 0.03 * hash12(floor(gl_FragCoord.xy * 0.5));     // the paper's tooth
   o = vec4(col, 1.0);
@@ -312,6 +352,10 @@ void main(){
   vec3 c = mix(shade, lit, l);
   c = mix(c, tip, smoothstep(0.78, 0.86, vT + vC.z * 0.25) * 0.8);
   c = mix(c, vec3(0.72, 0.86, 0.45), vC.z * 0.45 * smoothstep(0.3, 0.9, vT));      // laid over by the wind: pale backs
+  // the painter's patches: cooler blue-green and warmer yellow-green stretches of the field, a few drier, ochre-tipped
+  float pv = fbm3(vWP.xz * 0.16), pw = fbm3(vWP.xz * 0.05 + 7.0);
+  c *= mix(vec3(0.92, 0.98, 1.07), vec3(1.07, 1.02, 0.88), smoothstep(0.35, 0.68, pv));
+  c = mix(c, c * vec3(1.12, 1.0, 0.78) + vec3(0.05, 0.035, 0.0), smoothstep(0.62, 0.80, pw) * 0.55 * smoothstep(0.3, 0.9, vT));
   c = mix(c, mix(shade, vec3(0.20, 0.38, 0.30), 0.5), vShadow * 0.7);   // under a cloud's shadow
   float hd = length(vWP - uHP);
   c = mix(c, c * 1.15 + vec3(0.22, 0.16, 0.02), (1.0 - smoothstep(0.85, 0.9, hd)) * 0.55 * uHOn);
@@ -845,6 +889,17 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     const ty = Math.tan(vfov * Math.PI / 360);
     return { eye, fwd, right, up, tan: [ty * aspect, ty] };
   },
+  // the painted sky and land (generated pictures, see assets/prompts/su_*): bound once they are decoded
+  paintedUniforms() {
+    const U = YL.U, sky = YL.assetTex && YL.assetTex('summer_sky'), land = YL.assetTex && YL.assetTex('summer_land');
+    U(this.pBg, 'uSkyK', sky ? 1 : 0); if (sky) YL.bindTex(this.pBg, 'uSkyImg', sky, 0);
+    U(this.pBg, 'uLandK', land ? 1 : 0);
+    if (land) {
+      YL.bindTex(this.pBg, 'uLandImg', land, 1);
+      const half = LAND_HALF, h = 2 * half * land.h / land.w;     // (square pixels: its height follows from its width)
+      U(this.pBg, 'uLandMap', [half, LAND_FOOT, LAND_FOOT + h, 0]); U(this.pBg, 'uTreeBox', TREE_BOX);
+    }
+  },
   // the summer sky and field as the room's window would see them, for the drops' inverted images
   renderEquirect(target) {
     const gl = YL.gl, U = YL.U, S = YL.S;
@@ -853,6 +908,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     U(this.pBg, 'uRes', [target.w, target.h]); U(this.pBg, 'uMode', YL.I(1)); U(this.pBg, 'uEq', [S.AZM, S.ELMIN, S.ELMAX]);
     U(this.pBg, 'uFwd', [0, 0, -1]); U(this.pBg, 'uRight', [1, 0, 0]); U(this.pBg, 'uUp', [0, 1, 0]); U(this.pBg, 'uTan', [1, 1]);
     U(this.pBg, 'uTime', this.t); U(this.pBg, 'uSun', SUN); U(this.pBg, 'uWind', [1.6, -0.6]); U(this.pBg, 'uGust', this.gust); U(this.pBg, 'uEye', [0, 0.85, 0]);
+    this.paintedUniforms();
     gl.uniform4fv(this.pBg.u.uLobes, new Float32Array(this.cl.lobes.flat().concat(new Array((112 - this.cl.lobes.length) * 4).fill(0))));
     gl.uniform4fv(this.pBg.u.uClouds, new Float32Array(this.cl.clouds.flat()));
     gl.uniform4fv(this.pBg.u.uCBox, new Float32Array(this.cl.boxes.flat()));
@@ -883,6 +939,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     U(this.pBg, 'uRes', [w, h]); U(this.pBg, 'uFwd', cam.fwd); U(this.pBg, 'uRight', cam.right); U(this.pBg, 'uUp', cam.up); U(this.pBg, 'uTan', cam.tan);
     const wk = 1 - 0.85 * (this.calm || 0), wind = [1.6 * wk, -0.6 * wk];
     U(this.pBg, 'uTime', this.t); U(this.pBg, 'uSun', SUN); U(this.pBg, 'uWind', wind); U(this.pBg, 'uGust', this.gust); U(this.pBg, 'uMode', YL.I(0)); U(this.pBg, 'uEye', cam.eye);
+    this.paintedUniforms();
     gl.uniform4fv(this.pBg.u.uLobes, new Float32Array(this.cl.lobes.flat().concat(new Array((112 - this.cl.lobes.length) * 4).fill(0))));
     gl.uniform4fv(this.pBg.u.uClouds, new Float32Array(this.cl.clouds.flat()));
     gl.uniform4fv(this.pBg.u.uCBox, new Float32Array(this.cl.boxes.flat()));

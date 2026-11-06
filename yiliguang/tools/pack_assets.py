@@ -1,6 +1,6 @@
 """Pack the generated pictures for the new worlds into the page as data URIs.
 usage: python3 tools/pack_assets.py <dir with the generated PNGs>
-Writes src/assets/conte.js, src/assets/stop.js and src/assets/paper.js. Each layer is cropped to what it covers (transparent ones), split where
+Writes src/assets/conte.js, stop.js, paper.js, summer.js, pond.js, village.js and piying.js. Each layer is cropped to what it covers (transparent ones), split where
 one picture holds several separate things, and stored as JPEG (opaque, grey or colour) or WebP (with transparency)."""
 import base64, io, json, os, sys
 from PIL import Image
@@ -15,10 +15,16 @@ def crop_alpha(im, pad=8, thr=8):
     x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(im.width, x1 + pad), min(im.height, y1 + pad)
     return im.crop((x0, y0, x1, y1)), (x0, y0)
 
-def split_columns(im, n, thr=8):
-    """split a transparent picture into its n separate things, left to right, at the widest empty gaps"""
+def split_columns(im, n, thr=8, count=1):
+    """split a transparent picture into its n separate things, left to right, at the widest empty gaps
+    (a column is empty when fewer than `count` of its pixels are more opaque than `thr`)"""
     a = im.getchannel('A')
-    cols = [max(a.crop((x, 0, x + 1, im.height)).getextrema()[1], 0) > thr for x in range(im.width)]
+    if count > 1:
+        import numpy as np
+        occ = (np.asarray(a) > thr).sum(0)
+        cols = [bool(c >= count) for c in occ]
+    else:
+        cols = [max(a.crop((x, 0, x + 1, im.height)).getextrema()[1], 0) > thr for x in range(im.width)]
     runs, start = [], None
     for x, c in enumerate(cols + [False]):
         if c and start is None: start = x
@@ -27,6 +33,34 @@ def split_columns(im, n, thr=8):
         gaps = [runs[i + 1][0] - runs[i][1] for i in range(len(runs) - 1)]
         i = gaps.index(min(gaps)); runs[i] = [runs[i][0], runs[i + 1][1]]; del runs[i + 1]
     return [crop_alpha(im.crop((x0, 0, x1, im.height)))[0] for x0, x1 in runs]
+
+def split_components(im, n, thr=40, f=4):
+    """split a transparent picture into its n largest separate things (connected regions of its alpha, found on a 1/f grid),
+    left to right; each comes out cropped, with everything that belongs to the others made transparent"""
+    import numpy as np
+    from collections import deque
+    A = np.asarray(im.getchannel('A'))
+    H, W = A.shape[0] // f, A.shape[1] // f
+    g = A[:H * f, :W * f].reshape(H, f, W, f).max(axis=(1, 3)) > thr
+    lab = np.zeros((H, W), int); k = 0; sizes = {}
+    for y0 in range(H):
+        for x0 in range(W):
+            if not g[y0, x0] or lab[y0, x0]: continue
+            k += 1; q = deque([(y0, x0)]); lab[y0, x0] = k; c = 0
+            while q:
+                y, x = q.popleft(); c += 1
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < H and 0 <= xx < W and g[yy, xx] and not lab[yy, xx]: lab[yy, xx] = k; q.append((yy, xx))
+            sizes[k] = c
+    keep = sorted(sorted(sizes, key=lambda i: -sizes[i])[:n], key=lambda i: np.where(lab == i)[1].mean())
+    out = []
+    for i in keep:
+        m = np.repeat(np.repeat(lab == i, f, 0), f, 1)
+        full = np.zeros(A.shape, bool); full[:H * f, :W * f] = m
+        px = np.array(im.convert('RGBA')); px[..., 3] = np.where(full, px[..., 3], 0)
+        out.append(crop_alpha(Image.fromarray(px, 'RGBA'))[0])
+    return out
 
 def uri(im, kind, q):
     b = io.BytesIO()
@@ -82,3 +116,29 @@ for n, key in [('tx_watercolor', 'paper_watercolor'), ('tx_washi', 'paper_washi'
     im = im.crop((c - 768, c - 768, c + 768, c + 768)).resize((1024, 1024), Image.LANCZOS)
     items[key] = (uri(im, 'jpeg', 90), im.size)
 write('paper', items)
+# ---- the summer sky (opaque, painted) and its far land (transparent strip); the pond's painted study
+items = {}
+sky = L('su_sky').convert('RGB'); items['summer_sky'] = (uri(sky, 'jpeg', 88), sky.size)
+if os.path.exists(os.path.join(SRC, 'su_land.png')):
+    land = L('su_land').convert('RGBA')
+    a = land.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
+    land = land.crop((0, max(0, bb[1] - 8), land.width, land.height))      # keep the full width (it is mapped by azimuth)
+    items['summer_land'] = (uri(land, 'webp', 88), land.size)
+write('summer', items)
+items = {}
+st = L('po_base').convert('RGB').resize((1344, 614), Image.LANCZOS); items['pond_study'] = (uri(st, 'jpeg', 88), st.size)
+write('pond', items)
+# ---- the snowy night's sky and ranges, printed (shin-hanga): opaque
+items = {}
+vs = L('vl_sky').convert('RGB'); items['village_sky'] = (uri(vs, 'jpeg', 88), vs.size)
+write('village', items)
+# ---- carved and dyed hide for the lantern's shadow play: scenery pieces and the dragon's three segments (with alpha)
+items = {}
+for i, im in enumerate(split_components(L('sh_set').convert('RGBA'), 5)):
+    im = scale(im, h=640); items['pi_' + ['pagoda', 'willow', 'pine', 'boat', 'lotus'][i]] = (uri(im, 'webp', 88), im.size)
+for i, im in enumerate(split_components(L('sh_dragon').convert('RGBA'), 3)):
+    im = scale(im, h=640); items['pi_' + ['dhead', 'dbody', 'dtail'][i]] = (uri(im, 'webp', 88), im.size)
+for n in ['wall', 'bridge', 'clouds', 'mountains']:
+    im, _ = crop_alpha(L('sh_' + n).convert('RGBA')); im = scale(im, w=1280)
+    items['pi_' + n] = (uri(im, 'webp', 88), im.size)
+write('piying', items)

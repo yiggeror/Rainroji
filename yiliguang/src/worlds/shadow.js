@@ -457,6 +457,36 @@ const PUPPETS = (() => {
   return { draw, CELLS, PART };
 })();
 YL.PUPPETS = PUPPETS;                            // (for looking at the atlas on its own)
+/* ---- the generated pieces (assets/prompts/sh_*): carved and dyed hide, each laid over the drawn piece it replaces, fitted
+   into that piece's own box, so its pivots and joints stay where the figures expect them. b: standing on its foot;
+   c: centred; x: exactly as long (a dragon's segments are pinned at both ends) */
+const GEN = { pagoda: 'b', willow: 'b', pine: 'b', lotus: 'b', wall: 'b', bridge: 'b', mountains: 'b', boat: 'c', clouds: 'c', dhead: 'x', dbody: 'x', dtail: 'x' };
+function overlayGenerated(ctx) {
+  let n = 0;
+  for (const [name, mode] of Object.entries(GEN)) {
+    const im = YL.img && YL.img('pi_' + name);
+    if (!im || !im.complete || !im.naturalWidth) continue;
+    const [cx, cy, wd = 1] = PUPPETS.CELLS[name];
+    const X = cx * 512, Y = cy * 512, Wc = 512 * wd, Hc = 512;
+    const d = ctx.getImageData(X, Y, Wc, Hc).data;
+    let x0 = Wc, y0 = Hc, x1 = -1, y1 = -1;
+    for (let y = 0; y < Hc; y++) for (let x = 0; x < Wc; x++) {
+      const i = (y * Wc + x) * 4;
+      if (d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 < 0) continue;
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, iw = im.naturalWidth, ih = im.naturalHeight;
+    let w, h, x, y;
+    if (mode === 'x') { w = bw; h = bw * ih / iw; x = x0; y = (y0 + y1) / 2 - h / 2; }
+    else { const k = Math.min(bw / iw, bh / ih); w = iw * k; h = ih * k; x = x0 + (bw - w) / 2; y = mode === 'b' ? y1 + 1 - h : y0 + (bh - h) / 2; }
+    ctx.save(); ctx.beginPath(); ctx.rect(X, Y, Wc, Hc); ctx.clip();
+    ctx.fillStyle = '#fff'; ctx.fillRect(X, Y, Wc, Hc);
+    ctx.drawImage(im, X + x, Y + y, w, h);
+    ctx.restore();
+    n++;
+  }
+  return n;
+}
 
 /* ---------------------------------------------------------------- the lantern, lit from inside */
 const NP = 136;                                  // most pieces of hide in sight at once (in front, and on the far side)
@@ -671,9 +701,20 @@ W.shadow = {
     const gl = YL.gl;
     this.p = YL.makeProgram('shadow', VS_FULL, FS); YL.checkProgram(this.p);
     // the hide, cut and dyed
-    const cv = document.createElement('canvas'); cv.width = 4096; cv.height = 2048;
-    PUPPETS.draw(cv.getContext('2d'));
     this.atlas = gl.createTexture();
+    this.buildAtlas();
+    this.empty = gl.createVertexArray();
+    if (!this.inited && YL.QS.has('wt')) this.t = +YL.QS.get('wt');
+    this.inited = true;
+    this.ready = true;
+  },
+  // the atlas: the drawn pieces, then the generated ones over them (again once they are decoded, if they were not yet)
+  buildAtlas() {
+    const gl = YL.gl, cv = document.createElement('canvas'); cv.width = 4096; cv.height = 2048;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    PUPPETS.draw(ctx);
+    this.genN = overlayGenerated(ctx);
+    this.atlasFull = !!YL.assetsLoaded;
     gl.bindTexture(gl.TEXTURE_2D, this.atlas);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, cv);
@@ -682,10 +723,6 @@ W.shadow = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    this.empty = gl.createVertexArray();
-    if (!this.inited && YL.QS.has('wt')) this.t = +YL.QS.get('wt');
-    this.inited = true;
-    this.ready = true;
   },
   hero: { on: false, sway: [0, 0], v: [0, 0], aim: null },
   // the wheels stand still until the flame has caught; its heat sets them turning (and as it dies they slow)
@@ -904,6 +941,7 @@ W.shadow = {
     this.sound(dt);
   },
   render(target, aspect) {
+    if (!this.atlasFull && YL.assetsLoaded) this.buildAtlas();      // (the generated pieces came after the first drawing)
     const gl = YL.gl, U = YL.U, p = this.p;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
