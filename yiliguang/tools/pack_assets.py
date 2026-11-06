@@ -1,6 +1,6 @@
 """Pack the generated pictures for the new worlds into the page as data URIs.
 usage: python3 tools/pack_assets.py <dir with the generated PNGs>
-Writes src/assets/conte.js and src/assets/stop.js. Each layer is cropped to what it covers (transparent ones), split where
+Writes src/assets/conte.js, src/assets/stop.js and src/assets/paper.js. Each layer is cropped to what it covers (transparent ones), split where
 one picture holds several separate things, and stored as JPEG (opaque, grey or colour) or WebP (with transparency)."""
 import base64, io, json, os, sys
 from PIL import Image
@@ -74,3 +74,11 @@ for n in ['sm_wave_back', 'sm_wave_mid', 'sm_wave_front']:
     im = im.crop((0, max(0, bb[1] - 8), im.width, im.height)); im = scale(im, w=2560)
     items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
 write('stop', items)
+# ---- papers and a canvas for the older worlds (watercolour paper for the sea, washi for the print, xuan for the ink,
+# linen for the Kandinsky): the middle of each scan, grey, 1024 square; the shaders tile it (mirrored) and take its relief
+items = {}
+for n, key in [('tx_watercolor', 'paper_watercolor'), ('tx_washi', 'paper_washi'), ('tx_xuan', 'paper_xuan'), ('tx_canvas', 'paper_canvas')]:
+    im = L(n).convert('L'); c = im.width // 2
+    im = im.crop((c - 768, c - 768, c + 768, c + 768)).resize((1024, 1024), Image.LANCZOS)
+    items[key] = (uri(im, 'jpeg', 90), im.size)
+write('paper', items)

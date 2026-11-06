@@ -856,6 +856,7 @@ void main(){
 
 /* ---------------------------------------------------------------- pass 2: the printing */
 const FS_PRINT = HEAD + `
+uniform sampler2D uWashi;          // a scan of kozo washi: its long fibres, its cloudy pulp
 uniform sampler2D uA, uD;
 uniform vec4 uHeroS;          // the light on screen: x, y (px), depth along the view, size (px)
 uniform float uHeroB;         // its brightness
@@ -886,6 +887,9 @@ void main(){
   vec2 bo = vec2(hash11(uBoil), hash11(uBoil + 7.0)) * 3.0;           // each printing lands a little differently
   float fib = smoothstep(0.62, 0.9, vnoise(vec2(p.x * 40.0 + p.y * 9.0, p.y * 300.0))) * 0.5 + smoothstep(0.7, 0.95, vnoise(vec2(p.x * 300.0, p.y * 30.0 + p.x * 5.0))) * 0.5;
   float tooth = vnoise(frag * 0.7 + bo) * 0.6 + vnoise(frag * 1.9) * 0.4;
+  vec2 wu = frag / 1100.0;
+  float ws = texture(uWashi, wu).r, wsb = textureLod(uWashi, wu, 5.0).r;
+  fib = max(fib * 0.45, smoothstep(0.012, 0.08, ws - wsb));
   float dark = 1.0 - dot(c, vec3(0.3, 0.5, 0.2));
   float isSky = step(id, 0.5);
   float grain = vnoise(vec2(p.x * 1.8 + 2.0 * fbm3(p * vec2(0.8, 5.0)), p.y * 150.0));
@@ -896,7 +900,8 @@ void main(){
   vec3 c0 = c;
   c *= 1.0 + dark * ((0.05 + 0.10 * isSky) * (grain - 0.5) + 0.06 * (mottle - 0.5));
   c = mix(c, c * 0.93, smoothstep(0.55, 0.8, tooth) * dark);
-  c = mix(c, vec3(0.97, 0.96, 0.92), fib * 0.08 * (1.0 - dark * 0.6));
+  c = mix(c, vec3(0.97, 0.96, 0.92), fib * 0.10 * (1.0 - dark * 0.6));
+  c *= 1.0 + 0.10 * (wsb - 0.62) * (1.0 - dark * 0.5);            // (the pulp is a little cloudy: thicker and thinner)
   c = mix(c0, c, pr);
   // asleep: until the light comes, the sheet carries only the key block, black lines on bare paper (a proof, not yet
   // coloured); the colour blocks go on from where the light went in, outward
@@ -1093,6 +1098,7 @@ W.village = {
     const a = this.project([SCR.c[0] - SCR.hw, SCR.c[1] - SCR.hh, SCR.c[2]], w / h), b = this.project([SCR.c[0] + SCR.hw, SCR.c[1] + SCR.hh, SCR.c[2]], w / h);
     U(this.pP, 'uScrRect', [(a[0] * 0.5 + 0.5) * w, (a[1] * 0.5 + 0.5) * h, (b[0] * 0.5 + 0.5) * w, (b[1] * 0.5 + 0.5) * h]);
     YL.bindTex(this.pP, 'uA', this.G.texs[0], 0); YL.bindTex(this.pP, 'uD', this.G.texs[1], 1);
+    YL.bindTex(this.pP, 'uWashi', YL.paperTex('paper_washi') || this.black, 2);
     gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: wind over the snow, the crowd murmuring in the square, a distant temple bell; a little chime as each

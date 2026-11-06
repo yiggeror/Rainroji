@@ -35,6 +35,7 @@ uniform vec4 uEg[4];         // egrets rising from the reeds: where, the beat of
 uniform vec3 uGeese;         // a skein of geese crossing the sky: where its leader is, on/off
 const float SL = 5.6;
 uniform sampler2D uSeal;
+uniform sampler2D uXuan;           // a scan of xuan paper (it moves with the scroll)
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -264,10 +265,12 @@ void main(){
   }
   // ---- paper and ink
   vec2 pp = gl_FragCoord.xy / uRes.y;
-  float fib = 0.97 + 0.03 * vnoise(pp * vec2(900.0, 120.0)) - 0.025 * smoothstep(0.85, 1.0, vnoise(pp * vec2(80.0, 1500.0)));
-  vec3 paper = vec3(0.925, 0.900, 0.845) * fib * (0.97 + 0.04 * fbm(pp * 3.0));
+  vec2 xu = p * 0.72;
+  float xs = texture(uXuan, xu).r, xb = textureLod(uXuan, xu, 5.0).r, rel = xs - xb;
+  float fib = 0.975 + 0.9 * rel - 0.02 * smoothstep(0.85, 1.0, vnoise(pp * vec2(80.0, 1500.0)));
+  vec3 paper = vec3(0.925, 0.900, 0.845) * fib * (0.97 + 0.04 * fbm(p * 3.0)) * (0.98 + 0.08 * (xb - 0.75));
   vec3 inkC = vec3(0.075, 0.070, 0.068);
-  float gran = 0.92 + 0.16 * vnoise(pp * 520.0);
+  float gran = 0.92 + 0.12 * vnoise(pp * 520.0) - 1.4 * rel;            // (the ink settles between the fibres, not on them)
   vec3 c = mix(paper, inkC, sat(D * gran));
   // ---- dawn: colour seeps into it — rose along the sky, a green-blue into the water and the hills
   if (uDawn > 0.0){
@@ -456,6 +459,7 @@ W.ink = {
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.washT); gl.uniform1i(p.u.uWash, 3);
     gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.ts); gl.uniform1i(p.u.uTS, 4);
     gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.tw); gl.uniform1i(p.u.uTW, 5);
+    { const xt = YL.paperTex('paper_xuan'); gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, xt || null); gl.uniform1i(p.u.uXuan, 6); }
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: rain on water, the lap of it; the waterfall as it comes into view; a guqin (古琴) plucked now and then, its notes sliding */

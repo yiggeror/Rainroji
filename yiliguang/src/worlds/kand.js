@@ -20,6 +20,7 @@ uniform float uTime, uFade, uBg, uAspect, uBeat;
 uniform vec4 uView;           // the eye: centre x, y (in the picture), zoom, how far into the crescent (0 … 1)
 uniform vec4 uHero;           // the light: x, y (picture), brightness, size
 uniform sampler2D uPond;      // the pond it is coming out of (for the first seconds)
+uniform sampler2D uCanvas;    // a scan of primed linen
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -67,7 +68,8 @@ void main(){
   float t = uTime;
   // ---- the canvas: warm, primed, its weave showing
   C = GROUND * (0.97 + 0.05 * fbm(p * 3.0));
-  float wv = sin(gl_FragCoord.x * 1.55) * sin(gl_FragCoord.y * 1.55);
+  vec2 cu = P * 1.1 + 0.5;
+  float wv = (texture(uCanvas, cu).r - textureLod(uCanvas, cu, 5.0).r) * 9.0;
   // ---- shapes, back to front
   // the lilac horizon, drawn out from the point both ways
   { float k = ap(0.6, 1.0); float d = abs(p.y - 0.024); float reach = k * 1.4; fillA(smoothstep(0.0030, 0.0012, d + rough()) * step(abs(p.x + 0.43), reach), LILAC); }
@@ -168,7 +170,7 @@ void main(){
   // ---- the light: the point it all comes from
   float hr = length(p - uHero.xy) * uView.z;
   C += vec3(1.0, 0.85, 0.45) * uHero.z * (exp(-hr * hr / (uHero.w * uHero.w * 0.08)) * 1.2 + 0.28 * exp(-hr / (uHero.w * 2.2)));
-  C *= 0.985 + 0.03 * wv * (1.0 - uBg);
+  C *= 1.0 + 0.045 * wv * (1.0 - uBg);
   vec2 uv = gl_FragCoord.xy / uRes - 0.5;
   C *= 1.0 - 0.12 * dot(uv, uv) * 1.6;
   C += (hash12(gl_FragCoord.xy + fract(t * 7.13) * 917.0) - 0.5) * 0.010;
@@ -215,6 +217,7 @@ W.kand = {
     U(p, 'uBg', this.pondTex ? this.bg : 0); U(p, 'uView', [v.x, v.y, v.z, v.bite]);
     U(p, 'uHero', [hp[0], hp[1], 1.0 + 0.08 * Math.sin(t * 2.88), 0.024]);
     if (this.pondTex) YL.bindTex(p, 'uPond', this.pondTex, 0); else { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(p.u.uPond, 0); }
+    { const ct = YL.paperTex('paper_canvas'); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ct || null); gl.uniform1i(p.u.uCanvas, 1); }
     gl.bindVertexArray(this.vao); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: each shape sounds as it appears, softly, under the music — Kandinsky heard colours: yellow high and

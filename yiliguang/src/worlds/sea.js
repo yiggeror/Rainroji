@@ -34,11 +34,11 @@ float sdSeg(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clam
 float sdEll(vec2 p, vec2 r){ float k = length(p / r); return (k - 1.0) * min(r.x, r.y); }
 float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
 float smax(float a, float b, float k){ return -smin(-a, -b, k); }
+uniform sampler2D uWC;             // a scan of cold-pressed watercolour paper
 float paperH(vec2 px){
-  float h = 0.55 * vnoise(px * 0.35) + 0.30 * vnoise(px * 0.9 + 3.1) + 0.15 * vnoise(px * 2.3 + 7.7);
-  float f = vnoise(vec2(px.x * 0.04 + px.y * 0.012, px.y * 0.6) + 11.0);
-  h += 0.10 * smoothstep(0.72, 0.9, f);
-  return h;
+  // its relief: the scan's light and dark, the large undulation taken out
+  vec2 u = px / 1000.0;
+  return 0.5 + 2.6 * (texture(uWC, u).r - textureLod(uWC, u, 5.5).r) + 0.08 * (vnoise(px * 0.9 + 3.1) - 0.5);
 }
 float wash(float d, float soft, float rim, float rimW){
   float cov = smoothstep(soft, -soft, d);
@@ -629,6 +629,7 @@ W.sea = {
     U(p, 'uWhale', this.whale); U(p, 'uWhaleB', this.whaleB);
     U(p, 'uSquid', this.squid); U(p, 'uSquidB', this.squidB);
     U(p, 'uInk', this.ink);
+    { const wc = YL.paperTex('paper_watercolor'); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, wc || null); gl.uniform1i(this.p.u.uWC, 7); }
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   toNdc(q, aspect) { return [(q[0] - this.cam[0]) / this.zoom / (aspect * 0.5), (q[1] - this.cam[1]) / this.zoom / 0.5]; },

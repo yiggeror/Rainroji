@@ -28,5 +28,11 @@ YL.assetTex = (k, mips = true) => {
   texs[k] = t; t.w = im.naturalWidth; t.h = im.naturalHeight;
   return t;
 };
+// a paper or canvas: tiled, mirrored at each repeat so it has no seams
+YL.paperTex = (k) => {
+  const t = YL.assetTex(k);
+  if (t && !t.mirror) { const gl = YL.gl; gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT); t.mirror = true; }
+  return t;
+};
 YL.dropAssetTextures = () => { for (const k in texs) delete texs[k]; };     // (a lost GL context)
 })();
