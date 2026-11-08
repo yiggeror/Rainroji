@@ -255,7 +255,13 @@ if want('ink'):
     items = {}
     for n, key in [('in_A', 'ink_a'), ('in_B', 'ink_b')]:
         im = ink_density(L(n)); items[key] = (uri(im, 'jpeg', 92), im.size)
-    write('ink', items)
+    # when each place on it is painted (see tools/ink_times.py): a PNG of times, and the brush's way
+    import subprocess, tempfile
+    tmp = tempfile.mkdtemp()
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ink_times.py'), SRC, tmp + '/t.png', tmp + '/t.json'], check=True)
+    b = open(tmp + '/t.png', 'rb').read(); tim = Image.open(tmp + '/t.png')
+    items['ink_time'] = ('data:image/png;base64,' + base64.b64encode(b).decode(), tim.size)
+    write('ink', items, extra='window.YL.INK_TIME = ' + open(tmp + '/t.json').read() + ';')
 # ---- the sea's water, painted in watercolour from just under the surface down into the deep (opaque, tall)
 if want('sea'):
     items = {}

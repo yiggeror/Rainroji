@@ -601,7 +601,7 @@ const D = YL.director = {
       if (D.pt > T_DAWN) {
         const pond = YL.worlds.pond; if (!pond.ready) pond.init();
         const aspect = YL.canvasAspect(), H = ink.sunP || ink.hero.p;                // (the pond's light is the spark that became the sun)
-        const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (ink.pan ? ink.pan[0] : 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
+        const [nx, ny] = ink.toNdc(H, aspect);
         pond.arrive(...pond.toPaint(nx, ny, aspect)); pond.reveal = 0; pond.dew = 0; pond.drop = 0; pond.white = 0; pond.vol = 0;
         pond.burstAt = pond.hero.p.slice();                                      // (the colour bursts out from the light, now the sun)
         D.go('burst');
@@ -1205,7 +1205,7 @@ if (QS.get('phase')) {
         if (ph === 'deepsea' || ph === 'rise') { D.world = 'deepsea'; D.jump = null; D.go(ph); D.pt = pt; D.seaJump = true; }
         if (ph === 'shadow' || ph === 'snuff' || ph === 'drop') { D.world = 'shadow'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.shadow.t = 1 + pt + (ph === 'drop' ? 12 : 0); }
         if (ph === 'burst' || ph === 'pond' || ph === 'dew') { D.world = ph === 'burst' ? 'ink' : 'pond'; D.jump = null; D.go(ph); D.pt = pt; YL.worlds.ink.dawn = 1; }
-        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; if (ph === 'inkbloom') k.arrive(0.9, 0.5); }
+        if (ph === 'inkbloom' || ph === 'ink' || ph === 'dawn') { D.world = 'ink'; D.jump = null; D.go(ph); D.pt = pt; const k = YL.worlds.ink; k.bloom = ph === 'inkbloom' ? 1 : 0; k.grow = ph === 'inkbloom' ? [0, 0, 0, 0] : [1, 1, 1, 1]; if (ph === 'inkbloom') { k.arrive(0.9, 0.5); k.t0 = k.t - pt; } }
         if (ph === 'surface') { D.jump = null; YL.roomVol = 1; setTimeout(() => { D.surface(); D.pt = pt; YL.hero.t = pt; if (pt > T_SURF) D.go('home'); }, 0); }
       }
     }
