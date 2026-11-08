@@ -331,13 +331,13 @@ const D = YL.director = {
       const L = 1.6, eyeOff = (sea.eyeU - 0.5) * L;
       const arrive = smooth(1.0, 6.5, tw), leave = smooth(9.0, 13.0, tw);
       const eyeX = P.x + 0.075, wx = lerp(eyeX - eyeOff + 2.4, eyeX - eyeOff, arrive) - 2.6 * leave * leave;
-      const wy = P.y + 0.024 * L + 0.005 + 0.02 * Math.sin(tw * 0.4);
+      const wy = P.y - sea.eyeV * L + 0.005 + 0.02 * Math.sin(tw * 0.4);
       sea.whale = [wx, wy, tw > 0.5 ? L : 0, -0.03 + 0.04 * Math.sin(tw * 0.3)];
-      const look = smooth(6.0, 7.5, tw) * (1 - smooth(9.2, 10.6, tw));
+      const look = smooth(5.3, 7.7, tw) * (1 - smooth(9.2, 11.0, tw));
       sea.whaleB = [1 - 0.95 * Math.exp(-Math.pow((tw - 8.1) / 0.12, 2)), 0, look, 0];
-      const eyeW = [wx + eyeOff, wy - 0.024 * L];
+      const eyeW = [wx + eyeOff, wy + sea.eyeV * L];
       const mid = [eyeW[0] + (P.x - eyeW[0]) * 0.45, eyeW[1] + (P.y - eyeW[1]) * 0.45 - 0.012];
-      sea.zoom = 1 / lerp(1, 1 / 0.17, look * look * (3 - 2 * look));
+      sea.zoom = Math.pow(0.17, look);                 // (in steps of the same ratio: an even push in, no rush in the middle)
       cam = [lerp(cam[0], mid[0], look), lerp(cam[1], mid[1], look)];
       sea.cam = cam;
       // ---- the squid: up out of the deep, startled; it jets off and leaves its ink, which blooms over everything

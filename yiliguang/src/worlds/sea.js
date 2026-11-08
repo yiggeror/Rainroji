@@ -64,8 +64,9 @@ const FS = HEAD + `
 uniform vec2 uCam; uniform float uZoom;
 uniform sampler2D uSeaImg; uniform float uSeaImgK;   // the water painted (generated): from just under the surface down into the deep
 uniform sampler2D uWhaleImg; uniform float uWhaleImgK;   // the whole whale, painted side-on (generated; no near flipper: that one is drawn, and rows)
-uniform float uEyeU;          // how far back from the snout its eye is (0.245 drawn; 0.2015 painted)
-uniform sampler2D uEyeImg; uniform float uEyeImgK;   // the skin round the whale's eye and the eye, painted close (generated)
+uniform vec2 uEyeU;           // where its eye is: how far back from the snout, how far up (drawn 0.245, -0.024; painted 0.2025, -0.0227)
+uniform sampler2D uFlipImg; uniform float uFlipImgK;   // its near flipper, painted on its own (generated): the page rows it
+uniform sampler2D uWhaleDet;  // its head again, painted closer: the same painting at 2.06 times the size, only finer (generated, aligned)
 uniform vec2 uPearl; uniform float uPearlB;
 uniform vec4 uWhale;          // whale: centre xy, length, heading
 uniform vec4 uWhaleB;         // its eye's lid (1 open), its flipper's beat phase, how close the eye is looked at, -
@@ -258,7 +259,7 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   vec3 wK = mix(INDI * 0.55 + ULTR * 0.55 + SIEN * 0.12, INDI * 0.6 + VIOL * 0.45 + SIEN * 0.2, smoothstep(0.35, 0.65, hueN));
   wK = mix(wK, INDI * 0.55 + TURQ * 0.35 + SIEN * 0.25, smoothstep(0.6, 0.95, u) * 0.7);
   // the flipper: long and white, knobbly along its leading edge, rowing slowly
-  float ru = uEyeU + (uWhaleImgK > 0.0 ? 0.025 : 0.01);
+  float ru = uEyeU.x + (uWhaleImgK > 0.0 ? 0.025 : 0.01);
   vec2 root = vec2(ru, -prof(ru, false) * 0.55 + wOff(ru));
   float fa = -0.80 + 0.18 * sin(uTime * 0.7);
   vec2 fd = rot(-fa) * (vec2(u, q.y) - root);
@@ -273,14 +274,42 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   float fpx = flip * L;
   float flipD = wash(fpx, 0.0015, 1.3, 0.004);
   float flipIn = smoothstep(0.0015, -0.0015, fpx) * (uWhaleImgK > 0.0 ? smoothstep(0.0, 0.07, fu) : 1.0);   // (its root grows out of the flank)
+  // the painted flipper: the picture turned about its root with the stroke, bending a little behind it as it goes
+  vec3 flipP = vec3(0.0);
+  if (uFlipImgK > 0.0){
+    float bend = 0.022 * fu * fu * sin(uTime * 0.7 - 0.9);
+    float ix = fd.x * 9797.0 + 17.0, iy = 485.0 + 75.0 * ix / 3054.0 - (fd.y + bend) * 9797.0 * 1.35 - 150.0;
+    vec2 fuv = vec2(ix / 3072.0, 1.0 - iy / 720.0);
+    vec4 fc = texture(uFlipImg, clamp(fuv, vec2(0.0), vec2(1.0)));
+    flipIn = smoothstep(0.15, 0.85, fc.a) * step(0.0, fuv.x) * step(fuv.x, 1.0) * step(0.0, fuv.y) * step(fuv.y, 1.0) * smoothstep(0.0, 0.07, fu);
+    flipP = -log(clamp(fc.rgb / PAPER, 0.02, 1.0));
+  }
   vec3 add = wK * bodyD * dens + (INDI * 0.65 + SIEN * 0.15) * (mouthL * 1.1 + eyeD * 1.7) * inB;
   // the painted whale: sampled along its own body (so its tail still flexes with the beat), its outline its own
   float covI = -1.0;
   if (uWhaleImgK > 0.0){
-    vec2 iu = vec2((16.0 + u * 2983.0) / 3072.0, 1.0 - (365.4 - v * 2983.0 - 200.0) / 560.0);
+    vec2 ip = vec2(16.0 + u * 2983.0, 365.4 - v * 2983.0 - 200.0);          // (the painting's pixels, rows from its top)
+    // the blink: the skin of the lids, above and below, pulled together over the eye (in the close picture's pixels)
+    vec2 e = (ip - vec2(620.0, 233.0)) * 2.0645;
+    float cl = 1.0 - uWhaleB.x;
+    if (cl > 0.001 && abs(e.x) < 75.0 && abs(e.y) < 110.0){
+      float ax = sqrt(max(1.0 - e.x * e.x / (60.0 * 60.0), 0.0));
+      float ay = abs(e.y) + cl * 28.0 * ax * exp(-max(abs(e.y) - 28.0, 0.0) / 34.0);
+      e.y = e.y >= 0.0 ? ay : -ay;
+      ip = vec2(620.0, 233.0) + e / 2.0645;
+    }
+    vec2 iu = vec2(ip.x / 3072.0, 1.0 - ip.y / 560.0);
     vec4 wc = texture(uWhaleImg, clamp(iu, vec2(0.0), vec2(1.0)));
+    // the head from the closer picture: the same painting, finer (its coarse colour is the painting's, so the two are one;
+    // it gives way to the painting over a wide band behind the eye)
+    vec4 dc = texture(uWhaleDet, clamp(vec2(ip.x / 1240.0, 1.0 - ip.y / 560.0), vec2(0.0), vec2(1.0)));
+    wc = mix(wc, dc, smoothstep(1236.0, 1060.0, ip.x));
     covI = smoothstep(0.12, 0.88, wc.a) * step(0.0, iu.x) * step(iu.x, 1.0) * step(0.0, iu.y) * step(iu.y, 1.0);
     add = -log(clamp(wc.rgb / PAPER, 0.02, 1.0));
+    // and in the eye, small and warm, the pearl (on the side of the iris towards it)
+    vec2 pq = rot(-Wh.w) * (pearl - Wh.xy) / L; vec2 pe = vec2(pq.x + 0.5 - uEyeU.x, -(pq.y - wOff(pq.x + 0.5) - uEyeU.y));
+    vec2 rf = e - normalize(pe + 1e-5) * 13.0 - vec2(-4.0, -6.0);
+    add = mix(add, GAMB * 0.22, 0.85 * exp(-dot(rf, rf) / 30.0) * (1.0 - cl) * smoothstep(0.1, 0.5, uWhaleB.z));
     inB = covI;
   }
   // over the body the flipper is lifted nearly to white, mottled; its leading edge darker
@@ -288,6 +317,7 @@ void whale(vec2 p, vec4 Wh, float far, vec2 pearl, inout vec3 K, inout float bod
   vec3 flipK = (INDI * 0.20 + CERU * 0.15 + VIOL * 0.08) * flipD * (0.5 + 0.7 * fbm3(fd * 25.0)) * (0.5 + 0.9 * trail)
              + (INDI * 0.5 + ULTR * 0.2) * smoothstep(-0.005, 0.0, fpx) * flipIn * step(0.0, fd.y) * 0.8
              + (INDI * 0.6) * smoothstep(0.75, 0.9, fbm3(fd * 40.0 + 3.0)) * flipIn * 0.5;
+  if (uFlipImgK > 0.0) flipK = flipP;
   add = mix(add, flipK, flipIn);
   // the pearl's light on the flank: the paint lifted round it, warmed
   float pd = length(p - pearl);
@@ -437,25 +467,6 @@ void bigEye(vec2 p, vec2 c, float r, float lid, vec2 pearl, inout vec3 K){
     K = mix(K, eK, smoothstep(0.03, -0.03, almond));
   }
 }
-// ---- the whale's eye, painted close (generated): once the eye is close the drawn eye gives way to it. The painted eye is
-// larger than the drawn one: the drawn one grows a little as the eye comes close, and the middle of the picture is drawn
-// in a little closer (the folds round it ease out to their own size over a wide ring, so nothing smears), and the two
-// eyes are one. It blinks by pulling the lids' skin, above and below, together over the eye.
-void eyePainted(vec2 p, vec2 c, float k, inout vec3 K){
-  vec2 q = rot(-uWhale.w) * (p - c) / (uWhale.z / 1.6);
-  q *= mix(1.45, 1.0, smoothstep(0.02, 0.20, length(q)));          // (the drawn eye grows the rest of the way: see main)
-  vec2 e = q * (1536.0 / 0.36);                       // (the picture's pixels: it is 0.36 across, its eye at 910, 510)
-  float cl = 1.0 - uWhaleB.x;
-  float ay = abs(e.y), ax = sqrt(max(1.0 - e.x * e.x / (97.0 * 97.0), 0.0));
-  ay += cl * 27.0 * ax * 1.05 * exp(-max(ay - 27.0, 0.0) / 40.0);
-  e.y = e.y >= 0.0 ? ay : -ay;
-  vec2 uv = vec2((910.0 + e.x) / 1536.0, (514.0 + e.y) / 1024.0);
-  float m = smoothstep(0.0, 0.08, uv.x) * smoothstep(1.0, 0.92, uv.x) * smoothstep(0.0, 0.1, uv.y) * smoothstep(1.0, 0.9, uv.y);
-  vec3 Ki = -log(clamp(texture(uEyeImg, uv).rgb / PAPER, 0.02, 1.0));
-  vec2 pd = normalize(uPearl - c + 1e-5) * 26.0 - vec2(20.0, -2.0);   // (and in it, small and warm, the pearl)
-  Ki = mix(Ki, GAMB * 0.25, 0.8 * exp(-dot(e - pd, e - pd) / 81.0) * (1.0 - cl));
-  K = mix(K, Ki, k * m);
-}
 void main(){
   vec2 px = gl_FragCoord.xy;
   vec2 s = (px - 0.5 * uRes) / uRes.y;
@@ -563,10 +574,9 @@ void main(){
   if (uWhale.z > 0.0) whale(p, uWhale, 0.0, uPearl, K, wb);
   if (uWhale.z > 0.0){
     // its eye (in the whale's frame)
-    vec2 eyeL = (vec2(uEyeU, -0.024) - vec2(0.5, 0.0)) * uWhale.z;
+    vec2 eyeL = (uEyeU - vec2(0.5, 0.0)) * uWhale.z;
     vec2 eyeW = uWhale.xy + rot(uWhale.w) * eyeL;
-    bigEye(p, eyeW, 0.0060 * uWhale.z * (1.0 + 0.19 * uEyeImgK * smoothstep(0.0, 0.85, uWhaleB.z)), uWhaleB.x, uPearl, K);
-    if (uEyeImgK > 0.0 && uWhaleB.z > 0.7) eyePainted(p, eyeW, uEyeImgK * smoothstep(0.75, 0.95, uWhaleB.z), K);
+    if (uWhaleImgK <= 0.0) bigEye(p, eyeW, 0.0060 * uWhale.z, uWhaleB.x, uPearl, K);     // (the painted whale's eye is its own)
   }
   // ===== near kelp, wet-on-dry (near the surface)
   vec2 pn = s * uZoom + uCam * vec2(1.15, 1.25);
@@ -658,7 +668,9 @@ W.sea = {
   ready: false, t: 0, vol: 1, fade: 1,
   cam: [0, 0], zoom: 1,
   // how far back from the snout the whale's eye is: on the painted whale (generated), or the drawn one
-  get eyeU() { return YL.QS.get('seagen') !== '0' && YL.img('sea_whale') && YL.img('sea_whale').naturalWidth ? 0.2015 : 0.245; },
+  get painted() { return YL.QS.get('seagen') !== '0' && !!YL.img('sea_whale') && YL.img('sea_whale').naturalWidth > 0; },
+  get eyeU() { return this.painted ? 0.2025 : 0.245; },
+  get eyeV() { return this.painted ? -0.0227 : -0.024; },
   pearl: [0, 0.1], pearlB: 1,
   whale: [9, 9, 0, 0], whaleB: [1, 0, 0, 0],
   squid: [9, 9, 0.12, 0], squidB: [0, 0, 0, 0],
@@ -683,8 +695,11 @@ W.sea = {
     U(p, 'uInk', this.ink);
     { const wc = YL.paperTex('paper_watercolor'); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, wc || null); gl.uniform1i(this.p.u.uWC, 7); }
     { const si = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_water'); gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, si || null); gl.uniform1i(this.p.u.uSeaImg, 8); U(this.p, 'uSeaImgK', si ? 1 : 0); }
-    { const wi = this.eyeU === 0.2015 ? YL.assetTex('sea_whale') : null; gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, wi || null); gl.uniform1i(this.p.u.uWhaleImg, 10); U(this.p, 'uWhaleImgK', wi ? 1 : 0); U(this.p, 'uEyeU', wi ? 0.2015 : 0.245); }
-    { const ei = YL.QS.get('seagen') === '0' ? null : YL.assetTex('sea_eye'); gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, ei || null); gl.uniform1i(this.p.u.uEyeImg, 9); U(this.p, 'uEyeImgK', ei ? 1 : 0); }
+    { const wi = this.painted ? YL.assetTex('sea_whale') : null, wd = wi ? YL.assetTex('sea_whdet') : null;
+      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, wi || null); gl.uniform1i(this.p.u.uWhaleImg, 10); U(this.p, 'uWhaleImgK', wi ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, wd || wi || null); gl.uniform1i(this.p.u.uWhaleDet, 9);
+      U(this.p, 'uEyeU', wi ? [0.2025, -0.0227] : [0.245, -0.024]);
+      const fi = wi ? YL.assetTex('sea_flipper') : null; gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, fi || null); gl.uniform1i(this.p.u.uFlipImg, 11); U(this.p, 'uFlipImgK', fi ? 1 : 0); }
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   toNdc(q, aspect) { return [(q[0] - this.cam[0]) / this.zoom / (aspect * 0.5), (q[1] - this.cam[1]) / this.zoom / 0.5]; },

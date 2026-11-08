@@ -73,13 +73,14 @@ def scale(im, h=None, w=None):
     if w and im.width > w: return im.resize((w, round(im.height * w / im.width)), Image.LANCZOS)
     return im
 
-def write(name, items):
+def write(name, items, extra=None):
     lines = ["/* 生成的图层（见 assets/prompts/），已裁切、压缩，作为 data URI 放进页面。 */", "(() => { const A = (window.YL.ASSET_DATA = window.YL.ASSET_DATA || {});"]
     meta = {}
     total = 0
     for key, (u, size) in items.items():
         lines.append(f"A[{json.dumps(key)}] = {json.dumps(u)};"); meta[key] = size; total += len(u)
     lines.append(f"(window.YL.ASSET_SIZE = window.YL.ASSET_SIZE || {{}}); Object.assign(window.YL.ASSET_SIZE, {json.dumps(meta)});")
+    if extra: lines.append(extra)
     lines.append("})();")
     open(os.path.join(OUT, name + '.js'), 'w').write('\n'.join(lines) + '\n')
     print(name, f'{total / 1e6:.2f} MB', {k: v for k, v in meta.items()})
@@ -87,17 +88,107 @@ def write(name, items):
 L = lambda n: Image.open(os.path.join(SRC, n + '.png'))
 ONLY = sys.argv[2:]                         # (optionally just these bundles: conte stop paper summer pond village piying ink sea)
 want = lambda name: not ONLY or name in ONLY
-# ---- conté: the drawing is grey; the transparent layers keep their alpha
+# ---- conté: the drawing is grey. Everything that stands or moves in it goes into one atlas: the old single layers, and the
+# animated ones, each a row of frames (a walk, a trot, a wing-beat) cut from one generated sheet and lined up on one anchor
+# (the feet on one line, the body over one point), so a frame can be swapped for the next without the figure jumping.
+def bleed_edge(im, r=6):
+    """the colour inside a cut-out carried out under its soft edge (a white fringe painted round it doesn't show as a halo)"""
+    import numpy as np
+    from PIL import ImageFilter
+    A = np.asarray(im.convert('RGBA')).astype(np.float32); a = A[..., 3:] / 255.0
+    solid = (a > 0.6).astype(np.float32)
+    pm = Image.fromarray(np.clip(A[..., :3] * solid, 0, 255).astype('uint8')).filter(ImageFilter.GaussianBlur(r))
+    am = Image.fromarray((solid[..., 0] * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(r))
+    fill = np.asarray(pm).astype(np.float32) / np.maximum(np.asarray(am).astype(np.float32)[..., None] / 255.0, 1e-3)
+    rgb = np.where(a > 0.6, A[..., :3], np.clip(fill, 0, 255))
+    # where the soft edge was painted near white, it was a halo, not the thing: let it go
+    lum = A[..., :3].mean(-1, keepdims=True) / 255.0
+    a2 = np.where(a < 0.9, a * np.clip((1.0 - lum) / 0.25, 0, 1), a)
+    return Image.fromarray(np.concatenate([rgb, a2 * 255], -1).clip(0, 255).astype('uint8'), 'RGBA')
+
+def lum_key(im):
+    """a cut-out drawn with an opaque white halo round it: only the crayon is the thing"""
+    import numpy as np
+    A = np.asarray(im.convert('RGBA')).astype(np.float32); d = 1.0 - A[..., :3].mean(-1) / 255.0
+    A[..., 3] *= np.clip((d - 0.10) / 0.22, 0, 1)
+    return Image.fromarray(A.clip(0, 255).astype('uint8'), 'RGBA')
+
+def sheet_frames(im, n, h, anchor='feet'):
+    """a sheet of n frames in n equal columns -> n frames of one size, lined up on the anchor, scaled to height h"""
+    import numpy as np
+    W = im.width // n; fr = []
+    for i in range(n):
+        c = im.crop((i * W, 0, (i + 1) * W, im.height)); A = np.asarray(c)[..., 3]
+        m = A > 40; ys, xs = np.nonzero(m)
+        bottom = ys.max(); top = ys.min()
+        up = m[: top + (bottom - top) // 2]                       # (the body's upper half: its head and shoulders, the umbrella)
+        uy, ux = np.nonzero(up)
+        if anchor == 'feet': cx, cy = ux.mean(), bottom
+        else:                                                        # (a bird: its beak, which keeps its place in a wing-beat)
+            xm = xs.max(); cx, cy = xm, ys[xs > xm - 12].mean()
+        fr.append((c, cx, cy, xs.min(), xs.max(), top, bottom))
+    L_ = max(f[1] - f[3] for f in fr) + 6; R_ = max(f[4] - f[1] for f in fr) + 6
+    T_ = max(f[2] - f[5] for f in fr) + 6; B_ = max(f[6] - f[2] for f in fr) + 6
+    out = []
+    for c, cx, cy, *_ in fr:
+        cell = Image.new('RGBA', (int(L_ + R_), int(T_ + B_)), (0, 0, 0, 0))
+        cell.alpha_composite(c, (int(round(L_ - cx)), int(round(T_ - cy))))
+        out.append(cell)
+    k = h / out[0].height
+    out = [bleed_edge(f.resize((max(1, round(f.width * k)), h), Image.LANCZOS)) for f in out]
+    return out, (L_ / (L_ + R_), B_ / (T_ + B_))                   # (and where the anchor is in a frame: from its left, from its foot)
+
+def pack_atlas(sprites, W=4096, pad=10):
+    """shelf-pack the frames; returns the atlas and, for each sprite, its frame size, its anchor and each frame's place"""
+    items = [(name, fr, anc) for name, fr, anc in sprites]
+    order = sorted(range(len(items)), key=lambda i: -items[i][1][0].height)
+    x = y = sh = 0; place = {}
+    for i in order:
+        name, fr, anc = items[i]
+        for j, f in enumerate(fr):
+            if x + f.width + pad > W: x = 0; y += sh + pad; sh = 0
+            place[(name, j)] = (x, y); x += f.width + pad; sh = max(sh, f.height)
+    H = y + sh
+    H = 1 << (H - 1).bit_length()
+    at = Image.new('RGBA', (W, H), (0, 0, 0, 0)); meta = {}
+    for name, fr, anc in items:
+        for j, f in enumerate(fr): at.paste(f, place[(name, j)])
+        meta[name] = {'w': fr[0].width, 'h': fr[0].height, 'n': len(fr), 'anchor': [round(anc[0], 4), round(anc[1], 4)], 'at': [list(place[(name, j)]) for j in range(len(fr))]}
+    return at, meta
+
+CAB_WHEELS = [(0.3922, 0.2375, 125 / 640), (0.8706, 0.2690, 162 / 640)]     # (hub x, y from the foot, radius: of the cab's height)
 if want('conte'):
     items = {}
     pano = L('ct_pano').convert('L'); items['conte_pano'] = (uri(pano, 'jpeg', 88), pano.size)
     paper = L('ct_paper').convert('L'); items['conte_paper'] = (uri(paper, 'jpeg', 90), paper.size)
-    for n in ['ct_lamp', 'ct_umb', 'ct_tree']:
-        im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
-        items['conte_' + n[3:]] = (uri(im, 'webp', 88), im.size)
+    sp = []
+    def one(name, im, h, anc=(0.5, 0.0)):
+        im, _ = crop_alpha(im.convert('RGBA')); im = bleed_edge(scale(im, h=h)); sp.append((name, [im], anc))
+    one('lamp', L('ct_lamp'), 860); one('tree', L('ct_tree'), 820, (0.12, 0.0))
     for i, im in enumerate(split_columns(L('ct_river_figs').convert('RGBA'), 3)):
-        im = scale(im, h=900); items['conte_' + ['woman', 'man', 'dog'][i]] = (uri(im, 'webp', 88), im.size)
-    write('conte', items)
+        one(['woman', 'man', 'dogsit'][i], im, [520, 380, 200][i])
+    for n, h, a in [('walk_man', 440, 'feet'), ('walk_child', 330, 'feet'), ('gent', 420, 'feet'), ('dog', 210, 'feet'), ('horse', 380, 'feet'), ('birds', 150, 'beak')]:
+        im = L('ct_' + n).convert('RGBA')
+        if n == 'dog': im = lum_key(im)
+        fr, anc = sheet_frames(im, 6, h, a); sp.append((n, fr, anc))
+    one('cab', L('ct_cab'), 640, (0.5, 0.0)); one('barge', L('ct_barge'), 300, (0.5, 0.0))
+    # the cab's wheels turn: their spokes are taken out of the picture here (a closing: the thin dark lines filled from
+    # what is round them, the thick rim and the hub kept), and the page draws them, turning
+    import numpy as np
+    from PIL import ImageFilter
+    cab = sp[-2][1][0]; A = np.asarray(cab).astype(np.float32)
+    rgb = Image.fromarray(A[..., :3].astype('uint8')); cl = np.asarray(rgb.filter(ImageFilter.MaxFilter(13)).filter(ImageFilter.MinFilter(13))).astype(np.float32)
+    al = Image.fromarray(A[..., 3].astype('uint8')); acl = np.asarray(al.filter(ImageFilter.MinFilter(13)).filter(ImageFilter.MaxFilter(13))).astype(np.float32)
+    yy, xx = np.mgrid[0:A.shape[0], 0:A.shape[1]]
+    for (cx, cy, r) in CAB_WHEELS:
+        rr = np.hypot(xx - cx * A.shape[1], yy - (1 - cy) * A.shape[0]) / (r * A.shape[0])
+        m = ((rr > 0.20) & (rr < 0.86))[..., None]
+        A[..., :3] = np.where(m, cl, A[..., :3]); A[..., 3] = np.where(m[..., 0], np.maximum(acl, 0), A[..., 3])
+    sp[-2] = ('cab', [Image.fromarray(A.clip(0, 255).astype('uint8'), 'RGBA')], sp[-2][2])
+    at, meta = pack_atlas(sp)
+    items['conte_atlas'] = (uri(at, 'webp', 84), at.size)
+    meta['cab']['wheels'] = CAB_WHEELS
+    write('conte', items, extra=f"window.YL.CONTE_ATLAS = {json.dumps(meta)};")
 # ---- stop-motion: colour, the cut-outs keep their alpha
 if want('stop'):
     items = {}
@@ -169,7 +260,6 @@ if want('ink'):
 if want('sea'):
     items = {}
     sw = L('se_water').convert('RGB'); items['sea_water'] = (uri(sw, 'jpeg', 88), sw.size)
-    se = L('se_eye').convert('RGB'); items['sea_eye'] = (uri(se, 'jpeg', 90), se.size)       # (the whale's eye, close)
     # the whole whale (transparent): rows 200 … 760 of it; the paint's colour bled out past its edge, so the edge
     # doesn't filter to a dark fringe
     import numpy as np
@@ -180,4 +270,21 @@ if want('sea'):
     fill = np.asarray(pm).astype(np.float32) / np.maximum(np.asarray(am).astype(np.float32)[..., None] / 255.0, 1e-3)
     rgb = np.where(a > 0.5, A[..., :3], np.clip(fill, 0, 255))
     wh = Image.fromarray(np.concatenate([rgb, A[..., 3:]], -1).astype('uint8'), 'RGBA'); items['sea_whale'] = (uri(wh, 'webp', 88), wh.size)
+    # the head again, closer: the same painting repainted at 2.06 times the size (columns 0 … 1240 of the rows above), its
+    # detail moved onto the painting's own shapes (optical flow) and its coarse colour taken from the painting, so as the
+    # eye comes close only detail is added (tools in assets/prompts/se_whdet.txt); its outline is the painting's, enlarged
+    D = np.asarray(L('se_whdet').convert('RGB')).astype(np.float32)
+    ah = np.asarray(Image.fromarray(A[:, :1240, 3].astype('uint8')).resize((D.shape[1], D.shape[0]), Image.BICUBIC)).astype(np.float32)[..., None] / 255.0
+    pm = Image.fromarray(np.clip(D * ah, 0, 255).astype('uint8')).filter(ImageFilter.GaussianBlur(12))
+    am = Image.fromarray((ah[..., 0] * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(12))
+    fill = np.asarray(pm).astype(np.float32) / np.maximum(np.asarray(am).astype(np.float32)[..., None] / 255.0, 1e-3)
+    rgb = np.where(ah > 0.5, D, np.clip(fill, 0, 255))
+    wd = Image.fromarray(np.concatenate([rgb, ah * 255], -1).clip(0, 255).astype('uint8'), 'RGBA'); items['sea_whdet'] = (uri(wd, 'webp', 86), wd.size)
+    # its near flipper, painted on its own (it rows: the page turns it about its root): rows 150 … 870, the edge bled out
+    F = np.asarray(L('se_flipper').convert('RGBA').crop((0, 150, 3072, 870))).astype(np.float32); fa = F[..., 3:] / 255.0
+    pm = Image.fromarray(np.clip(F[..., :3] * fa, 0, 255).astype('uint8')).filter(ImageFilter.GaussianBlur(8))
+    am = Image.fromarray((fa[..., 0] * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(8))
+    fill = np.asarray(pm).astype(np.float32) / np.maximum(np.asarray(am).astype(np.float32)[..., None] / 255.0, 1e-3)
+    rgb = np.where(fa > 0.5, F[..., :3], np.clip(fill, 0, 255))
+    fl = Image.fromarray(np.concatenate([rgb, F[..., 3:]], -1).clip(0, 255).astype('uint8'), 'RGBA'); items['sea_flipper'] = (uri(fl, 'webp', 86), fl.size)
     write('sea', items)
