@@ -421,7 +421,7 @@ const ROUTE = [[0.62, 0.58], [0.35, 0.57], [0.15, 0.46], [0.30, 0.30], [0.75, 0.
 // on the painted scroll, what moves in the wind: the bamboo grove, the willow by the bridge, the reeds (x0, x1, foot, top)
 const SWAY = new Float32Array([2.97, 3.38, 0.03, 0.72,  3.38, 3.70, 0.20, 0.43,  4.97, 5.45, 0.0, 0.34]);
 const VIEW = [[-1.2, 0.889, 0.50, 1.00], [0.6, 0.78, 0.47, 1.15], [2.2, 0.62, 0.45, 1.32], [3.8, 1.15, 0.50, 1.10], [5.6, 1.85, 0.52, 1.00],
-  [7.4, 2.52, 0.56, 1.18], [9.4, 3.45, 0.48, 1.06], [11.3, 4.22, 0.46, 1.10], [13.0, 4.711, 0.50, 1.00], [14.0, 4.711, 0.50, 1.00]];
+  [7.4, 2.52, 0.56, 1.18], [9.4, 3.45, 0.48, 1.06], [11.3, 4.22, 0.46, 1.10], [13.0, 4.711, 0.50, 1.00], [14.6, 4.735, 0.515, 1.05], [16.4, 4.75, 0.53, 1.10]];
 const WS = 144 / 1152;                           // (the map of when, for the far washes, at an eighth of the brush's resolution)
 const SPREAD = 5.5;                              // how fast the painting spreads out from the light's way (painting units per unit of its time)
 W.ink = {
@@ -573,7 +573,7 @@ W.ink = {
     // the eye goes along the scroll after the brush, never back
     const aspect = YL.canvasAspect();
     if (scroll && this.t0 !== undefined) {
-      this.view = this.viewAt(Math.min(this.nowS, 13.6), aspect);
+      this.view = this.viewAt(Math.min(this.nowS, 16.4), aspect);   // (and on into the dawn, slowly closing in)
       this.pan = [this.view[0] - 0.8889, 0];
     } else {
       const tgtPan = Math.max(0, Math.min(SL - aspect, (this.reach ?? 0) - aspect * 0.62));

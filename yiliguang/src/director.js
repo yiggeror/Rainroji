@@ -270,7 +270,7 @@ const D = YL.director = {
       if (!vil.ready) vil.init();
       if (!stg.ready) stg.init();
       // the light: along its way, slowing as it comes to the screen; it lights the lanterns it passes
-      const sm = vil.arc().L * trap(clamp((t - 0.8) / (T_LANE - 0.8), 0, 1), 0.14, 0.32);
+      const sm = vil.arc().L * trap(clamp((t - 0.4) / (T_LANE - 0.4), 0, 1), 0.14, 0.32);
       vil.hero.p = vil.pathAtS(sm);
       D.vilS = sm;
       vil.hero.b = 1 - smooth(T_LANE - 0.25, T_LANE + 0.05, t);
@@ -360,6 +360,9 @@ const D = YL.director = {
       return;
     }
   },
+  // the eye on the print, then in the village: from the moment the sheet is square to it, it goes slowly in (one movement
+  // across the hand-over, so the print and the village are the same picture at every moment)
+  vilDollied(C, tau) { const dl = 0.08 * smooth(0, 5.0, tau); return { pos: C.pos.map((v, i) => v + (C.tgt[i] - v) * dl), tgt: C.tgt, vfov: C.vfov }; },
   villageCam(t, vil) {
     const V = YL.V, A = vil.arc(), sm = D.vilS || 0;
     // following: some way behind it along the lane, a little above and to the right, looking ahead of it
@@ -367,7 +370,7 @@ const D = YL.director = {
     const fwd = V.norm(V.sub(vil.pathAtS(sm + 2), vil.pathAtS(sm - 2)));
     const right = V.norm(V.cross(fwd, [0, 1, 0]));
     const follow = { pos: V.add(V.add(back, [0, 2.4, 0]), V.mul(right, 1.4)), tgt: V.add(ahead, [0, -0.9, 0]), vfov: 32 };
-    const C0 = vil.CAM0V, rail = camPath(VIL_CAM, t);
+    const C0 = D.vilDollied(vil.CAM0V, T_PAPER - 4.6 + t), rail = camPath(VIL_CAM, t);
     const kIn = smooth(0.9, 3.4, t), kOut = smooth(T_LANE - 3.6, T_LANE - 1.2, t);
     const mix3 = (a, b, k) => a.map((v, i) => lerp(v, b[i], k));
     let pos = mix3(C0.pos, follow.pos, kIn), tgt = mix3(C0.tgt, follow.tgt, kIn), vfov = lerp(C0.vfov, follow.vfov, kIn);
@@ -423,7 +426,7 @@ const D = YL.director = {
       summer.sheetFlat = smooth(4.0, 5.0, u);
       summer.sheetGlow = [0, 0, 0, 0.1];
       // in the print: the flame where it went in, then the colour going on from there
-      vil.cam = vil.CAM0; vil.hero.p = vil.ENTRY.slice();
+      vil.cam = D.vilDollied(vil.CAM0, u - 4.6); vil.hero.p = vil.ENTRY.slice();
       vil.hero.b = smooth(3.55, 4.0, u);
       vil.wake = { p: vil.ENTRY, r: u < 3.65 ? 0 : 2.4 * Math.pow(smooth(3.65, T_PAPER, u), 1.2) };
       vil.snowAmt = 1; vil.pure = 1; vil.lit = 0;
@@ -851,11 +854,29 @@ void main(){
 const FS_MIX = `#version 300 es
 precision highp float;
 uniform sampler2D uA, uB; uniform vec2 uRes; uniform float uK, uGlow;
+uniform vec4 uRad;            // (if w > 0) B comes in as a ragged front from a point instead: centre (uv), radius, width (screen heights)
 out vec4 o;
+float h12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h12(i), h12(i + vec2(1, 0)), u.x), mix(h12(i + vec2(0, 1)), h12(i + vec2(1, 1)), u.x), u.y); }
 void main(){
   vec2 uv = gl_FragCoord.xy / uRes;
-  vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, uK);
-  c = mix(c, vec3(1.0, 0.82, 0.55), uGlow * (1.0 - 0.5 * length(uv - 0.5)));
+  float k = uK;
+  vec3 glowC = vec3(1.0, 0.82, 0.55);
+  if (uRad.w > 0.0){
+    // the front: ragged like paint thrown out, in short dabs along it; just behind it the colour is at its brightest
+    vec2 d = (uv - uRad.xy) * vec2(uRes.x / uRes.y, 1.0);
+    float a = atan(d.y, d.x), r = length(d);
+    float rag = (vn(vec2(a * 9.0, r * 3.0)) - 0.5) * 0.9 + (vn(gl_FragCoord.xy / 7.0) - 0.5) * 0.35;
+    k = smoothstep(uRad.z, uRad.z - uRad.w, r + rag * uRad.w);
+    glowC = vec3(1.0, 0.78, 0.50);
+    float band = smoothstep(uRad.z - 1.6 * uRad.w, uRad.z - 0.4 * uRad.w, r + rag * uRad.w) * k;
+    vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, k);
+    c = mix(c, c * 1.18 + vec3(0.06, 0.03, 0.0), band * 0.8);
+    o = vec4(c, 1.0); return;
+  }
+  vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, k);
+  c = mix(c, glowC, uGlow * (1.0 - 0.5 * length(uv - 0.5)));
   o = vec4(c, 1.0);
 }`;
 // ---- the shadow play over the sea: above the water line (alpha) the screen, below it the watercolour
@@ -981,7 +1002,7 @@ D.renderFrame = (dt, realT) => {
     const p = mixP();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
     gl.useProgram(p.p);
-    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.2, D.pt)); YL.U(p, 'uGlow', 0);
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.2, D.pt)); YL.U(p, 'uGlow', 0); YL.U(p, 'uRad', [0, 0, 0, 0]);
     YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
@@ -997,6 +1018,9 @@ D.renderFrame = (dt, realT) => {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
     gl.useProgram(p.p);
     YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', smooth(0.0, 1.1, D.pt)); YL.U(p, 'uGlow', 0.25 * Math.exp(-Math.pow((D.pt - 0.6) / 0.35, 2)));
+    // (the pond comes out from the sun: a ragged front of colour spreading over the ink, not the one through the other)
+    { const sc = pond.toScr(pond.burstAt || pond.hero.p, aspect), R = 2.4 * Math.pow(smooth(0.0, 2.3, D.pt), 1.15);
+      YL.U(p, 'uRad', [sc[0] / aspect, sc[1], R, 0.22]); }
     YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
@@ -1009,7 +1033,7 @@ D.renderFrame = (dt, realT) => {
     const p = mixP();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
     gl.useProgram(p.p);
-    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.22 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2)));
+    YL.U(p, 'uRes', [I.w, I.h]); YL.U(p, 'uK', k); YL.U(p, 'uGlow', 0.22 * Math.exp(-Math.pow((u - 0.84) / 0.09, 2))); YL.U(p, 'uRad', [0, 0, 0, 0]);
     YL.bindTex(p, 'uA', I.A.tex, 0); YL.bindTex(p, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
@@ -1051,7 +1075,7 @@ D.renderFrame = (dt, realT) => {
     const mp = mixP();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, I.w, I.h);
     gl.useProgram(mp.p);
-    YL.U(mp, 'uRes', [I.w, I.h]); YL.U(mp, 'uK', smooth(0.0, 0.9, st.t)); YL.U(mp, 'uGlow', 0);
+    YL.U(mp, 'uRes', [I.w, I.h]); YL.U(mp, 'uK', smooth(0.0, 0.9, st.t)); YL.U(mp, 'uGlow', 0); YL.U(mp, 'uRad', [0, 0, 0, 0]);
     YL.bindTex(mp, 'uA', I.A.tex, 0); YL.bindTex(mp, 'uB', I.B.tex, 1);
     YL.drawFull();
     return true;
@@ -1149,7 +1173,9 @@ D.afterRoom = () => {
   // the iris opens from the light's own drop: slowly, then all at once
   const c = D.irisCenter, w = I.w, h = I.h;
   const cpx = [(c[0] * 0.5 + 0.5) * w, (c[1] * 0.5 + 0.5) * h];
-  const R = u < 0.42 ? 0 : 6 * Math.exp((u - 0.42) / 0.58 * Math.log(Math.hypot(w, h) * 1.3 / 6));
+  // (in steps of one ratio, easing in and out: it doesn't flash across the last of the picture)
+  const ue = clamp((u - 0.42) / 0.58, 0, 1), us = ue * ue * (3 - 2 * ue);
+  const R = u < 0.42 ? 0 : 6 * Math.exp((0.35 * ue + 0.65 * us) * Math.log(Math.hypot(w, h) * 1.3 / 6));
   const flash = 0.55 * Math.exp(-Math.pow((u - 0.9) / 0.06, 2));
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
   gl.useProgram(I.p.p);
