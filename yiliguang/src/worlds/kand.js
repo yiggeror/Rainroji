@@ -21,6 +21,9 @@ uniform vec4 uView;           // the eye: centre x, y (in the picture), zoom, ho
 uniform vec4 uHero;           // the light: x, y (picture), brightness, size
 uniform sampler2D uPond;      // the pond it is coming out of (for the first seconds)
 uniform sampler2D uCanvas;    // a scan of primed linen
+uniform sampler2D uMoon;      // the cardboard moon of the next world (its outline: the crescent becomes its shape)
+uniform vec4 uMoonR;          // where that moon will be on the screen: its pivot (top middle) x, y, its width, height
+uniform vec4 uMoonV;          // the eye at the very end (x, y, zoom), and how far the crescent has become the moon's shape
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -32,7 +35,9 @@ const vec3 ULTRA = vec3(0.12, 0.19, 0.60), YEL = vec3(0.98, 0.78, 0.13), VERM = 
 // how far along a shape's entrance is (0 … 1), and an entrance that overshoots a little and settles (a pop on the beat)
 float ap(float t0, float d){ return sat((uTime - t0) / d); }
 float pop(float t0){ float x = ap(t0, 0.42), y = x - 1.0; return x <= 0.0 ? 0.0 : 1.0 + 2.70158 * y * y * y + 1.70158 * y * y; }
-float breathe(float ph){ return 1.0 + 0.018 * sin(uTime * 2.88 + ph) * smoothstep(5.5, 6.5, uTime); }
+// (once it is all there it breathes with the music: a slow swell over a bar, and a little push on every beat)
+float beatP(){ return exp(-fract(uTime * 1.8333) * 5.0) * smoothstep(5.5, 6.5, uTime); }
+float breathe(float ph){ return 1.0 + (0.034 * sin(uTime * 2.88 + ph) + 0.018 * beatP()) * smoothstep(5.5, 6.5, uTime); }
 float sdCircle(vec2 p, vec2 c, float r){ return length(p - c) - r; }
 float sdEll(vec2 p, vec2 c, vec2 r){ vec2 q = (p - c) / r; return (length(q) - 1.0) * min(r.x, r.y); }
 float sdBox(vec2 p, vec2 a, vec2 b){ vec2 c = (a + b) * 0.5, h = (b - a) * 0.5; vec2 d = abs(p - c) - h; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0); }
@@ -98,12 +103,27 @@ void main(){
   // the big blue circle, its lilac halo, the yellow in it; the black arc sweeping over
   {
     vec2 c = vec2(-0.68, 0.33); float k = pop(2.7);
-    fillSd(sdCircle(p, c, 0.245 * k * breathe(0.5)), LILAC, 1.0);
-    fillSd(sdCircle(p, c, 0.205 * k * breathe(0.5)), ULTRA, 1.0);
-    // the yellow disc; at the end a blue disc slides over it from the right and leaves a crescent (the moon of the next world)
+    float mk = uMoonV.w, grow = 1.0 + 1.6 * mk * mk;              // (at the very end the blue spreads: the night sky of the next world)
+    fillSd(sdCircle(p, c, 0.245 * k * breathe(0.5) * grow), LILAC, 1.0);
+    fillSd(sdCircle(p, c, 0.205 * k * breathe(0.5) * grow), ULTRA, 1.0);
+    // the yellow disc; at the end a blue disc slides over it from the right and leaves a crescent — and the crescent takes
+    // on the outline of the cardboard moon it is about to be (painted flat, in his yellow, a little warmer)
     vec2 cy = vec2(-0.57, 0.33);
-    fillSd(sdCircle(p, cy, 0.112 * pop(3.3)), YEL, 1.0);
-    fillSd(sdCircle(p, cy + vec2(0.30, 0.05) * (1.0 - uView.w) + vec2(0.046, 0.013) * uView.w, 0.094), ULTRA, step(0.001, uView.w));
+    float aY = smoothstep(0.0016, -0.0016, sdCircle(p, cy, 0.112 * pop(3.3)) + rough());
+    float aB = smoothstep(0.0016, -0.0016, sdCircle(p, cy + vec2(0.30, 0.05) * (1.0 - uView.w) + vec2(0.046, 0.013) * uView.w, 0.094) + rough()) * step(0.001, uView.w);
+    // (the shape changes as one shape: the two outlines' signed distances, on the screen, blended)
+    float cres = aY * (1.0 - aB);
+    if (mk > 0.0){
+      float dA = max(sdCircle(p, cy, 0.112), -sdCircle(p, cy + vec2(0.046, 0.013), 0.094)) * uMoonV.z;
+      vec2 s = (p - uMoonV.xy) * uMoonV.z;
+      vec2 mu = vec2(0.508 + (s.x - uMoonR.x) / uMoonR.z, 1.0 + (s.y - uMoonR.y) / uMoonR.w);
+      float inside = step(0.0, mu.x) * step(mu.x, 1.0) * step(0.0, mu.y) * step(mu.y, 1.0);
+      float dM = mix(0.5, (texture(uMoon, clamp(mu, vec2(0.0), vec2(1.0))).r * 255.0 - 128.0) * 3.0 / 1100.0 * uMoonR.w, inside);
+      dM = max(dM, (mu.y - 0.70) * uMoonR.w);                      // (not the string)
+      cres = smoothstep(0.0022, -0.0022, mix(dA, dM, mk) + rough() * uMoonV.z * 0.5);
+    }
+    C = mix(C, brush(ULTRA), aB * (1.0 - aY) * pow(1.0 - mk, 3.0));       // (the bite where it lies past the yellow)
+    C = mix(C, brush(mix(YEL, vec3(0.93, 0.79, 0.42), 0.55 * mk)), cres);
   }
   fillA(arcMask(p, vec2(-0.48, -0.15), 0.50, 0.0045, 0.95, 1.75, ap(3.6, 0.55)) * (1.0 - uView.w), INK);
   // lilac rectangle, the yellow triangle sliding up, the narrow black slab
@@ -130,7 +150,7 @@ void main(){
   // the willow: green fronds coming down from the top right, drawn from the top, swaying with the beat
   for (int i = 0; i < 7; i++){
     float fi = float(i), x0 = 0.05 + fi * 0.115, ye = 0.25 - mod(fi * 0.37, 0.38);
-    float sw = 0.012 * sin(t * 1.44 + fi) * smoothstep(5.0, 6.0, t);
+    float sw = 0.022 * sin(t * 1.44 + fi) * smoothstep(5.0, 6.0, t);
     vec2 A = vec2(x0, 0.53), B = vec2(x0 + 0.05 + sw, 0.30), E = vec2(x0 + 0.15 + sw * 2.0, ye);
     float k = ap(1.0 + fi * 0.28, 0.9);
     float vis = step(mix(0.53, ye - 0.02, k), p.y);
@@ -151,7 +171,16 @@ void main(){
   fillSd(sdBox(p, vec2(-0.50, -0.39 - 0.0 * pop(5.0)), vec2(-0.43, -0.31)), YEL, step(0.001, pop(5.0)));
   // a long blue arc low on the left, the red half-sun rising out of the bottom, a thin lilac ring round it all
   fillA(arcMask(p, vec2(0.01, -0.75), 0.53, 0.008, 1.92, 1.15, ap(5.1, 0.6)), ULTRA);
-  fillSd(sdCircle(p, vec2(-0.22, -0.47 - 0.22 * (1.0 - pop(5.3))), 0.17 * breathe(3.0)), VERM, 1.0);
+  fillSd(sdCircle(p, vec2(-0.22, -0.47 - 0.22 * (1.0 - pop(5.3)) + 0.035 * smoothstep(5.8, 10.0, t)), 0.17 * breathe(3.0)), VERM, 1.0);
+  // small circles set loose, drifting round on slow orbits, each its own colour (his points that float)
+  for (int i = 0; i < 6; i++){
+    float fi = float(i);
+    vec2 o = vec2(-0.30 + 0.25 * fi - 0.35 * step(3.5, fi), 0.22 - 0.21 * mod(fi, 3.0));
+    vec2 c = o + vec2(0.06 * sin(t * (0.35 + 0.07 * fi) + fi * 1.7), 0.04 * cos(t * (0.29 + 0.05 * fi) + fi * 2.3));
+    float r = (0.010 + 0.007 * mod(fi * 1.7, 3.0)) * pop(5.6 + fi * 0.27) * (1.0 + 0.12 * beatP());
+    vec3 cc = i == 0 ? VERM : i == 1 ? ULTRA : i == 2 ? YEL : i == 3 ? INK : i == 4 ? LILAC : VERM;
+    fillSd(sdCircle(p, c, r), cc, step(0.0, r - 0.0005));
+  }
   fillA(arcMask(p, vec2(-0.05, -0.12), 0.36, 0.0028, 3.6, 4.4, ap(5.5, 0.9)), LILAC);
   // pink buds on the pads, glowing
   {
@@ -171,7 +200,9 @@ void main(){
     for (int i = 0; i < 10; i++){
       float k = ap(2.2 + float(i) * 0.272, 0.25);
       if (k <= 0.0) continue;
-      vec2 e = mix(o0, E[i], k);
+      float th = 0.03 * sin(t * 1.44 + float(i) * 1.3) * smoothstep(5.5, 6.5, t);
+      vec2 Ei = o0 + mat2(cos(th), sin(th), -sin(th), cos(th)) * (E[i] - o0);
+      vec2 e = mix(o0, Ei, k);
       float w = 0.0011 + 0.0006 * float(i % 3 == 0);
       fillA(smoothstep(w * 1.6, w * 0.5, sdSeg(p, o0, e) + rough() * 0.3) * (1.0 - uView.w), INK);
     }
@@ -195,6 +226,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
 const ease = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
 const lerp = (a, b, t) => a + (b - a) * t;
 const P0 = [-0.43, 0.035];                  // the point
+const VEND = [-0.572, 0.331, 4.73];          // the eye at the end: the yellow disc where the cardboard moon's round will be
 W.kand = {
   ready: false, t: 0, fade: 1, vol: 0, bg: 0, T: 11.0, pondTex: null, entry: [0.2, -0.1],
   init() {
@@ -210,7 +242,12 @@ W.kand = {
     // still for most of it; then in, onto the yellow in the blue circle, which a blue disc bites into a crescent
     const k = ease((t - 8.4) / 2.6);
     const kk = k * k;
-    return { x: lerp(0, -0.555, ease((t - 8.3) / 2.2)), y: lerp(0, 0.333, ease((t - 8.3) / 2.2)), z: lerp(1.0, 3.8, kk), bite: ease((t - 9.0) / 1.6) };
+    // (before that it drifts and leans in a little, never quite still)
+    const dx = 0.035 * Math.sin(t * 0.33 + 0.4) - 0.02 * ease(t / 8.3), dy = 0.018 * Math.sin(t * 0.27 + 1.1), dz = 0.96 + 0.08 * ease(t / 8.3);
+    const e = ease((t - 8.3) / 2.2);
+    // and at the very end, on into the thick of the crescent until it is all yellow paint (the next world starts from its
+    // own moon's yellow, close: paint becomes cardboard, not one moon over another)
+    return { x: lerp(dx, VEND[0], e), y: lerp(dy, VEND[1], e), z: lerp(dz, VEND[2], kk), bite: ease((t - 9.0) / 1.6) };
   },
   update(dt) {
     this.t += dt;
@@ -229,6 +266,10 @@ W.kand = {
     const v = this.view(t), hp = this.heroAt(t);
     U(p, 'uRes', [w, h]); U(p, 'uTime', t); U(p, 'uFade', this.fade); U(p, 'uAspect', aspect);
     U(p, 'uBg', this.pondTex ? this.bg : 0); U(p, 'uView', [v.x, v.y, v.z, v.bite]);
+    // the next world's moon: its outline, where it will be when that world begins
+    const st = YL.worlds.stop, mt = YL.assetTex('stop_moon_sdf', false);
+    U(p, 'uMoonR', st && st.moonRect ? st.moonRect(0) : [0, 0, 1, 1]); U(p, 'uMoonV', [VEND[0], VEND[1], VEND[2], mt ? ease((t - 9.7) / 1.1) : 0]);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mt || null); gl.uniform1i(p.u.uMoon, 2);
     U(p, 'uHero', [hp[0], hp[1], 1.0 + 0.08 * Math.sin(t * 2.88), 0.024]);
     if (this.pondTex) YL.bindTex(p, 'uPond', this.pondTex, 0); else { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(p.u.uPond, 0); }
     { const ct = YL.paperTex('paper_canvas'); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ct || null); gl.uniform1i(p.u.uCanvas, 1); }

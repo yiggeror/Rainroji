@@ -377,6 +377,8 @@ const D = YL.director = {
   // ---- out of the summer: up into the cloud, and through it into the print
   toPrint(dt) {
     const summer = YL.worlds.summer, wood = YL.worlds.woodcut, H = summer.hero;
+    // (in the film the eye turns slowly across the field as it goes, from the left of the great cloud toward the tree)
+    if (FILM && (D.phase === 'summer' || D.phase === 'paper')) summer.panYaw = lerp(-0.17, 0.07, smooth(0, T_SUMMER + 2.5, D.phase === 'summer' ? D.pt : T_SUMMER + D.pt));
     if (D.phase === 'summer') { if (FILM) summer.speed = 1.1; if (FILM) D.filmHand('summer', D.pt); if (D.pt > T_SUMMER) { YL.ptrDown = false; D.go('paper'); summer.startSheet(); } return; }
     // ---- a sheet of paper comes blowing over the grass. On it, faded, asleep, the snowy village is already printed. The light
     //      goes after it and into it, through its face: what has gone through is a flame in the print. The print wakes
@@ -631,7 +633,7 @@ const D = YL.director = {
     const pond = YL.worlds.pond, kd = YL.worlds.kand;
     if (!kd.ready) kd.init();
     const aspect = YL.canvasAspect(), H = pond.hero.p;
-    const nx = ((H[0] - (1.7778 - aspect) * 0.5 - (pond.pan || 0)) / aspect) * 2 - 1, ny = H[1] * 2 - 1;
+    const [nx, ny] = pond.toNdc(H, aspect);
     kd.start([nx * aspect * 0.5, ny * 0.5]);
     D.go('kand'); D.world = 'kand'; kd.vol = 1; kd.bg = 1;
   },

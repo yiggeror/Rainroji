@@ -118,10 +118,15 @@ W.stop = {
   // the camera: from right up against the moon (the circle of the painting it came out of), back and down to the
   // whole little sea; then slowly in on the boat
   cam(t) {
-    const a = ease((t - 0.3) / 4.2), b = ease((t - 4.5) / 6.0);
+    const a = ease((t - 0.9) / 3.9), b = ease((t - 4.5) / 6.0);          // (still while the painting's moon turns into it)
     const z = lerp(lerp(2.7, 1.04, Math.pow(a, 0.8)), 1.14, b);
     const x = lerp(lerp(0.54, 0.0, a), 0.10, b), y = lerp(lerp(0.30, -0.02, a), -0.06, b);
     return { x, y, z };
+  },
+  // where the moon is on the screen at t: its pivot (x, y) and its width and height (the Kandinsky ends on its outline)
+  moonRect(t) {
+    const m = SET[0], c = this.cam(t), [sx, sy, sc] = this.place(m[1], m[2], m[4], c), sz = YL.ASSET_SIZE && YL.ASSET_SIZE.stop_moon;
+    const H = m[3] * sc; return [sx, sy, H * (sz ? sz[0] / sz[1] : 0.659), H];
   },
   // where a thing on the set is on the screen: nearer things (k) slide and grow more as the camera moves
   place(x, y, k, c) { return [(x - c.x * k) * c.z, (y - c.y * k) * c.z, c.z * (1 + (k - 1) * (c.z - 1) * 0.6)]; },

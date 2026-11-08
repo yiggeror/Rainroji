@@ -34,6 +34,7 @@ uniform vec4 uPad[${NPAD}];  // lily pads: centre (x, y), radius across, seed (f
 uniform vec4 uSun;           // the sun: x, y (on the horizon), its brightness; the light on the water's x
 uniform vec4 uHero;          // 一粒光: x, y, brightness, -
 uniform float uPan;          // the eye drifting along the bank
+uniform float uZoom;         // and closing in a little as it goes (about the middle of the view)
 uniform vec4 uOpen[${NPAD / 4}];  // how far each pad's flower has opened (0 a bud … 1 open), four to a vec4
 uniform vec4 uRing[8];       // rings spreading on the water: where, how long ago, how strong
 uniform vec4 uFly[4];        // dragonflies: where, which way, their colour (0 blue … 1 red)
@@ -52,7 +53,8 @@ vec3 study(vec2 p){
   return textureLod(uImg, vec2(clamp(p.x / IMG_W, 0.001, 0.999), clamp(y, 0.001, 0.999)), 0.0).rgb;
 }
 void main(){
-  vec2 p = vec2(gl_FragCoord.x / uRes.y, gl_FragCoord.y / uRes.y) * vec2(1.0, 1.0);
+  vec2 p = vec2(gl_FragCoord.x / uRes.y, gl_FragCoord.y / uRes.y);
+  p = (p - vec2(uAspect * 0.5, 0.5)) / uZoom + vec2(uAspect * 0.5, 0.5);
   p.x += (1.7778 - uAspect) * 0.5 + uPan;
   vec3 c; float ang = 0.0, size = 0.5, kind = 0.0;
   float t = uTime;
@@ -227,7 +229,7 @@ const VS_STROKE = `#version 300 es
 precision highp float;
 layout(location = 0) in vec4 aS;     // where (0…1 of the frame), two dice
 uniform sampler2D uC, uP;
-uniform vec2 uRes; uniform float uTime, uScale, uBoil, uReveal; uniform vec4 uSun; uniform vec2 uBurst;
+uniform vec2 uRes; uniform float uTime, uScale, uBoil, uReveal, uHz; uniform vec4 uSun; uniform vec2 uBurst;
 out vec2 vQ; out vec3 vCol; out float vSeed, vA;
 ` + COMMON + `
 vec3 rgb2hsv(vec3 c){ vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0); vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g)); vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r)); float d = q.x - min(q.w, q.y); float e = 1.0e-10; return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x); }
@@ -250,7 +252,7 @@ void main(){
   if (r2 > 0.988 && kind < 0.9){ hsv.x = fract(hsv.x + 0.5); hsv.y *= 0.35; hsv.z = mix(hsv.z, 0.75, 0.3); }
   vec3 col = hsv2rgb(hsv);
   // on the sun's road, the strokes are short, fat and bright, and flicker
-  float road = exp(-pow((aS.x * uRes.x / uRes.y - uSun.w) / 0.08, 2.0)) * step(aS.y, 0.74) * uSun.z;
+  float road = exp(-pow((aS.x * uRes.x / uRes.y - uSun.w) / 0.08, 2.0)) * step(aS.y, uHz) * uSun.z;
   // direction and size
   float ang = P.x * 3.14159 + (hash12(aS.zw * 5.1 + b) - 0.5) * 0.35;
   float len_ = uScale * (0.6 + 0.8 * P.y) * (0.75 + 0.5 * hash12(aS.zw * 2.2));
@@ -389,7 +391,11 @@ W.pond = {
     way.push([this.dewPad[0] + 0.004, this.dewPad[1] + this.dewPad[2] * 0.12]);
     this.run = { way, buds: pick, L: way.reduce((a, q, i) => i ? a + Math.hypot(q[0] - way[i - 1][0], q[1] - way[i - 1][1]) : 0, 0) };
   },
-  toPaint(nx, ny, aspect) { return [(nx * 0.5 + 0.5) * aspect + (1.7778 - aspect) * 0.5 + (this.pan || 0), ny * 0.5 + 0.5]; },
+  toPaint(nx, ny, aspect) { const z = this.zoom || 1, off = (1.7778 - aspect) * 0.5 + (this.pan || 0);
+    return [((nx * 0.5 + 0.5) * aspect - aspect * 0.5) / z + aspect * 0.5 + off, (ny * 0.5) / z + 0.5]; },
+  // a place on the painting on the screen: x in screen heights from the left, y 0 … 1 up
+  toScr(q, aspect) { const z = this.zoom || 1, off = (1.7778 - aspect) * 0.5 + (this.pan || 0); return [(q[0] - off - aspect * 0.5) * z + aspect * 0.5, (q[1] - 0.5) * z + 0.5]; },
+  toNdc(q, aspect) { const s = this.toScr(q, aspect); return [s[0] / aspect * 2 - 1, s[1] * 2 - 1]; },
   pointer(nx, ny) { this.hero.aim = this.toPaint(nx, ny, YL.canvasAspect()); this.hero.aimT = this.t; },
   dew: 0, drop: 0,
   update(dt) {
@@ -421,7 +427,8 @@ W.pond = {
     if (fj >= 1 && !this.frogIn) { this.frogIn = true; const f = this.frogAt(); this.addRing(f[0] + 0.10, f[1] - 0.03, 1.3); this.plop && this.plop(); }
     this.frogK = Math.max(0, Math.min(1, fj));
     // the eye drifts slowly along the bank under the willow
-    this.pan = 0.36 * (a <= 0 ? 0 : YL.smooth(0.0, 16.0, a));
+    this.pan = 0.30 * (a <= 0 ? 0 : YL.smooth(0.0, 12.5, a));
+    this.zoom = 1 + 0.15 * (a <= 0 ? 0 : YL.smooth(1.5, 12.5, a));
     this.rings = (this.rings || []).filter(r => this.t - r.t0 < 4);
     this.sound(dt);
   },
@@ -454,7 +461,7 @@ W.pond = {
     U(this.pBase, 'uRes', [B.w, B.h]); U(this.pBase, 'uAspect', aspect); U(this.pBase, 'uTime', t);
     gl.uniform4fv(this.pBase.u.uPad, this.pads); U(this.pBase, 'uSun', sun);
     U(this.pBase, 'uHero', [H.p[0], H.p[1], (1 - this.dew) * br, 0]);
-    U(this.pBase, 'uPan', this.pan || 0);
+    U(this.pBase, 'uPan', this.pan || 0); U(this.pBase, 'uZoom', this.zoom || 1);
     gl.uniform4fv(this.pBase.u.uOpen, this.open);
     const rg = new Float32Array(32); (this.rings || []).forEach((r, i) => rg.set([r.x, r.y, t - r.t0, r.k], i * 4)); gl.uniform4fv(this.pBase.u.uRing, rg);
     gl.uniform4fv(this.pBase.u.uFly, this.flies());
@@ -476,9 +483,10 @@ W.pond = {
     gl.activeTexture(gl.TEXTURE1); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     const boil = YL.reduced ? 0 : Math.floor(t * 6);
     const off = (1.7778 - aspect) * 0.5 + (this.pan || 0);
-    U(this.pStroke, 'uRes', [Cv.w, Cv.h]); U(this.pStroke, 'uTime', t); U(this.pStroke, 'uBoil', boil % 64); U(this.pStroke, 'uSun', [sun[0], sun[1], sun[2], sun[3] - off + (1.7778 - aspect) * 0.5]);
-    const bc = this.burstAt || [sun[0], 0.74];
-    U(this.pStroke, 'uReveal', this.reveal * 2.4); U(this.pStroke, 'uBurst', [(bc[0] - off) / aspect, bc[1]]);
+    U(this.pStroke, 'uRes', [Cv.w, Cv.h]); U(this.pStroke, 'uTime', t); U(this.pStroke, 'uBoil', boil % 64); U(this.pStroke, 'uSun', [sun[0], sun[1], sun[2], this.toScr([sun[3], 0.5], aspect)[0]]);
+    U(this.pStroke, 'uHz', this.toScr([0, 0.74], aspect)[1]);
+    const bc = this.burstAt || [sun[0], 0.74], bs = this.toScr(bc, aspect);
+    U(this.pStroke, 'uReveal', this.reveal * 2.4); U(this.pStroke, 'uBurst', [bs[0] / aspect, bs[1]]);
     for (const L of this.layers) {
       U(this.pStroke, 'uScale', L.scale);
       gl.bindVertexArray(L.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, L.n);
@@ -489,9 +497,9 @@ W.pond = {
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     gl.useProgram(this.pFinal.p);
     U(this.pFinal, 'uRes', [w, h]); U(this.pFinal, 'uTime', t); U(this.pFinal, 'uFade', this.fade); U(this.pFinal, 'uWhite', this.white);
-    const dx = (H.p[0] - (1.7778 - aspect) * 0.5 - (this.pan || 0)) / aspect, dy = H.p[1] - this.drop * this.drop * 0.9;
-    U(this.pFinal, 'uDew', [dx, dy, 0.0045 + 0.002 * this.dew, this.dew * br]);
-    U(this.pFinal, 'uHeroS', [dx, H.p[1], (1 - this.dew) * br * (0.4 + 0.6 * this.reveal), 0]);
+    const hs = this.toScr(H.p, aspect), dx = hs[0] / aspect, dy = hs[1] - this.drop * this.drop * 0.9;
+    U(this.pFinal, 'uDew', [dx, dy, (0.0045 + 0.002 * this.dew) * (this.zoom || 1), this.dew * br]);
+    U(this.pFinal, 'uHeroS', [dx, hs[1], (1 - this.dew) * br * (0.4 + 0.6 * this.reveal), 0]);
     YL.bindTex(this.pFinal, 'uA', Cv.tex, 0);
     const cv = YL.paperTex && YL.paperTex('paper_canvas');
     U(this.pFinal, 'uCanvasK', cv ? 1 : 0); if (cv) YL.bindTex(this.pFinal, 'uCanvas', cv, 1);

@@ -158,11 +158,11 @@ void main(){
   if (uSkyK > 0.0){
     // the painted sky drifts very slowly downwind; its clouds boil a little (a slow flow through the picture, stronger in the
     // billows than in the open blue)
-    vec2 su = vec2((az + 0.0011 * uTime) / (2.0 * SKY_AZ) + 0.5, (el - SKY_EL0) / (SKY_EL1 - SKY_EL0));
-    vec2 fl = vec2(fbm3(su * vec2(14.0, 4.6) + vec2(uTime * 0.035, 0.0)), fbm3(su * vec2(14.0, 4.6) + vec2(5.2, -uTime * 0.03))) - 0.5;
+    vec2 su = vec2((az + 0.0042 * uTime) / (2.0 * SKY_AZ) + 0.5, (el - SKY_EL0) / (SKY_EL1 - SKY_EL0));
+    vec2 fl = vec2(fbm3(su * vec2(14.0, 4.6) + vec2(uTime * 0.055, 0.0)), fbm3(su * vec2(14.0, 4.6) + vec2(5.2, -uTime * 0.075))) - 0.5;
     vec3 sk0 = textureLod(uSkyImg, clamp(su, vec2(0.0), vec2(1.0)), 0.0).rgb;
     float cl = smoothstep(0.55, 0.85, dot(sk0, vec3(0.3, 0.4, 0.3)) - 0.6 * (sk0.b - sk0.r) + 0.35);     // white, unsaturated: cloud
-    vec2 sw = su + fl * vec2(0.0030, 0.0075) * (0.35 + 0.65 * cl);
+    vec2 sw = su + fl * vec2(0.0052, 0.0125) * (0.35 + 0.65 * cl);
     vec3 sk = texture(uSkyImg, clamp(sw, vec2(0.0), vec2(1.0))).rgb;
     // in the billows the light shifts a little as they turn (a slow breathing of their sunlit tops)
     sk *= 1.0 + 0.035 * cl * (fbm3(su * vec2(30.0, 10.0) + uTime * 0.06) - 0.5);
@@ -848,7 +848,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
     return { c, X: V.mul(X, 0.24), Y: V.mul(Y, 0.135), N, curl, tau, rest: Rs };
   },
   // where the eye is: it travels forward over the field (this.speed m/s), weaving a little
-  eyeAt(t) { const z = -(this.travel || 0); return [0.45 * Math.sin(z * 0.11), 0.80 + 0.05 * Math.sin(t * 0.55), z]; },
+  eyeAt(t) { const z = -(this.travel || 0); return [0.45 * Math.sin(z * 0.11), 0.80 + 0.05 * Math.sin(t * 0.55) + 0.06 * Math.sin(t * 0.31 + 0.8), z]; },
   update(dt, still) {
     this.t += dt;
     this.travel = (this.travel || 0) + (this.speed ?? 0.5) * dt;
@@ -864,7 +864,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
   },
   camera(aspect, t, still) {
     // eye 1.1 m above the field, looking a little up so the sky has most of the frame; a slow drift
-    let yaw = (aspect < 0.9 ? -0.12 : 0) + (still ? 0 : 0.02 * Math.sin(t * 0.13)) + (YL.ptrPar ? YL.ptrPar[0] * 0.04 : 0);
+    let yaw = (aspect < 0.9 ? -0.12 : 0) + (still ? 0 : 0.02 * Math.sin(t * 0.13)) + (YL.ptrPar ? YL.ptrPar[0] * 0.04 : 0) + (this.panYaw || 0);
     let pitch = 0.20 - 0.08 * Math.min(1, (this.speed ?? 0.5) / 1.1) + (still ? 0 : 0.008 * Math.sin(t * 0.11)) + (YL.ptrPar ? YL.ptrPar[1] * 0.02 : 0);
     // following the light up into the great cloud (TOWER: its azimuth and the height it rises to), then into it
     const lift = this.lift || 0, zoom = this.zoom || 0;

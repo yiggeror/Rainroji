@@ -202,6 +202,17 @@ if want('stop'):
         im = L(n).convert('RGBA'); a = im.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
         im = im.crop((0, max(0, bb[1] - 8), im.width, im.height)); im = scale(im, w=2560)
         items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
+    # the moon's outline as a signed distance (for the Kandinsky's crescent to grow into its shape): 128 on the edge,
+    # +/- 1 per 3 pixels of the moon picture (positive outside), a quarter of its size; the string left out
+    import numpy as np
+    from scipy import ndimage
+    mo = L('sm_moon').convert('RGBA'); mo, _ = crop_alpha(mo); mo = scale(mo, h=1100)
+    a = np.asarray(mo)[..., 3] > 128
+    lab, n = ndimage.label(a); sizes = ndimage.sum(a, lab, range(1, n + 1)); m = lab == (np.argmax(sizes) + 1)
+    d = ndimage.distance_transform_edt(~m) - ndimage.distance_transform_edt(m)
+    sd = Image.fromarray(np.clip(128 + d / 3.0, 0, 255).astype('uint8'), 'L').resize((mo.width // 4, mo.height // 4), Image.BILINEAR)
+    b = io.BytesIO(); sd.save(b, 'PNG', optimize=True)
+    items['stop_moon_sdf'] = ('data:image/png;base64,' + base64.b64encode(b.getvalue()).decode(), sd.size)
     write('stop', items)
 # ---- papers and a canvas for the older worlds (watercolour paper for the sea, washi for the print, xuan for the ink,
 # linen for the Kandinsky): the middle of each scan, grey, 1024 square; the shaders tile it (mirrored) and take its relief
