@@ -10,7 +10,7 @@
    光照着这片小海：浪上有一条它的碎金倒影，玻璃纸的折痕跟着它闪；浪花、海鸥、帆，离它近的都被照暖。
    最后孩子把光高高举起，光离开他的手，朝镜头飘过来，越来越亮，白——回到雨夜的房间。
    画法：天幕、月亮、云、三条浪、船上的十二个姿势、浪花六格、海鸥四格都是生成的图（见 assets/prompts/）；
-   · 布景里的东西按定格动画的节奏动：每秒 12 格，一格一格地跳，每格还带一点点手摆的抖（镜头是轨道上的，平滑）；
+   · 布景的大动作（浪机、涌浪、船随浪起伏、海鸥飞）每秒 24 格，平滑；孩子的替换姿势、海鸥扇翅、手摆的微抖每秒 12 格；
    · 微距：焦点在船上，前后的层按远近虚掉。
    ========================================================================== */
 (() => {
@@ -323,7 +323,9 @@ W.stop = {
     gl.disable(gl.BLEND);
     gl.useProgram(p.p);
     const c = this.cam(t);
-    const step = Math.floor(t * FPS), ts = step / FPS;
+    // the big sweeps of the set (the wave machine, the swell, the boat riding it, the gulls flying) move on ones, smooth;
+    // the replacement poses, the gulls' wingbeats and the hand-made tremble move on twos
+    const step = Math.floor(t * FPS), ts = step / FPS, tc = t;
     this.lift = ease((t - 12.0) / 1.6);                                       // (the light raised: the little sea brightens)
     const boil = (id, a) => (hj(step * 7.31 + id * 13.7) - 0.5) * a;          // a hand on the puppet, a hair off each frame
     const ATL = YL.STOP_ATLAS, AS = YL.ASSET_SIZE || {};
@@ -333,20 +335,20 @@ W.stop = {
       const tx = YL.assetTex(k), sz = AS[k]; texs.push(tx);
       if (!tx || !sz) return;
       let xx = x, yy = y, ang = 0;
-      if (k === 'stop_moon') ang = 0.05 * Math.sin(ts * 0.9) + boil(1, 0.004);
-      else { const ph = i * 1.7; ang = 0.07 * Math.sin(ts * 1.1 + ph) + boil(i, 0.006); yy = y + 0.005 * Math.sin(ts * 0.7 + ph); xx = x - 0.012 * ts; }
+      if (k === 'stop_moon') ang = 0.05 * Math.sin(tc * 0.9) + boil(1, 0.004);
+      else { const ph = i * 1.7; ang = 0.07 * Math.sin(tc * 1.1 + ph) + boil(i, 0.006); yy = y + 0.005 * Math.sin(tc * 0.7 + ph); xx = x - 0.012 * tc; }
       const [sx, sy, sc] = this.place(xx, yy, kd, c);
       const H = hgt * sc;
       A.set([sx, sy, H * sz[0] / sz[1], H], i * 4); B.set([pu, pv, ang, lod], i * 4); C.set([1, 0, warmth + 0.5 * this.lift, 0], i * 4);
     });
     // ---- the strips
     const L = new Float32Array(12), M = new Float32Array(12), N = new Float32Array(12), wtex = [];
-    const ph = this.phase(), A_ = this.amp(ts);
+    const ph = this.phase(), A_ = this.amp(tc);
     STRIPS.forEach(([k, y, hgt, kd, flow, gain, sph, lod, glint, warmth], i) => {
       const tx = YL.tileTex(k), sz = AS[k]; wtex.push(tx);
       if (!sz) return;
       const [sx, sy, S] = this.placeN(0, y, kd, c);
-      L.set([sx, sy, S, flow * ts], i * 4); M.set([hgt, hgt * sz[0] / sz[1], gain, 0], i * 4);
+      L.set([sx, sy, S, flow * tc], i * 4); M.set([hgt, hgt * sz[0] / sz[1], gain, 0], i * 4);
       N.set([lod + (i === 2 ? 0.8 * (c.z - 1) : 0), glint, warmth, 0], i * 4);
     });
     // (each strip's swell: the same wave, its own gain and a shift of phase — passed as a gain on the amplitude and a phase)
@@ -357,8 +359,8 @@ W.stop = {
     const thr = new Float32Array(8);
     let hand = [0, 0], handUV = [0.5, 0.5], leave = ease((t - T_LEAVE) / 0.6);
     if (ATL && AS.stop_atlas) {
-      const PM = ATL.poses, pi = this.pose(ts), ride = this.ride(ts);
-      const bx = this.boatX(ts) + boil(21, 0.003), by = BOAT_Y + ride.y + boil(22, 0.002), ang = ride.ang + boil(23, 0.006);
+      const PM = ATL.poses, pi = this.pose(ts), ride = this.ride(tc);
+      const bx = this.boatX(tc) + boil(21, 0.003), by = BOAT_Y + ride.y + boil(22, 0.002), ang = ride.ang + boil(23, 0.006);
       const [sx, sy, S] = this.placeN(bx, by, KB, c), H = BOAT_H * S, Wd = H * PM.w / PM.h;
       P.set([sx, sy, Wd, H], 0); Q.set([PM.anchor[0], PM.anchor[1], ang, 0], 0); R.set(this.frame('poses', pi), 0);
       Sx.set([1, 0, 0.30 + 0.3 * this.lift, 0], 0);
@@ -386,14 +388,14 @@ W.stop = {
         thr.set([gx + kx, gy + ky, 1, 0], tslot * 4);
       };
       // far: across the sky, right to left
-      if (t < 12.5) gull(2, 1.15 - 0.27 * ts, Math.max(0.02, 0.30 - 0.06 * ts) + 0.02 * Math.sin(ts * 2.1), 1.12, 0.075, false, 6, 0.2, 0);
+      if (t < 12.5) gull(2, 1.15 - 0.27 * tc, Math.max(0.02, 0.30 - 0.06 * tc) + 0.02 * Math.sin(tc * 2.1), 1.12, 0.075, false, 6, 0.2, 0);
       // near: catches up with the boat from behind, hangs over the light (the sailor offers it up), then away up and ahead
       if (t > 5.6 && t < 13.2) {
         const kx = [[5.6, -1.25, 0.62], [7.5, 0.06, 0.46], [8.6, 0.16, 0.52], [9.6, 0.10, 0.47], [10.7, 0.16, 0.50], [12.9, 1.30, 0.95]];
-        let j = 0; while (j < kx.length - 2 && ts > kx[j + 1][0]) j++;
-        const [t0, x0, y0] = kx[j], [t1, x1, y1] = kx[j + 1], u = ease((ts - t0) / (t1 - t0));
-        const hov = clamp01((ts - 7.3) / 0.6) * (1 - clamp01((ts - 10.7) / 0.5));
-        const ox = lerp(x0, x1, u) + hov * 0.035 * Math.sin((ts - 7.5) * 2.4), oy = lerp(y0, y1, u) + hov * 0.02 * Math.sin((ts - 7.5) * 3.7);
+        let j = 0; while (j < kx.length - 2 && tc > kx[j + 1][0]) j++;
+        const [t0, x0, y0] = kx[j], [t1, x1, y1] = kx[j + 1], u = ease((tc - t0) / (t1 - t0));
+        const hov = clamp01((tc - 7.3) / 0.6) * (1 - clamp01((tc - 10.7) / 0.5));
+        const ox = lerp(x0, x1, u) + hov * 0.035 * Math.sin((tc - 7.5) * 2.4), oy = lerp(y0, y1, u) + hov * 0.02 * Math.sin((tc - 7.5) * 3.7);
         gull(3, bx + ox, by + oy, KB, 0.17, true, hov > 0.5 ? 12 : 8, 0.9, 1);
       }
     }
@@ -411,11 +413,11 @@ W.stop = {
     // the foil stars: each on its thread, turning a little this way and that, a frame at a time
     const st = new Float32Array(32);
     STARS.forEach(([x, y, sz, k, ph], i) => {
-      const [sx, sy, sc] = this.place(x - 0.004 * ts, y + 0.004 * Math.sin(ts * 0.8 + ph), k, c);
-      st.set([sx, sy, sz * sc, ph + 1.3 * Math.sin(ts * 0.55 + ph * 2.0) + 0.35 * ts], i * 4);
+      const [sx, sy, sc] = this.place(x - 0.004 * tc, y + 0.004 * Math.sin(tc * 0.8 + ph), k, c);
+      st.set([sx, sy, sz * sc, ph + 1.3 * Math.sin(tc * 0.55 + ph * 2.0) + 0.35 * tc], i * 4);
     });
     gl.uniform4fv(p.u.uStar, st);
-    U(p, 'uSw', [A_, ph, ts, KW]);
+    U(p, 'uSw', [A_, ph, tc, KW]);
     U(p, 'uRes', [w, h]); U(p, 'uTime', t); U(p, 'uStep', step); U(p, 'uFade', this.fade); U(p, 'uLift', this.lift);
     U(p, 'uWhite', this.white); U(p, 'uFlick', 0.012 * (Math.sin(step * 12.9898) * 0.5));
     U(p, 'uHero', [this.hero.p[0], this.hero.p[1], this.hero.b, 0.022 + 0.05 * up]);
