@@ -298,7 +298,7 @@ const D = YL.director = {
       return;
     }
     if (D.phase === 'stage') {
-      stg.view = [0, 0, 0.9 / vil.OVER];
+      stg.FULL = 0.9 / vil.OVER; stg.view = stg.viewAt(stg.t);
       if (stg.t > T_PLAY && !stg.drop) stg.startDrop();
       if (stg.drop && stg.lamp[1] < stg.WATER - 0.02) { D.go('fall'); if (!sea.ready) sea.init(); D.fallV = null; }
       return;

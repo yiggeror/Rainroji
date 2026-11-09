@@ -308,6 +308,44 @@ if want('piying'):
         im, _ = crop_alpha(L('sh_' + n).convert('RGBA')); im = scale(im, w=1280)
         items['pi_' + n] = (uri(im, 'webp', 88), im.size)
     write('piying', items)
+# ---- the stage's shadow play (the village's screen): every piece of carved and dyed hide, laid on white (white lets the
+# lamp through; the dyes colour it; the dark edges stop it) in one atlas, with each piece's place in it
+if want('stage'):
+    import numpy as np
+    def on_white(im):
+        bg = Image.new('RGBA', im.size, (255, 255, 255, 255)); bg.alpha_composite(im); return bg
+    def tileable(im):
+        A = np.asarray(im).astype(np.float32); Wd = A.shape[1]; o = Wd // 8
+        k = np.linspace(0, 1, o)[None, :, None]
+        T = np.concatenate([A[:, :o] * k + A[:, Wd - o:] * (1 - k), A[:, o:Wd - o]], 1)
+        return Image.fromarray(T.clip(0, 255).astype('uint8'), im.mode)
+    P = {}
+    def add(name, im, w=None, h=None):
+        im, _ = crop_alpha(im.convert('RGBA')); P[name] = scale(im, w=w) if w else scale(im, h=h)
+    add('mountains', L('sh_mountains'), w=1500); add('wall', L('sh_wall'), w=1300); add('bridge', L('sh_bridge'), w=1200)
+    add('clouds', L('sh_clouds'), w=1200)
+    for i, im in enumerate(split_components(L('sh_set').convert('RGBA'), 5)):
+        n = ['pagoda', 'willow', 'pine', 'boat', 'lotus'][i]; add(n, im, h={'pagoda': 640, 'boat': 260}.get(n, 520))
+    for i, im in enumerate(split_components(L('sh_dragon').convert('RGBA'), 3)):
+        add(['dhead', 'dclaw', 'dtail'][i], im, w=560)
+    add('dbody', L('pi_dbody2'), w=560)
+    for i, im in enumerate(split_components(L('pi_horse').convert('RGBA'), 3)):
+        add(['horse', 'fleg', 'hleg'][i], im, **({'w': 720} if i == 0 else {'h': 360}))
+    for i, im in enumerate(split_components(L('pi_rider2').convert('RGBA'), 3)):
+        add(['gbody', 'gleg', 'garm'][i], im, h=[520, 380, 400][i])
+    add('runner', L('pi_rider'), h=520); add('fisher', L('pi_fisher'), h=480)
+    for i, im in enumerate(split_components(L('pi_carp').convert('RGBA'), 2)):
+        add(['ctail', 'carp'][i], im, **({'h': 280} if i == 0 else {'w': 480}))
+    cr = split_components(L('pi_crane').convert('RGBA'), 2)
+    cr.sort(key=lambda im: -im.width / im.height)                              # (the crane, legs out, is the longer)
+    add('crane', cr[0], w=600); add('cwing', cr[1], w=520)
+    wv, _ = crop_alpha(L('pi_waves').convert('RGBA')); P['waves'] = tileable(scale(wv, w=2048))
+    P['bank'] = L('pi_bank').convert('RGBA')                                   # (drawn by hand, below; it tiles as it is)
+    sp = [(n, [on_white(im)], (0.5, 0.5)) for n, im in P.items()]
+    at, meta = pack_atlas(sp)
+    at = at.convert('RGB'); A_ = np.asarray(at).copy(); A_[np.asarray(pack_atlas(sp)[0])[..., 3] == 0] = 255; at = Image.fromarray(A_)
+    items = {'stage_atlas': (uri(at, 'jpeg', 90), at.size)}
+    write('stage', items, extra=f"window.YL.STAGE_ATLAS = {json.dumps({k: {'at': v['at'][0], 'w': v['w'], 'h': v['h']} for k, v in meta.items()})};")
 # ---- the ink handscroll, in two halves (painted over the scroll's own layout, so everything that moves on it still
 # stands where it should): kept as how much ink lies on the paper (0 bare paper … 1 the blackest), grey
 def ink_density(im):

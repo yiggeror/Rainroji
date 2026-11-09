@@ -27,6 +27,9 @@ uniform vec3 uLamp;           // x, y on the screen, how bright
 uniform vec3 uView;           // the centre of the picture on the screen (m), half its height (m)
 uniform float uTime;
 uniform vec4 uSea;            // where the pearl went into the water (x, y), how far the water has changed from there, the waterline
+uniform vec2 uAtSize;         // the atlas, px
+uniform vec4 uRod[10];        // the rods the players hold the figures by: where each meets its figure (x, y), how far behind the screen, on
+uniform float uFlick;         // the oil lamp's flame, breathing
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -47,16 +50,35 @@ void main(){
     vec2 a = B.yz + vec2(q.x / A.w, -q.y / abs(A.w));
     if (a.x < C.x || a.x > C.z || a.y < C.y || a.y > C.w) continue;
     float pen = lampR * s / ${D.toFixed(2)} / abs(A.w);
-    vec3 tc = textureLod(uAtlas, a / vec2(4096.0, 2048.0), log2(max(pen, 0.7))).rgb;
+    vec3 tc = textureLod(uAtlas, vec2(a.x, uAtSize.y - a.y) / uAtSize, min(log2(max(pen, 0.7)), 3.2)).rgb;
+    tc = pow(tc, vec3(0.80));                                      // (dyed hide lets the light through well)
     bool tile = B.w > 1.5;
     float ex = tile ? 1e3 : min(a.x - C.x, C.z - a.x);
-    float edgeF = smoothstep(0.0, 24.0, min(ex, min(a.y - C.y, C.w - a.y)));
+    float edgeF = smoothstep(0.0, 3.0, min(ex, min(a.y - C.y, C.w - a.y)));
     T *= mix(vec3(1.0), tc, (tile ? 1.0 : B.w) * edgeF);
   }
+  // the rods: thin bamboo, from each figure down and back to the hands below the screen; their shadows soften as they go
+  for (int i = 0; i < 10; i++){
+    vec4 R = uRod[i];
+    if (R.w <= 0.0) continue;
+    vec2 a0 = R.xy, a1 = vec2(R.x * 0.82 + 0.10 * sign(R.x), -1.25);
+    vec2 ab = a1 - a0; float h = clamp(dot(X - a0, ab) / dot(ab, ab), 0.0, 1.0);
+    float d = length(X - a0 - ab * h);
+    float wdt = 0.0022 + 0.007 * h, soft = 0.0012 + 0.010 * h;
+    T *= 1.0 - R.w * (0.42 - 0.22 * h) * smoothstep(wdt + soft, wdt - soft * 0.3, d) * step(1e-4, h);
+  }
+  // smoke from the lamp's chimney, drifting up between the lamp and the screen: soft moving shade
+  vec2 sq = (X - Lp) * vec2(2.2, 1.4);
+  float smk = vnoise(sq * 2.0 + vec2(0.3 * uTime, -0.55 * uTime)) * 0.6 + vnoise(sq * 4.3 + vec2(-0.2 * uTime, -0.9 * uTime)) * 0.4;
+  float sMask = smoothstep(-0.05, 0.25, X.y - Lp.y) * exp(-abs(X.x - Lp.x - 0.15 * (X.y - Lp.y)) * 2.2) * exp(-max(X.y - Lp.y, 0.0) * 1.2);
+  T *= 1.0 - 0.16 * smoothstep(0.45, 0.85, smk) * sMask;
   // the lamp's light on the screen; its hot spot is the pearl
   float r2 = dot(X - Lp, X - Lp), r = sqrt(r2);
-  float E = pow(${(D * D).toFixed(3)} / (${(D * D).toFixed(3)} + r2), 1.6);
-  float flick = 1.0 + 0.04 * sin(uTime * 11.0) * sin(uTime * 7.3);
+  float E = pow(${(D * D).toFixed(3)} / (${(D * D).toFixed(3)} + r2), 2.0);
+  // (and the troupe's own lamp, fixed, high in the middle: the screen is never dark where the play is)
+  vec2 Fp = vec2(0.0, 0.25);
+  E += 0.42 * pow(1.6 / (1.6 + dot(X - Fp, X - Fp)), 1.4);
+  float flick = uFlick;
   vec3 lampC = vec3(1.0, 0.80, 0.52);
   float on = uLamp.z;
   vec3 c = lampC * E * 2.7 * T * on * flick;
@@ -72,8 +94,11 @@ void main(){
   float inside = step(abs(X.x), ${(SW / 2).toFixed(2)}) * step(abs(X.y), ${(SH / 2).toFixed(2)});
   c *= mix(0.15, 1.0, inside);
   float lum = dot(c, vec3(0.3, 0.55, 0.15));
-  c = max(mix(vec3(lum), c, 1.22), 0.0);                       // dyed hide, lit from behind, is vivid
-  c *= mix(vec3(1.0), vec3(1.0, 0.86, 0.70), smoothstep(0.6, 1.7, r));   // warmer and deeper away from the lamp
+  c = max(mix(vec3(lum), c, 1.32), 0.0);                       // dyed hide, lit from behind, is vivid
+  c *= mix(vec3(1.0), vec3(0.95, 0.66, 0.42), smoothstep(0.5, 1.8, r));   // warmer and deeper away from the lamp
+  // the cloth darkens toward its edges, where the lamp hardly reaches and the frame's shadow lies
+  vec2 eg = abs(X) / vec2(${(SW / 2).toFixed(2)}, ${(SH / 2).toFixed(2)});
+  c *= 1.0 - 0.45 * smoothstep(0.55, 1.0, max(eg.x, eg.y * 0.92)) - 0.15 * smoothstep(0.7, 1.0, eg.y);
   c = 1.0 - exp(-c * 1.1);
   c = pow(c, vec3(0.92));
   // below the waterline, near where the pearl went in, the water is no longer hide: it is the sea (alpha 0)
@@ -97,13 +122,8 @@ W.stage = {
     const gl = YL.gl;
     this.p = YL.makeProgram('stage', VS, FS); YL.checkProgram(this.p);
     this.empty = gl.createVertexArray();
-    const cv = document.createElement('canvas'); cv.width = 4096; cv.height = 2048;
-    YL.PUPPETS.draw(cv.getContext('2d'));
-    this.atlas = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, this.atlas);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // the pieces of carved hide (generated; see assets/prompts/pi_*, sh_*), laid on white in one atlas
+    this.atlas = YL.assetTex('stage_atlas');
     this.A = new Float32Array(NP * 4); this.B = new Float32Array(NP * 4); this.C = new Float32Array(NP * 4);
     this.reset();
     this.ready = true;
@@ -150,78 +170,124 @@ W.stage = {
   // the head's distance along the way at t: in fast from the left, then at a swimming pace
   dS(t) { const t0 = 0.8; if (t < t0) return 0; const a = t - t0; return 1.6 * a - 0.95 * Math.max(0, a - 1.6) + 0.04 * Math.sin(a * 1.7); },
   startDrop() { this.drop = { t0: this.t, p0: this.pearlAt(this.t) }; },
+  // what the eye sees of the screen: all of it as the stage is reached; it leans in to the play; back out as the pearl falls
+  viewAt(t) {
+    const full = this.FULL || SH / 2, k = smooth(2.8, 6.0, t) * (1 - smooth(7.4, 9.3, t));
+    return [0.22 * k * Math.sin(0.3 + t * 0.15), 0.07 * k, full * (1 - 0.17 * k)];
+  },
   pieces() {
-    const out = [], t = this.t, P = YL.PUPPETS, CELLS = P.CELLS, PART = P.PART;
-    const rectOf = (name) => {
-      if (PART[name]) { const [x0, y0, x1, y1, base] = PART[name]; const [cx, cy] = CELLS[base || name]; return [cx * 512 + x0 * 0.512, cy * 512 + y0 * 0.512, cx * 512 + x1 * 0.512, cy * 512 + y1 * 0.512]; }
-      const [cx, cy, wd = 1] = CELLS[name]; return [cx * 512, cy * 512, (cx + wd) * 512, (cy + 1) * 512];
+    const out = [], t = this.t, AT = YL.STAGE_ATLAS;
+    this.rods = [];
+    if (!AT) return out;
+    // name, the pivot on the screen (m), how far behind the screen (m), metres per atlas pixel, turn, the pivot in the piece
+    // (fractions of its width and height, from its top left), mirrored, how dense the hide
+    const put = (name, x, y, s, mpp, ang, pu, pv, flip = 1, dens = 1) => {
+      const P = AT[name]; if (!P) return;
+      const [ax, ay] = P.at;
+      out.push([x, y, s, mpp * flip, ang, ax + pu * P.w, ay + pv * P.h, dens, ax, ay, ax + P.w, ay + P.h]);
     };
-    const origin = (name) => { const base = PART[name] ? (PART[name][4] || name) : name; const [cx, cy] = CELLS[base]; return [cx * 512, cy * 512]; };
-    const put = (name, x, y, s, mpp, ang, px, py, flip = 1, dens = 1) => {
-      const [ox, oy] = origin(name);
-      out.push([x, y, s, mpp * flip, ang, ox + px * 0.512, oy + py * 0.512, dens, ...rectOf(name)]);
+    // where a point of a piece is on the screen, once placed
+    const at = (name, x, y, mpp, ang, pu, pv, u, v, flip = 1) => {
+      const P = AT[name], dx = (u - pu) * P.w * mpp * flip, dy = -(v - pv) * P.h * mpp, c = Math.cos(ang), s_ = Math.sin(ang);
+      return [x + c * dx - s_ * dy, y + s_ * dx + c * dy];
     };
-    // far mountains, soft
-    put('mountains', -0.62, -0.10, 0.36, 0.0017, 0, 1000, 560, 1, 0.26);
-    put('mountains', 1.05, -0.12, 0.34, 0.0017, 0, 1000, 560, -1, 0.24);
-    // clouds drifting across the top
-    put('clouds', -0.75 + 0.02 * t, 0.66, 0.03, 0.00095, 0, 1000, 500, 1, 0.9);
-    put('clouds', 1.05 + 0.015 * t, 0.70, 0.04, 0.00095, 0, 1000, 500, -1, 0.9);
-    // a stone bridge over the water on the right, its far end lost behind the mountains' foot
-    put('bridge', 0.95, -0.50, 0.04, 0.00080, 0, 1000, 700, 1, 0.95);
-    // reeds and a lotus at the water's edge, close to the screen
-    put('reeds', -1.35, -0.62, 0.01, 0.00070, 0.03 * Math.sin(t * 0.9), 500, 990, 1, 1);
-    put('lotus', 1.42, -0.58, 0.01, 0.00062, 0, 500, 760, 1, 1);
-    // the pagoda on its hill and a willow
-    put('pagoda', -1.22, -0.18, 0.05, 0.0011, 0, 500, 1000, 1, 1);
-    put('willow', -0.92, -0.42, 0.02, 0.0010, 0.02 * Math.sin(t * 0.8), 500, 1000, 1, 1);
-    // the dragon: head, eight joints and the tail, all on its way behind one another
-    const mpp = 0.00085, segL = 480 * 0.512 * mpp, sH = this.dS(t);
-    const joints = []; for (let i = 0; i <= 9; i++) joints.push(this.wayAt(sH - 0.05 - i * segL));
-    const ang = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
-    const hp = this.wayAt(sH + 0.08);
-    put('dhead', joints[0][0], joints[0][1], 0.012, mpp, ang(joints[0], hp) + 0.18, 230, 530);
-    for (let i = 0; i < 8; i++) put('dbody', joints[i][0], joints[i][1], 0.012, mpp, ang(joints[i], joints[i + 1]) + Math.PI, 900, 530);
-    put('dtail', joints[8][0], joints[8][1], 0.012, mpp, ang(joints[8], joints[9]), 100, 530);
-    // a horseman at the gallop along the far bank and over the bridge: the legs swing on their rivets, the body rocks,
-    // the rider rises and falls
+    const rod = (x, y, s, k = 1) => this.rods.push([x, y, s, k]);
+    // ---- far: the mountains (big and soft: they are held well back from the screen), clouds drifting
+    put('mountains', -0.75, -0.42, 0.30, 0.0015, 0, 0.5, 1.0, 1, 0.42);
+    put('mountains', 1.05, -0.44, 0.32, 0.0014, 0, 0.5, 1.0, -1, 0.36);
+    put('clouds', -0.80 + 0.018 * t, 0.66, 0.05, 0.00085, 0, 0.5, 0.5, 1, 0.85);
+    put('clouds', 0.95 + 0.012 * t, 0.74, 0.06, 0.00070, 0, 0.5, 0.5, -1, 0.80);
+    put('pagoda', -0.55, -0.40, 0.10, 0.00060, 0, 0.5, 1.0, 1, 0.62);
+    // ---- the far bank: the city wall and its gate on the left, the bridge on the right, trees; the bank between
+    for (let i = -1; i <= 1; i++) put('bank', i * 1536 * 0.00072, -0.535, 0.012, 0.00072, 0, 0.5, 0.31, 1, 2);
+    put('wall', -1.22, -0.50, 0.025, 0.00068, 0, 0.5, 1.0, 1, 1);
+    put('bridge', 1.20, -0.50, 0.02, 0.00062, 0, 0.5, 1.0, 1, 1);
+    put('willow', 1.62, -0.50, 0.03, 0.00070, 0.03 * Math.sin(t * 0.9 + 1.0), 0.5, 1.0, -1, 0.9);
+    // ---- the general rides out of the gate, along the bank and over the bridge: the legs swing on their rivets, the
+    // horse rocks, the rider rises and falls in the saddle and levels his spear
     {
-      const hx = -2.2 + 0.36 * Math.max(0, t - 1.0);
-      if (hx > -2.3 && hx < 2.3) {
-        const mppH = 0.00105, g = t * 9.0, rock = 0.05 * Math.sin(g), bob = 10 * Math.sin(2 * g + 0.5);
-        const bridge = 0.11 * Math.max(0, 1 - Math.pow((hx - 0.95) / 0.42, 2));
-        const yg = -0.50 + bridge;
-        const sg = 0.512 * mppH, oy = 300, ox = 500, rootY = yg + sg * (316 + bob);
-        const f = (name, x, y, px, py, turn = 0, kk = 1) => {
-          const dx = (x - ox) * sg, dy = -(y - oy) * sg, c = Math.cos(rock), s_ = Math.sin(rock);
-          put(name, hx + c * dx - s_ * dy, rootY + s_ * dx + c * dy, 0.02, mppH * kk, turn + rock, px, py, 1, 1);
-        };
-        f('hleg', 330, 380, 500, 100, 0.45 * Math.sin(g + 2.4)); f('fleg', 700, 390, 500, 120, 0.55 * Math.sin(g - 0.6));
-        f('horse', 500, 300, 500, 300);
-        f('hleg', 334, 380, 500, 100, 0.45 * Math.sin(g + 1.6)); f('fleg', 696, 390, 500, 120, 0.55 * Math.sin(g + 0.4));
-        f('rider', 520, 282 - 4 * Math.sin(2 * g + 1.5), 500, 620, -0.5 * rock - 0.04 * Math.sin(g), 1.45);
+      const hx = -1.22 + 0.36 * Math.max(0, t - 2.0);
+      if (hx < 2.4) {
+        const m = 0.00062, g = t * 8.0 * (t > 2.2 ? 1 : 0.4), rock = 0.045 * Math.sin(g), bob = 0.008 * Math.sin(2 * g + 0.5);
+        const bridge = 0.095 * Math.max(0, 1 - Math.pow((hx - 1.20) / 0.36, 2));
+        const ground = -0.535 + 0.012 + bridge, legLen = 360 * 0.925 * m;
+        const by = ground + legLen + (0.26 * 556) * m * 0.0 + bob;
+        // the body's pivot: the middle of its belly line
+        const B = (u, v) => at('horse', hx, by, m, rock, 0.55, 0.75, u, v);
+        const hind = B(0.36, 0.76), fore = B(0.80, 0.74);
+        put('hleg', hind[0], hind[1], 0.016, m, 0.42 * Math.sin(g + 2.4), 0.33, 0.075);
+        put('fleg', fore[0], fore[1], 0.016, m, 0.50 * Math.sin(g - 0.6), 0.5, 0.075);
+        put('horse', hx, by, 0.014, m, rock, 0.55, 0.75);
+        put('hleg', hind[0] + 0.006, hind[1], 0.012, m, 0.42 * Math.sin(g + 1.5), 0.33, 0.075);
+        put('fleg', fore[0] - 0.006, fore[1], 0.012, m, 0.50 * Math.sin(g + 0.4), 0.5, 0.075);
+        // the general: in the saddle; his leg hangs at his hip, his arm at his shoulder
+        const gm = m * 0.92, seat = B(0.47, 0.30), sway = -0.5 * rock + 0.03 * Math.sin(g * 0.5);
+        const gy = seat[1] + 0.012 * Math.sin(2 * g + 1.6);
+        const G = (u, v) => at('gbody', seat[0], gy, gm, sway, 0.83, 0.78, u, v);
+        const hip = G(0.83, 0.78), sh = G(0.74, 0.47);
+        put('gbody', seat[0], gy, 0.010, gm, sway, 0.83, 0.78);
+        put('gleg', hip[0], hip[1], 0.008, gm, 0.25 + 0.10 * Math.sin(g), 0.125, 0.073);
+        const level = smooth(5.0, 6.0, t) * (1 - smooth(7.4, 8.2, t));
+        put('garm', sh[0], sh[1], 0.006, gm, -0.25 - 0.55 * level + 0.06 * Math.sin(g), 0.06, 0.61);
+        rod(B(0.55, 0.45)[0], B(0.55, 0.45)[1], 0.02); rod(sh[0] + 0.03, sh[1] - 0.02, 0.01, 0.8);
       }
     }
-    // two cranes crossing high up, right to left, their wings beating
+    // ---- a soldier runs the other way along the bank, his banner streaming
+    {
+      const rx = 1.85 - 0.30 * Math.max(0, t - 1.6);
+      if (rx > -2.0) {
+        const g = t * 7.0, bob = 0.010 * Math.abs(Math.sin(g)), rk = 0.05 * Math.sin(g);
+        const onB = 0.095 * Math.max(0, 1 - Math.pow((rx - 1.20) / 0.36, 2));
+        const ry = -0.535 + 0.012 + onB + bob;
+        put('runner', rx, ry, 0.012, 0.00056, rk, 0.62, 0.98, -1);
+        const nk = at('runner', rx, ry, 0.00056, rk, 0.62, 0.98, 0.80, 0.30, -1); rod(nk[0], nk[1], 0.015);
+      }
+    }
+    // ---- the cranes: high across, right to left, their wings beating about the root
     for (let k = 0; k < 2; k++) {
-      const x = 2.1 - 0.30 * (t - 1.5 - k * 1.1), y = 0.52 + 0.05 * k + 0.02 * Math.sin(t * 0.9 + k);
-      if (x < -2.1 || x > 2.1) continue;
-      const g = t * 4.2 + k * 1.7;
-      put('cwing', x + 0.004, y, 0.03, 0.00062, -0.9 + 0.7 * Math.sin(g - 0.5), 500, 500, -1, 0.8);
-      put('crane', x, y, 0.03, 0.00062, 0.04 * Math.sin(g - 1.0), 540, 500, -1, 1);
-      put('cwing', x, y, 0.03, 0.00062, -0.9 + 0.7 * Math.sin(g), 500, 500, -1, 1);
+      const x = 2.0 - 0.32 * (t - 1.2 - k * 1.3), y = 0.50 + 0.06 * k + 0.02 * Math.sin(t * 0.9 + k);
+      if (x < -2.2 || x > 2.2) continue;
+      const g = t * 4.4 + k * 1.7, m = 0.00046;
+      const root = at('crane', x, y, m, 0.04 * Math.sin(g - 1.0), 0.5, 0.5, 0.36, 0.30, -1);
+      put('crane', x, y, 0.03, m, 0.04 * Math.sin(g - 1.0), 0.5, 0.5, -1, 1);
+      put('cwing', root[0], root[1], 0.028, m, 0.65 * Math.sin(g) - 0.15, 0.93, 0.80, -1, 0.95);
     }
-    // a carp leaping, now and then; a boat on the waves
-    const cj = (t - 5.2);
-    if (cj > 0 && cj < 1.6) {
-      const u = cj / 1.6, x = 0.85 + 0.45 * u, y = -0.78 + 1.6 * u * (1 - u) * 0.55;
-      put('carp', x, y, 0.01, 0.00075, 0.9 - 1.8 * u, 500, 500, 1, 1);
-      put('tail', x - 0.12 * Math.cos(0.9 - 1.8 * u), y - 0.12 * Math.sin(0.9 - 1.8 * u), 0.01, 0.00075, 0.9 - 1.8 * u + 0.3 * Math.sin(t * 9), 500, 500, 1, 1);
+    // ---- the dragon: head, eight joints (two of them with claws) and the tail, all on its way behind one another
+    {
+      const m = 0.00040, segL = 0.92 * 560 * m, sH = this.dS(t);
+      const joints = []; for (let i = 0; i <= 10; i++) joints.push(this.wayAt(sH - 0.04 - i * segL));
+      const ang = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const hp = this.wayAt(sH + 0.08);
+      // (the pieces face right: each body piece runs from the joint behind it to the joint ahead, its front at the front)
+      for (let i = 7; i >= 0; i--) {
+        const a = ang(joints[i + 1], joints[i]);
+        const claw = i === 1 || i === 5;
+        put(claw ? 'dclaw' : 'dbody', joints[i][0], joints[i][1], 0.012, m, a, 0.96, claw ? 0.36 : 0.55);
+      }
+      put('dtail', joints[8][0], joints[8][1], 0.012, m, ang(joints[9], joints[8]) + Math.PI, 0.03, 0.52, -1);
+      put('dhead', joints[0][0], joints[0][1], 0.012, m * 1.1, ang(joints[0], hp) * 0.85 + ang(joints[1], joints[0]) * 0.15, 0.06, 0.78);
+      rod(joints[0][0], joints[0][1], 0.02); rod(joints[5][0], joints[5][1], 0.02);
     }
-    put('boat', -0.25 + 0.02 * t, -0.62 + 0.015 * Math.sin(t * 1.3), 0.008, 0.00085, 0.05 * Math.sin(t * 1.2), 500, 600, 1, 1);
-    // the waves along the bottom: one band, tiling; it heaves
-    const wp = 1000 * 0.512 * 0.00110, wx = 0.06 * Math.sin(t * 0.5);
-    for (let i = -3; i <= 3; i++) put('waves', i * wp + wx, -0.80 + 0.010 * Math.sin(t * 1.2), 0.0, 0.00110, 0, 500, 760, 1, 2);
+    // ---- on the water: the fisherman's boat, rocking; a carp leaps beside it
+    {
+      const bx = -0.30 + 0.018 * t, by = -0.735 + 0.012 * Math.sin(t * 1.3), ba = 0.045 * Math.sin(t * 1.2);
+      put('boat', bx, by, 0.010, 0.00070, ba, 0.5, 0.95);
+      const deck = at('boat', bx, by, 0.00070, ba, 0.5, 0.95, 0.30, 0.62);
+      const pull = smooth(5.0, 5.4, t) * (1 - smooth(6.4, 7.4, t));
+      put('fisher', deck[0], deck[1], 0.008, 0.00050, ba - 0.12 * pull + 0.02 * Math.sin(t * 0.8), 0.55, 0.97);
+      rod(deck[0] - 0.02, deck[1] + 0.12, 0.012, 0.8);
+    }
+    const cj = t - 5.0;
+    if (cj > 0 && cj < 1.7) {
+      const u = cj / 1.7, x = 0.30 + 0.55 * u, y = -0.80 + 1.5 * u * (1 - u) * 0.55, a = 0.95 - 1.9 * u;
+      const tj = at('carp', x, y, 0.00052, a, 0.55, 0.5, 0.03, 0.52);
+      put('ctail', tj[0], tj[1], 0.01, 0.00052, a + 0.35 * Math.sin(t * 10), 0.93, 0.47);
+      put('carp', x, y, 0.01, 0.00052, a, 0.55, 0.5);
+    }
+    put('lotus', -1.38, -0.70, 0.01, 0.00060, 0.02 * Math.sin(t * 0.8), 0.5, 1.0);
+    // ---- the waves along the bottom: one band, tiling; it heaves
+    const P = AT.waves, wm = 0.00068, wp = P.w * wm, wx = 0.06 * Math.sin(t * 0.5) + 0.03 * t;
+    for (let i = -2; i <= 2; i++) put('waves', i * wp + (wx % wp), -0.775 + 0.010 * Math.sin(t * 1.2), 0.0, wm, 0, 0.5, 0.42, 1, 2);
     return out;
   },
   update(dt) {
@@ -229,6 +295,7 @@ W.stage = {
     const t = this.t;
     if (YL.QS.get('world') === 'stage') { this.light = smooth(0, 0.8, t); if (YL.QS.get('drop') && !this.drop && t > +YL.QS.get('drop')) this.startDrop(); }
     this.lamp = this.lampOverride || this.pearlAt(t);
+    if (!this.lampOverride) this.lamp = [this.lamp[0] + 0.004 * Math.sin(t * 9.1) * Math.sin(t * 3.3), this.lamp[1] + 0.005 * Math.sin(t * 7.7 + 1.0)];
     this.headSNow = this.dS(t);
     // the water changes, from where the pearl went in
     if (this.drop) {
@@ -251,7 +318,14 @@ W.stage = {
     U(p, 'uLamp', [this.lamp[0], this.lamp[1], this.light]);
     U(p, 'uView', this.view);
     U(p, 'uSea', this.sea);
-    YL.bindTex(p, 'uAtlas', this.atlas, 0);
+    const sz = (YL.ASSET_SIZE && YL.ASSET_SIZE.stage_atlas) || [4096, 4096];
+    U(p, 'uAtSize', sz);
+    const R = new Float32Array(40); (this.rods || []).slice(0, 10).forEach((r, i) => R.set(r, i * 4));
+    gl.uniform4fv(p.u.uRod, R);
+    // an oil lamp: it breathes, and now and then gutters
+    const t = this.t, n1 = Math.sin(t * 11.0) * Math.sin(t * 7.3), n2 = Math.sin(t * 2.9 + Math.sin(t * 1.7) * 2.0);
+    U(p, 'uFlick', 1.0 + 0.045 * n1 + 0.035 * n2 - 0.06 * Math.pow(Math.max(0, Math.sin(t * 0.83 + 1.0)), 24));
+    YL.bindTex(p, 'uAtlas', this.atlas || (this.atlas = YL.assetTex('stage_atlas')), 0);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   // where a point of the screen (m) lands in the picture (ndc)
