@@ -398,3 +398,26 @@ if want('sea'):
     rgb = np.where(fa > 0.5, F[..., :3], np.clip(fill, 0, 255))
     fl = Image.fromarray(np.concatenate([rgb, F[..., 3:]], -1).clip(0, 255).astype('uint8'), 'RGBA'); items['sea_flipper'] = (uri(fl, 'webp', 86), fl.size)
     write('sea', items)
+# ---- ink: what is nearer than the scroll (a pine bough, willow strands, reeds: they slide past faster than the paper and
+# are a little out of focus), a swallow's wingbeat in six frames, a leaping carp: how much ink, grey
+if want('inkfx'):
+    import numpy as np
+    def dens_crop(im, pad=12):
+        d = ink_density(im.convert('RGB')); a = np.asarray(d) > 10; ys, xs = np.nonzero(a)
+        return d.crop((max(0, xs.min() - pad), max(0, ys.min() - pad), min(d.width, xs.max() + pad), min(d.height, ys.max() + pad)))
+    items = {}
+    for n, w in [('in_fg_pine', 1280), ('in_fg_willow', 1600), ('in_fg_reeds', 2048), ('in_carp', 640)]:
+        d = dens_crop(L(n)); d = d.resize((w, round(d.height * w / d.width)), Image.LANCZOS)
+        items['ink_' + n[3:]] = (uri(d, 'jpeg', 90), d.size)
+    # the swallows: six frames, each in a cell of its own, the bird's middle in the cell's middle
+    d = ink_density(L('in_swallows').convert('RGB')); A = np.asarray(d).astype(np.float32)
+    from scipy import ndimage as ndi
+    lab, n = ndi.label(ndi.binary_dilation(A > 12, iterations=6)); sizes = ndi.sum(A > 12, lab, range(1, n + 1))
+    keep = sorted(np.argsort(-sizes)[:6] + 1, key=lambda k: ndi.center_of_mass(A > 12, lab, k)[1])
+    CW, CH = 320, 220; strip = Image.new('L', (CW * 6, CH), 0)
+    for i, k in enumerate(keep):
+        cy, cx = ndi.center_of_mass(A * (lab == k)); m = (lab == k)
+        cell = Image.fromarray((A * m).clip(0, 255).astype('uint8'), 'L').crop((int(cx - 300), int(cy - 200), int(cx + 300), int(cy + 200))).resize((CW, round(400 * CW / 600)), Image.LANCZOS)
+        strip.paste(cell, (i * CW, (CH - cell.height) // 2))
+    items['ink_swallows'] = (uri(strip, 'jpeg', 90), strip.size)
+    write('inkfx', items)

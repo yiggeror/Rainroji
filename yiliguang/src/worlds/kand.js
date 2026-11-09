@@ -35,8 +35,9 @@ const vec3 ULTRA = vec3(0.12, 0.19, 0.60), YEL = vec3(0.98, 0.78, 0.13), VERM = 
 // how far along a shape's entrance is (0 … 1), and an entrance that overshoots a little and settles (a pop on the beat)
 float ap(float t0, float d){ return sat((uTime - t0) / d); }
 float pop(float t0){ float x = ap(t0, 0.42), y = x - 1.0; return x <= 0.0 ? 0.0 : 1.0 + 2.70158 * y * y * y + 1.70158 * y * y; }
-// (once it is all there it breathes with the music: a slow swell over a bar, and a little push on every beat)
-float beatP(){ return exp(-fract(uTime * 1.8333) * 5.0) * smoothstep(5.5, 6.5, uTime); }
+// (once it is all there it breathes: a slow swell, and now and then a softer push — free of any beat, so whatever music
+// is under it, nothing ticks against it)
+float beatP(){ float w = 0.5 + 0.5 * sin(uTime * 1.31 + 0.6 * sin(uTime * 0.47)); return w * w * w * smoothstep(5.5, 6.5, uTime); }
 float breathe(float ph){ return 1.0 + (0.034 * sin(uTime * 2.88 + ph) + 0.018 * beatP()) * smoothstep(5.5, 6.5, uTime); }
 float sdCircle(vec2 p, vec2 c, float r){ return length(p - c) - r; }
 float sdEll(vec2 p, vec2 c, vec2 r){ vec2 q = (p - c) / r; return (length(q) - 1.0) * min(r.x, r.y); }

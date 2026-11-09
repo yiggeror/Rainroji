@@ -45,6 +45,14 @@ uniform vec4 uScSw[3];             // where things on it sway in the wind (bambo
 uniform sampler2D uPT;             // when each place is painted (seconds of the painting): r its lines, g its washes
 uniform float uNowS;               // the painting's own clock (seconds; negative before the brush sets out)
 uniform vec3 uView;                // the eye: the middle of the view on the scroll, and how close (1: the scroll's height fills it)
+uniform vec2 uSkiff;               // the skiff gliding: how far it is from where it ends up (painting units)
+uniform sampler2D uFg0, uFg1, uFg2;  // nearer than the scroll: a pine bough, willow strands, reeds (how much ink)
+uniform vec4 uFgR[3];              // each, on the paper now (it slides past faster than the paper): x0, y0, w, h
+uniform vec4 uFgK[3];              // when the brush lays it (the painting's clock), how long it takes across, blur, sway
+uniform sampler2D uSwT, uCarpT;    // a swallow's wingbeat in six frames; a leaping carp
+uniform vec4 uSwl[3];              // swallows: x, y, size (0: none), frame (+10: flying left)
+uniform vec4 uCarpP;               // the carp: x, y, size (0: none), its turn
+uniform vec4 uSplash[3];           // rings on the water where something broke it: x, y, how long ago, how strong
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -141,19 +149,46 @@ float scrollInk(vec2 p){
   float dw = min(dS, level), dl = max(dS - level, 0.0);
   vec2 T = PT(p);
   float aw = uNowS - T.y - 0.10 * (fbm3(p * 22.0) - 0.5);
-  float al = uNowS - T.x - 0.025 * (vnoise(p * 300.0) - 0.5);
-  // the wash runs out over the wet paper: soft and a little darker while it runs, a tide-line at its edge, then it settles
-  float wv = smoothstep(0.0, 0.32, aw);
-  float wetW = exp(-max(aw, 0.0) / 0.70) * step(0.0, aw);
-  float dwB = min(scAt(q, 5.5) * 0.95, level);
-  // (until its lines come, the wash is soft: the drawing's edges arrive with the lines)
+  float al = uNowS - T.x - 0.05 * (fbm3(p * 70.0) - 0.5);
+  // the paper's fibres (the xuan scan's relief, and long thin streaks every which way): wet ink runs along them
+  vec2 xu = p * 0.72;
+  float fibre = (texture(uXuan, xu).r - textureLod(uXuan, xu, 4.0).r) * 6.0;
+  float st1 = vnoise(vec2(p.x * 420.0 + p.y * 160.0, p.y * 38.0 - p.x * 21.0)), st2 = vnoise(vec2(p.x * 60.0 - p.y * 300.0, p.x * 330.0 + p.y * 45.0));
+  float fn = sat(0.5 + 0.55 * fibre + 0.35 * (st1 - 0.5) + 0.30 * (st2 - 0.5));
+  // ---- the wash runs out over the damp paper. While it is wet it is a soft pool that creeps out past the shape it is
+  // meant to be, its edge feathering out along the fibres (capillary fingers); as it dries it draws back, darker at the
+  // rim where it stopped (a tide-line), and here and there the drying wash blooms back on itself (a backrun)
+  float wv = smoothstep(0.0, 0.45, aw);
+  float wetW = exp(-max(aw, 0.0) / 0.95) * step(0.0, aw);
+  float dwB = min(scAt(q, 5.0) * 0.95, level + 0.03);
+  float creep = sat(aw / 0.9);
+  float ratio = dwB / max(max(level, dwB), 0.02);
+  float edgeV = ratio + 0.55 * (fn - 0.5) + 0.25 * (fbm3(p * 40.0) - 0.5);
+  float thr = 0.62 - 0.40 * creep;
+  float fringe = smoothstep(thr, thr + 0.10, edgeV);
   float sharp = smoothstep(-0.5, 0.15, al);
-  float W_ = mix(mix(dwB, dw, sharp), dwB, wetW * 0.85) * wv * (1.0 + 0.15 * wetW);
-  W_ += 0.11 * smoothstep(0.0, 0.05, aw) * exp(-max(aw, 0.0) / 0.16) * smoothstep(0.015, 0.08, lo);
-  // the line: there where the brush has been, darker while wet, its edge feathering out into the damp paper, then drying
-  float lv = smoothstep(0.0, 0.05, al);
-  float wetL = exp(-max(al, 0.0) / 0.40) * lv;
-  float L_ = dl * lv * (1.0 + 0.30 * wetL) + max(scAt(q, 2.4) - level - dl, 0.0) * 0.55 * wetL;
+  float settled = mix(dwB, dw, sharp);
+  float wetPool = max(settled, dwB * fringe * 1.05);
+  float W_ = mix(settled, wetPool, wetW) * wv * (1.0 + 0.22 * wetW);
+  // the tide-line: where the wet edge stood when it dried (it stays, faint)
+  float tide = exp(-pow((edgeV - thr - 0.05) / 0.035, 2.0)) * smoothstep(0.004, 0.03, dwB) * smoothstep(0.25, 1.2, aw);
+  W_ += 0.10 * tide * (0.45 + 0.55 * wetW) * (1.0 - smoothstep(0.35, 0.6, dS));
+  // backruns: in the broad washes, flowers of paler ink with a darker rim, opening as the wash dries
+  float bk = fbm3(p * 6.5 + vec2(3.1, 7.7)) + 0.08 * (fn - 0.5);
+  float bkT = 0.62 - 0.06 * smoothstep(0.4, 1.6, aw);
+  float bOpen = smoothstep(0.3, 1.5, aw) * smoothstep(0.03, 0.10, dw) * (1.0 - smoothstep(0.25, 0.5, dS));
+  W_ *= 1.0 - 0.22 * bOpen * smoothstep(bkT, bkT + 0.03, bk);
+  W_ += 0.07 * bOpen * exp(-pow((bk - bkT) / 0.010, 2.0)) * dw * 5.0;
+  // the first touch of the wash: a darker flood front, for a moment
+  W_ += 0.10 * smoothstep(0.0, 0.05, aw) * exp(-max(aw, 0.0) / 0.18) * smoothstep(0.015, 0.08, lo);
+  // ---- the line: it comes in wet (fuller and softer, bleeding out along the fibres into the damp paper round it),
+  // then sinks in and sharpens as it dries
+  float lv = smoothstep(0.0, 0.20, al);
+  float wetL = exp(-max(al, 0.0) / 0.55) * lv;
+  float lSoft = max(scAt(q, 1.6) - level, 0.0);
+  float L_ = mix(dl, max(dl, lSoft * 0.9), wetL * 0.6) * lv * (1.0 + 0.30 * wetL);
+  float halo = max(scAt(q, 3.0) - level - dl, 0.0);
+  L_ += halo * (0.45 + 0.9 * fn) * 0.55 * wetL + halo * 0.10 * lv;
   return W_ + L_;
 }
 // mist flowing across the middle distance: bands over the far hills and the mountain, never over what is near
@@ -168,7 +203,7 @@ float mistAt(vec2 p0){
 // ---- the skiff on the water: a dark sliver of a hull, a fisherman in a broad hat, a pole
 float boatD(vec2 p){
   float t = uTime;
-  vec2 bc = vec2(5.30 + 0.004 * sin(t * 0.7), 0.205 + 0.002 * sin(t * 1.3));
+  vec2 bc = vec2(5.30 + uSkiff.x + 0.002 * sin(t * 0.7), 0.205 + 0.002 * sin(t * 1.3));
   vec2 q = p - bc;
   if (dot(q, q) > 0.006) return 0.0;
   float hull = smoothstep(0.004, 0.0015, abs(q.y + 0.0015 - 0.35 * q.x * q.x / 0.04) - 0.0035 * (1.0 - q.x * q.x / 0.0016)) * step(abs(q.x), 0.040);
@@ -176,6 +211,80 @@ float boatD(vec2 p){
   float hat = smoothstep(0.003, 0.001, abs(q.y - 0.020 + 0.25 * abs(q.x - 0.012)) - 0.0012) * step(abs(q.x - 0.012), 0.011);
   float pole = smoothstep(0.0018, 0.0007, sdSeg(q, vec2(0.016, 0.014), vec2(0.045, -0.025)));
   return max(max(hull, man), max(hat, pole)) * 0.85 * paintedAt(p, 0.0);
+}
+// its wake: two lines opening out behind it, trembling, fading
+float wakeD(vec2 p){
+  vec2 q = p - vec2(5.262 + uSkiff.x, 0.2025);
+  if (q.x > 0.0 || q.x < -0.20 || abs(q.y) > 0.035) return 0.0;
+  float s = -q.x;
+  float w1 = abs(q.y + 0.11 * s + 0.0011 * sin(s * 300.0 - uTime * 3.0));
+  float w2 = abs(q.y - 0.030 * s + 0.0009 * sin(s * 260.0 - uTime * 2.6));
+  float lw = 0.0006 + 0.0035 * s;
+  float brk = 0.55 + 0.45 * smoothstep(0.3, 0.7, vnoise(vec2(s * 90.0 - uTime * 1.5, q.y * 400.0)));
+  return (smoothstep(lw, 0.0, w1) + 0.7 * smoothstep(lw, 0.0, w2)) * exp(-s / 0.075) * smoothstep(0.0, 0.01, s) * brk * 0.40;
+}
+// 烟雨 on the river: the drizzle's drops each opening a ring on the open water, two rings, widening, fading
+float rainRings(vec2 p){
+  if (p.y > scWater(p.x) - 0.004) return 0.0;
+  float t = uTime, r = 0.0;
+  vec2 S = vec2(16.0, 55.0), gi = floor(p * S);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++){
+    vec2 c = gi + vec2(i, j);
+    float h = hash12(c * 1.7 + 3.0);
+    if (h > 0.6) continue;
+    vec2 ctr = (c + vec2(hash12(c + 5.1), hash12(c + 9.3))) / S;
+    float P = 1.5 + 1.8 * hash12(c + 2.2);
+    float a = mod(t + 7.0 * hash12(c + 4.4), P);
+    float e = length((p - ctr) * vec2(1.0, 3.4));
+    float r1 = 0.003 + a * 0.022, r2 = max(a - 0.25, 0.0) * 0.016;
+    float ring = smoothstep(0.0015, 0.0003, abs(e - r1)) + 0.6 * smoothstep(0.0013, 0.0003, abs(e - r2)) * step(0.25, a);
+    r = max(r, ring * exp(-a / 0.5) * (0.6 + 0.4 * h));
+  }
+  return r;
+}
+// what is nearer than the scroll: painted as the brush comes by (wet, it bleeds), a little soft, moving in the wind
+float nearLayer(sampler2D s, vec4 R, vec4 K, vec2 p, int kind){
+  vec2 u = (p - R.xy) / R.zw;
+  if (u.x < -0.05 || u.x > 1.05 || u.y < -0.05 || u.y > 1.05) return 0.0;
+  float t = uTime;
+  if (kind == 1) u.x += K.w * (1.0 - u.y) * (1.0 - u.y) * (sin(t * 1.1 + u.x * 9.0) + 0.4 * sin(t * 2.3 + u.x * 23.0));   // (strands: their tips swing)
+  if (kind == 2) u.x += K.w * u.y * u.y * (sin(t * 1.5 + u.x * 14.0) + 0.5 * sin(t * 3.1 + u.x * 31.0));                // (reeds: their heads)
+  if (kind == 0) u.y += K.w * u.x * u.x * sin(t * 0.8 + 0.5);                                                            // (the bough nods)
+  if (u.x < 0.0 || u.x > 1.0 || u.y < 0.0 || u.y > 1.0) return 0.0;
+  float age = uNowS - K.x - K.y * u.x;
+  float rev = smoothstep(0.0, 0.35, age), wet = exp(-max(age, 0.0) / 0.7);
+  float d = textureLod(s, u, K.z).r, dB = textureLod(s, u, K.z + 2.5).r;
+  return sat(mix(d, max(d, dB * 1.15), wet * 0.7) * (1.0 + 0.2 * wet)) * rev;
+}
+float swallow(vec4 S, vec2 p){
+  if (S.z <= 0.0) return 0.0;
+  vec2 q = (p - S.xy) / S.z;
+  if (abs(q.x) > 0.5 || abs(q.y) > 0.36) return 0.0;
+  float fl = S.w >= 10.0 ? -1.0 : 1.0, f = mod(S.w, 10.0);
+  vec2 u = vec2(fl * q.x + 0.5, q.y * ${(320 / 220).toFixed(4)} + 0.5);
+  return textureLod(uSwT, vec2((f + u.x) / 6.0, u.y), 0.4).r;
+}
+float carp(vec4 C, vec2 p){
+  if (C.z <= 0.0) return 0.0;
+  vec2 q = p - C.xy; float c = cos(-C.w), s_ = sin(-C.w);
+  q = vec2(c * q.x - s_ * q.y, s_ * q.x + c * q.y) / C.z;
+  vec2 u = vec2(q.x + 0.5, q.y * ${(640 / 478).toFixed(4)} + 0.5);
+  if (u.x < 0.0 || u.x > 1.0 || u.y < 0.0 || u.y > 1.0) return 0.0;
+  return textureLod(uCarpT, u, 0.3).r;
+}
+float splashes(vec2 p){
+  float r = 0.0;
+  for (int i = 0; i < 3; i++){
+    vec4 S = uSplash[i];
+    if (S.w <= 0.0 || S.z < 0.0 || S.z > 2.5) continue;
+    float e = length((p - S.xy) * vec2(1.0, 3.4));
+    for (int k = 0; k < 3; k++){
+      float a = S.z - float(k) * 0.22; if (a < 0.0) continue;
+      float rr = 0.004 + a * 0.030;
+      r = max(r, smoothstep(0.0018, 0.0004, abs(e - rr)) * exp(-a / 0.7) * S.w * (1.0 - 0.25 * float(k)));
+    }
+  }
+  return r;
 }
 // the painting: how much ink lies at p
 float ink(vec2 p, out float tone){
@@ -191,12 +300,23 @@ float ink(vec2 p, out float tone){
     float m6 = smoothstep(0.55, 0.85, fbm(vec2((p.x + uView.x * 0.45) * 1.3 - t * 0.035 + 3.0, p.y * 3.2))) * exp(-pow((p.y - 0.42) / 0.16, 2.0));
     mk = max(mk, m6 * 0.55);
     D *= 1.0 - 0.8 * mk * (1.0 - smoothstep(0.45, 0.85, D));
+    // rain on the open water, and the skiff's wake
+    float open_ = (1.0 - smoothstep(0.12, 0.32, scAt(p, 1.5))) * paintedAt(p, 0.0);
+    D = max(D, (0.12 * rainRings(p) + wakeD(p) * paintedAt(vec2(5.25, 0.2), 0.0)) * open_);
+    D = max(D, 0.16 * splashes(p));
     // the skiff, and its reflection broken by the ripples
     D = max(D, boatD(p));
     if (p.y < 0.205){
       vec2 q = vec2(p.x + 0.0025 * sin(p.y * 240.0 + t * 1.7), 0.41 - p.y);
       D = 1.0 - (1.0 - D) * (1.0 - 0.30 * boatD(q) * exp(-(0.205 - p.y) / 0.05));
     }
+    // the carp, and what is nearer than the scroll (ink laid over ink darkens)
+    D = 1.0 - (1.0 - D) * (1.0 - 0.92 * carp(uCarpP, p));
+    float fg = nearLayer(uFg0, uFgR[0], uFgK[0], p, 0);
+    fg = 1.0 - (1.0 - fg) * (1.0 - nearLayer(uFg1, uFgR[1], uFgK[1], p, 1));
+    fg = 1.0 - (1.0 - fg) * (1.0 - nearLayer(uFg2, uFgR[2], uFgK[2], p, 2));
+    D = 1.0 - (1.0 - D) * (1.0 - 0.95 * fg);
+    for (int i = 0; i < 3; i++) D = 1.0 - (1.0 - D) * (1.0 - 0.9 * swallow(uSwl[i], p));
   } else {
   // ---- the far peaks: pale, slender, rising out of the mist (between and behind what the brush paints)
   {
@@ -505,7 +625,7 @@ W.ink = {
   arrive(px, py) {
     this.hero.p = [px, py]; this.hero.v = [0, 0]; this.hero.on = true; this.route = [[px, py], ...ROUTE];
     this.now = -0.05; this.painting = false; this.reach = px; this.pan = [0, 0]; this.walkT = this.egT = this.geT = undefined;   // (nothing painted yet)
-    this.t0 = this.t; this.nowS = -1.2; this.view = null;
+    this.t0 = this.t; this.nowS = -1.2; this.view = null; this.skimX = undefined;
   },
   // the light sets off with its brush: work out when the painting reaches each place (F), and so when each of its marks
   // is laid
@@ -542,6 +662,9 @@ W.ink = {
     this.t += dt;
     const H = this.hero;
     if (this.t0 !== undefined) this.nowS = this.t - this.t0 - 1.2;
+    // the skiff glides slowly down the river, and its lantern (the light's home at the end) with it
+    this.skiffOff = this.t0 !== undefined ? 0.011 * (Math.min(this.nowS, 20) - 13.0) : 0;
+    H.home = [5.314 + this.skiffOff, 0.232];
     const scroll = !!this.ptTex && YL.QS.get('inkgen') !== '0';
     if (this.painting && scroll) {
       // the light is the brush: it goes where the strokes are being laid, and at the end down to the skiff
@@ -588,6 +711,49 @@ W.ink = {
     if (this.geT === undefined && (this.reach || 0) > 4.4) this.geT = this.t;
     this.sound(dt);
   },
+  // ---- the life that is not on the paper: what is nearer than it (sliding past faster: [asset, x0 on the paper when the
+  // eye is at V, V, how much faster, y0, width, laid at (the painting's clock), taking, blur, sway]); swallows; a carp
+  lifeUniforms(gl, p, aspect) {
+    const U = YL.U, ns = this.nowS === undefined ? 99 : this.nowS, v = this.view || [0.8889, 0.5, 1];
+    const NEAR = [['ink_fg_pine', 0.84, 1.85, 0.6, 0.737, 0.75, 3.4, 2.0, 1.2, 0.012],
+                  ['ink_fg_willow', 3.50, 3.45, 0.5, 0.680, 1.10, 8.5, 1.5, 1.0, 0.020],
+                  ['ink_fg_reeds', 3.80, 4.711, 0.6, -0.02, 1.00, 11.0, 1.2, 1.3, 0.018]];
+    const R = new Float32Array(12), K = new Float32Array(12);
+    NEAR.forEach(([k, x0, V, f, y0, wd, T, dur, blur, sw], i) => {
+      const sz = YL.ASSET_SIZE && YL.ASSET_SIZE[k], tx = YL.assetTex(k);
+      gl.activeTexture(gl.TEXTURE10 + i); gl.bindTexture(gl.TEXTURE_2D, tx || null); gl.uniform1i(p.u['uFg' + i], 10 + i);
+      if (!sz || !tx) return;
+      R.set([x0 - (v[0] - V) * f, y0, wd, wd * sz[1] / sz[0]], i * 4); K.set([T, dur, blur, sw], i * 4);
+    });
+    gl.uniform4fv(p.u.uFgR, R); gl.uniform4fv(p.u.uFgK, K);
+    gl.activeTexture(gl.TEXTURE13); gl.bindTexture(gl.TEXTURE_2D, YL.assetTex('ink_swallows') || null); gl.uniform1i(p.u.uSwT, 13);
+    gl.activeTexture(gl.TEXTURE14); gl.bindTexture(gl.TEXTURE_2D, YL.assetTex('ink_carp') || null); gl.uniform1i(p.u.uCarpT, 14);
+    const hw = aspect * 0.5 / v[2], e = (x) => x * x * (3 - 2 * x), cl = (x) => Math.max(0, Math.min(1, x));
+    // swallows: one darting across the mountain's flank; one skimming the river by the bridge (it touches the water);
+    // two together, high, going home over the village
+    const SW = new Float32Array(12), splash = new Float32Array(12);
+    const flap = (k) => { const ph = (ns * 11 + k * 2.3) % 7; return ph < 5 ? Math.floor(ph) : 5; };
+    const fly = (slot, t0, t1, ya, yb, arc, size, left, k) => {
+      if (ns < t0 || ns > t1) return null;
+      const u = (ns - t0) / (t1 - t0), xa = v[0] - hw - 0.06, xb = v[0] + hw + 0.06;
+      const x = left ? xb + (xa - xb) * u : xa + (xb - xa) * u, y = ya + (yb - ya) * u + arc * Math.sin(Math.PI * u) + 0.012 * Math.sin(u * 13 + k);
+      SW.set([x, y, size, flap(k) + (left ? 10 : 0)], slot * 4); return [x, y, u];
+    };
+    fly(0, 2.4, 4.9, 0.55, 0.72, 0.10, 0.060, false, 0);
+    const b = fly(1, 8.0, 10.2, 0.34, 0.30, -0.215, 0.052, true, 1);
+    if (ns > 9.05) splash.set([this.skimX ??= (b ? b[0] : v[0]), 0.098, ns - 9.05, 0.8], 0);
+    if (ns > 11.3 && ns < 13.6) { fly(2, 11.3, 13.6, 0.80, 0.66, 0.05, 0.045, true, 2); }
+    gl.uniform4fv(p.u.uSwl, SW);
+    // the carp: out of the river beyond the bamboo, over, and back in, rings where it left the water and where it came in
+    const cj = (ns - 10.25) / 1.05;
+    if (cj > 0 && cj < 1) {
+      const x = 3.13 + 0.16 * cj, y = 0.088 + 0.11 * Math.sin(Math.PI * cj), ang = 0.9 * Math.cos(Math.PI * cj);
+      U(p, 'uCarpP', [x, y, 0.075, ang]);
+    } else U(p, 'uCarpP', [0, 0, 0, 0]);
+    if (ns > 10.25) splash.set([3.14, 0.092, ns - 10.25, 1.0], 4);
+    if (ns > 11.25) splash.set([3.29, 0.092, ns - 11.25, 1.0], 8);
+    gl.uniform4fv(p.u.uSplash, splash);
+  },
   render(target, aspect) {
     const gl = YL.gl, U = YL.U, p = this.p;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
@@ -595,6 +761,7 @@ W.ink = {
     gl.disable(gl.BLEND);
     gl.useProgram(p.p);
     const H = this.hero, br = 1 + 0.07 * Math.sin(this.t * 2.1) + 0.03 * Math.sin(this.t * 5.3);
+    U(p, 'uSkiff', [this.skiffOff || 0, 0]);
     U(p, 'uRes', [w, h]); U(p, 'uTime', this.t); U(p, 'uFade', this.fade); U(p, 'uAspect', aspect);
     U(p, 'uBloom', this.bloom); U(p, 'uDawn', this.dawn); U(p, 'uGrow', this.grow); U(p, 'uPan', this.pan || [0, 0]);
     const sk = this.sunK || 0;
@@ -622,6 +789,7 @@ W.ink = {
     gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, sa || this.ts); gl.uniform1i(p.u.uScA, 7);
     gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, sb || this.ts); gl.uniform1i(p.u.uScB, 8);
     U(p, 'uScK', scOn && this.ptTex ? 1 : 0); gl.uniform4fv(p.u.uScSw, SWAY);
+    this.lifeUniforms(gl, p, aspect);
     gl.bindVertexArray(this.empty); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindVertexArray(null);
   },
   /* ---- sound: rain on water, the lap of it; the waterfall as it comes into view; a guqin (古琴) plucked now and then, its notes sliding */
