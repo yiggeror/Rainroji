@@ -971,7 +971,7 @@ D.renderFrame = (dt, realT) => {
     if (!vil.ready) vil.init();
     const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
     if (!D.printT || D.printT.w !== w || D.printT.h !== h) D.printT = YL.makeTarget(w, h, ['rgba8']);
-    if (D.pt > 3.65) vil.update(dt);
+    vil.update(D.pt > 3.65 ? dt : 0);                   // (asleep until the light goes in — but all there from the first: its people too)
     vil.render(D.printT, w / h);
     summer.printTex = D.printT.tex;                                              // (then the summer is drawn as usual, the print on its sheet)
   }

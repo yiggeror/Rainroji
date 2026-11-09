@@ -114,7 +114,7 @@ void main(){
     // (the shape changes as one shape: the two outlines' signed distances, on the screen, blended)
     float cres = aY * (1.0 - aB);
     if (mk > 0.0){
-      float dA = max(sdCircle(p, cy, 0.112), -sdCircle(p, cy + vec2(0.046, 0.013), 0.094)) * uMoonV.z;
+      float dA = max(sdCircle(p, cy, 0.112), -sdCircle(p, cy + vec2(0.30, 0.05) * (1.0 - uView.w) + vec2(0.046, 0.013) * uView.w, 0.094)) * uMoonV.z;
       vec2 s = (p - uMoonV.xy) * uMoonV.z;
       vec2 mu = vec2(0.508 + (s.x - uMoonR.x) / uMoonR.z, 1.0 + (s.y - uMoonR.y) / uMoonR.w);
       float inside = step(0.0, mu.x) * step(mu.x, 1.0) * step(0.0, mu.y) * step(mu.y, 1.0);
@@ -247,7 +247,7 @@ W.kand = {
     const e = ease((t - 8.3) / 2.2);
     // and at the very end, on into the thick of the crescent until it is all yellow paint (the next world starts from its
     // own moon's yellow, close: paint becomes cardboard, not one moon over another)
-    return { x: lerp(dx, VEND[0], e), y: lerp(dy, VEND[1], e), z: lerp(dz, VEND[2], kk), bite: ease((t - 9.0) / 1.6) };
+    return { x: lerp(dx, VEND[0], e), y: lerp(dy, VEND[1], e), z: lerp(dz, VEND[2], kk), bite: ease((t - 8.5) / 1.3) };
   },
   update(dt) {
     this.t += dt;
@@ -268,7 +268,7 @@ W.kand = {
     U(p, 'uBg', this.pondTex ? this.bg : 0); U(p, 'uView', [v.x, v.y, v.z, v.bite]);
     // the next world's moon: its outline, where it will be when that world begins
     const st = YL.worlds.stop, mt = YL.assetTex('stop_moon_sdf', false);
-    U(p, 'uMoonR', st && st.moonRect ? st.moonRect(0) : [0, 0, 1, 1]); U(p, 'uMoonV', [VEND[0], VEND[1], VEND[2], mt ? ease((t - 9.7) / 1.1) : 0]);
+    U(p, 'uMoonR', st && st.moonRect ? st.moonRect(0) : [0, 0, 1, 1]); U(p, 'uMoonV', [VEND[0], VEND[1], VEND[2], mt ? ease((t - 9.9) / 1.0) : 0]);          // (only once the blue has bitten the crescent out)
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mt || null); gl.uniform1i(p.u.uMoon, 2);
     U(p, 'uHero', [hp[0], hp[1], 1.0 + 0.08 * Math.sin(t * 2.88), 0.024]);
     if (this.pondTex) YL.bindTex(p, 'uPond', this.pondTex, 0); else { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(p.u.uPond, 0); }

@@ -167,7 +167,7 @@ void main(){
   }
   D = drawnIn(D, first, full);
   // ---- what moves through it (people, the cab, the birds, the dog running) is drawn whole, back to front; what stands in
-  // front of it all (the near tree) is drawn in with the rest
+  // front of it all is drawn in with the rest
   for (int i = 0; i < ${NS}; i++){
     if (i >= uNS) break;
     if (i < uNS0) continue;
@@ -280,10 +280,10 @@ const ACT = [
   { k: 'man', u: 1.93, v: 0.030, h: 0.22, kd: 1.30, uRef: 2.05, haze: 0.08 },
   { k: 'dogsit', u: 2.17, v: 0.035, h: 0.10, kd: 1.30, uRef: 2.05, haze: 0.10, to: 6.75 },
   { k: 'dog', u: 2.17, v: 0.035, h: 0.112, kd: 1.30, uRef: 2.05, haze: 0.10, vel: 0.30, stride: 0.13, from: 6.75, to: 13, accel: 0.6 },
-  // the near tree over the bank
-  { k: 'tree', u: 1.33, v: -0.10, h: 0.82, kd: 3.00, uRef: 1.45, haze: 0.06, tree: true },
+  // a second lamp on the quay, near: it slides past as the eye comes down to the river
+  { k: 'lamp', u: 1.552, v: -0.06, h: 0.95, kd: 2.20, uRef: 1.60, haze: 0.0, lamp2: true },
 ];
-const T_CAB = 3.3;                 // when the cab comes in from the left (the eye's clock)
+const T_CAB = 2.7;                 // when the cab comes in from the left (the eye's clock)
 W.conte = {
   ready: false, t: 0, fade: 1, vol: 0, white: 0, T: 12.5,
   hero: { p: [0, 0], on: true, glow: 1 },
@@ -372,13 +372,15 @@ W.conte = {
       // ---- the cab: up from behind on the left, near, overtaking the eye at a trot; its wheels turn, its lamps are lit
       const tc = t - T_CAB;
       if (tc > 0 && tc < 6.5) {
-        const vel = 1.30, kd = 3.2, c0 = this.cam(T_CAB), uRef = c0.u, H0 = 0.58;          // (nearer than the tree: it sweeps past)
+        // (right up against the lens: its wheels run below the bottom of the picture, so it is plainly nearer than anything on
+        // the drawing; it is gone before the river comes)
+        const vel = 1.63, kd = 3.2, c0 = this.cam(T_CAB), uRef = c0.u, H0 = 0.70;
         const cabW0 = H0 * AT.cab.w / AT.cab.h, horseW0 = H0 * 0.66 * AT.horse.w / AT.horse.h;
         const u0 = uRef + (-aspect * 0.5 - 0.04 - cabW0 * 0.5 - horseW0 * 0.80) / c0.z;   // (the horse's nose just off the left edge)
         const dist = vel * tc;
-        const P = this.place(c, u0 + dist, 0.012, H0, kd, uRef);
+        const P = this.place(c, u0 + dist, -0.22, H0, kd, uRef);
         const cabW = P.H * AT.cab.w / AT.cab.h, Hh = P.H * 0.66, horseW = Hh * AT.horse.w / AT.horse.h;
-        const trot = Math.floor(tc * 1.7 * 6) % 6;
+        const trot = Math.floor(tc * 2.0 * 6) % 6;
         const turn = dist * c.z / (P.H * AT.cab.wheels[0][2]);
         items.push({ kd, act: true, f: () => {
           add('horse', P.x + cabW * 0.5 + horseW * 0.30, P.y + 0.004 * Math.abs(Math.sin(tc * Math.PI * 1.7)), Hh, trot, [0, 0.0, 1, 1.9], [1, 0.5, 0, 0]);
@@ -426,6 +428,8 @@ W.conte = {
     const lampA = ACT[li], lP = this.place(c, lampA.u, lampA.v, lampA.h, lampA.kd, lampA.uRef);
     const lampOn = 1 - this.white;
     glow.unshift([lP.x + 0.0, lP.y + lP.H * 0.93, lampOn * (0.9 + 0.05 * Math.sin(t * 9.0) * Math.sin(t * 3.3)), 1.0]);
+    { const a2 = ACT.find(a => a.lamp2), q = this.place(c, a2.u, a2.v, a2.h, a2.kd, a2.uRef);
+      if (Math.abs(q.x) < aspect * 0.5 + 0.3) glow.splice(1, 0, [q.x, q.y + q.H * 0.93, 0.85 + 0.05 * Math.sin(t * 7.0 + 1.0), 1.15]); }
     while (glow.length < 6) glow.push([0, 0, 0, 1]);
     const G = new Float32Array(24); glow.slice(0, 6).forEach((g, i) => G.set([g[0], g[1], g[2] * (i === 0 ? 1 : lampOn), g[3]], i * 4));
     const wx = (0.29 - c.u) * c.z, wy = (0.67 - c.v) * c.z;
