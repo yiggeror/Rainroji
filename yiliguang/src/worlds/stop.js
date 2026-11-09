@@ -287,7 +287,7 @@ W.stop = {
   // the camera: from right up against the moon (the circle of the painting it came out of), back and down to the
   // little sea as the boat sails in; then along with the boat; up a little as the light is raised; in to the light
   cam(t) {
-    const a = ease((t - 0.9) / 3.4), ay = ease((t - 0.75) / 2.9), az = ease((t - 0.8) / 3.3);
+    const a = ease((t - 0.85) / 3.0), ay = ease((t - 0.7) / 2.3), az = ease((t - 0.75) / 2.8);
     const zT = lerp(1.08, 1.20, ease((t - 4.8) / 6.5)) - 0.05 * ease((t - 11.4) / 1.8) + 0.45 * ease((t - 13.3) / 2.3);
     const S = zT * (1 + (KB - 1) * (zT - 1) * 0.6);
     const xs = lerp(-0.20, 0.0, ease((t - 4.0) / 7.5));           // where the boat is kept on the screen
