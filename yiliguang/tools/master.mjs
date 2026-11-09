@@ -71,7 +71,10 @@ const af = [
   `[1:a]aresample=48000,volume=1.0[amb]`,
   // (the music comes in as the light jumps out of the lamp, 3.4 s in)
   `[2:a]aresample=48000,volume=0.85,adelay=${Math.round(MUSIC_AT * 1000)}|${Math.round(MUSIC_AT * 1000)},afade=t=in:st=${MUSIC_AT}:d=1.5[mus]`,
-  `[amb][mus]amix=inputs=2:normalize=0:duration=longest,apad=whole_dur=${END},atrim=0:${END},afade=t=out:st=${END - 3}:d=3,loudnorm=I=-16:LRA=11:TP=-1.5,aresample=48000[a]`,
+  `[amb][mus]amix=inputs=2:normalize=0:duration=longest,apad=whole_dur=${END},atrim=0:${END},afade=t=out:st=${END - 3}:d=3,loudnorm=I=-16:LRA=11:TP=-1.5,` +
+  // (loudnorm lets a sudden sound through near the very start — the light's snap out of the lamp at 3.4 s went to
+  // +0.3 dBFS in the tenth cut — so a limiter after it, still at loudnorm's 192 kHz, where sample peaks are true peaks)
+  `alimiter=limit=0.79:attack=2:release=60:level=false,aresample=48000[a]`,
 ];
 run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
   '-i', film, '-i', amb, '-i', musicCut, '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'title.png'), '-loop', '1', '-framerate', '24', '-t', String(END), '-i', resolve(cache, 'credit.png'),
