@@ -29,7 +29,7 @@ uniform sampler2D uSky, uMoon, uCl0, uCl1, uCl2, uW0, uW1, uW2, uAt, uBB, uBF, u
 uniform vec4 uSky4;                 // the sky card on the screen: x0, y0, w, h
 // the things hanging still (moon, three clouds): pivot on the screen (x, y), size (w, h) | pivot in the picture (u, v), turn, lod | on, -, warm, -
 uniform vec4 uA[4], uB[4], uC[4];
-// the three wave strips: foot of set x 0 on the screen (x, y), scale, the water's flow (set units) | height, tile length (set units), swell gain, swell phase | lod, glints, warm, -
+// the three wave strips: foot of set x 0 on the screen (x, y), scale, the water's flow (set units) | height, tile length (set units), swell gain, swell phase | lod, glints, warm, how much the crests move
 uniform vec4 uL[3], uM[3], uN[3];
 uniform vec4 uSw;                   // the swell: amplitude, its phase, time (stepped), wave number
 // the puppets out of the atlas (boat, splash, far gull, near gull): pivot on the screen, size | pivot in the frame, turn, lod | frame in the atlas (x0, y0, w, h) | on, mirrored, warm, -
@@ -152,6 +152,13 @@ vec4 strip(sampler2D s, vec4 L, vec4 M, vec4 N, vec2 p, vec3 warm){
   float sx = (p.x - L.x) / L.z + L.w;
   float eta = swell(sx, uSw.x * M.z + 0.0) ;
   float v = ((p.y - L.y) / L.z - eta) / M.x;
+  // the crests are not stiff: on the wave machine the cellophane is twisted round turning rods, so each crest of the strip
+  // rises and sinks on its own (two rhythms over the strip, carried along with it) and its top rocks forward and back
+  float ph1 = 6.2832 * sx / 0.57 + 1.65 * uTime + 0.8 * N.w, ph2 = 6.2832 * sx / 0.26 - 2.7 * uTime + 1.3;
+  float hm = N.w * (0.26 * sin(ph1) + 0.12 * sin(ph2)) * (0.75 + 0.25 * sin(6.2832 * sx / 1.9 + 0.6 * uTime));
+  float vv = clamp(v, 0.0, 1.6);
+  v = v / (1.0 + hm * smoothstep(0.0, 0.8, vv));
+  sx += N.w * 0.035 * vv * vv * cos(ph1 + 0.6);
   float u = sx / M.y;
   vec2 uv = vec2(u, v);
   vec2 gx = dFdx(uv), gy = dFdy(uv);
@@ -316,11 +323,11 @@ const OPEN_EYES = [0, 2, 4, 7];
 // places for the hands, in the body's frame (boat pixels from the seat, y up; the child faces right)
 const SPOT = {
   chestN: [150, 250], chestF: [166, 262], hug: [140, 272], chin: [138, 360], chinF: [162, 376], ahead: [335, 385],
-  low: [285, 330], knee: [212, 192], wave: [262, 430], offer: [292, 560], high: [280, 650], highF: [252, 660],
+  low: [285, 330], knee: [212, 192], wave: [262, 430], offer: [292, 575], high: [272, 690], highF: [246, 700],
   shoulder: [232, 432], shoulderF: [214, 446], bye: [300, 600], down: [196, 300],
 };
 // ...and on the boat: the near rim, where a hand grips it
-const RIMGRIP = [292, 396];
+const RIMGRIP = [300, 426];                     // (the fist on top of the rim, where it shows)
 // the acting, in the stop world's seconds. Continuous things: [t, value, seconds to get there]
 const TRACK = {
   // how far the body leans back (radians; forward is negative)
@@ -572,7 +579,7 @@ W.stop = {
       if (!sz) return;
       const [sx, sy, S] = this.placeN(0, y, kd, c);
       L.set([sx, sy, S, flow * tc], i * 4); M.set([hgt, hgt * sz[0] / sz[1], gain, 0], i * 4);
-      N.set([lod + (i === 2 ? 0.8 * (c.z - 1) : 0), glint, warmth, 0], i * 4);
+      N.set([lod + (i === 2 ? 0.8 * (c.z - 1) : 0), glint, warmth, [0.7, 1.0, 1.0][i]], i * 4);
     });
     // (each strip's swell: the same wave, its own gain and a shift of phase — passed as a gain on the amplitude and a phase)
     // the shader takes one phase; the strips' own shifts are folded into the flow (a shift of the water along the strip)

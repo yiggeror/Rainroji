@@ -270,8 +270,8 @@ if want('stop'):
         A[..., 3] *= f; return Image.fromarray(A.clip(0, 255).astype('uint8'), 'RGBA')
     # name: (picture, boat px per its px, pivot, {places})
     PIECES = {
-        'body': (parts[0], 0.55, (330, 900), {'neck': (432, 75), 'shN': (440, 240), 'shF': (392, 222)}),
-        'uarm': (fade(parts[1], x1=300, y1=410, w=40), 0.44, (160, 85), {'elbow': (150, 330)}),
+        'body': (parts[0], 0.55, (330, 900), {'neck': (432, 75), 'shN': (388, 212), 'shF': (352, 204)}),
+        'uarm': (fade(parts[1], x1=300, y1=410, w=40), (0.40, 0.62), (160, 85), {'elbow': (150, 330)}),          # (a little longer: a child's arm)
         'fa_cup': (parts[3], 0.40, (100, 165), {'hand': (655, 100)}),
         'fa_open': (parts[4], 0.40, (100, 265), {'hand': (620, 215)}),
         'fa_fist': (parts[5], 0.40, (100, 150), {'hand': (600, 145)}),
@@ -282,9 +282,10 @@ if want('stop'):
         PIECES[f'head{i}'] = (fade(h, y1=668, w=20), 0.66, (485, 640), {'face': (575, 420)})
     sp, pmeta = [], {}
     for name, (im, s_, piv, pts) in PIECES.items():
-        k_ = s_ * TAU; im2 = bleed_edge(im.resize((max(1, round(im.width * k_)), max(1, round(im.height * k_))), Image.LANCZOS))
+        sx_, sy_ = s_ if isinstance(s_, tuple) else (s_, s_)
+        im2 = bleed_edge(im.resize((max(1, round(im.width * sx_ * TAU)), max(1, round(im.height * sy_ * TAU))), Image.LANCZOS))
         sp.append((name, [im2], (piv[0] / im.width, 1 - piv[1] / im.height)))
-        pmeta[name] = {'k': round(1 / TAU, 4), 'pts': {n: [round((x - piv[0]) * s_, 1), round((piv[1] - y) * s_, 1)] for n, (x, y) in pts.items()}}
+        pmeta[name] = {'k': round(1 / TAU, 4), 'pts': {n: [round((x - piv[0]) * sx_, 1), round((piv[1] - y) * sy_, 1)] for n, (x, y) in pts.items()}}
     # the scarf's loose end: a strip, laid along a line in the wind by the page (its root on the left, the fringe on the right)
     sc = parts[8]; sc = sc.crop((int(sc.width * 0.30), 0, sc.width, sc.height)); ks = 160 / sc.height
     sc = bleed_edge(sc.resize((round(sc.width * ks), 160), Image.LANCZOS)); sp.append(('scarf', [sc], (0.0, 0.5)))
