@@ -4902,12 +4902,26 @@ async function recRun() {
     if (fade > 0) { g2.fillStyle = `rgba(0,0,0,${fade})`; g2.fillRect(0, 0, c2.width, c2.height); }
     return c2.toDataURL('image/png');
   };
+  // (&draw=a-b,c-…: only these frames are drawn and handed over; the others still run — the story, the sound, every
+  //  simulation — but drawn the size of a postage stamp and kept back. &drawTill=<phase>: none after that phase begins
+  //  (the frame it begins on is the last one drawn). For drawing again only the part of a film that changed, and
+  //  splicing it into an earlier render: see tools/splice.py)
+  const DRAW = (QS.get('draw') || '').split(',').filter(Boolean).map(r => r.split('-').map(v => v === '' ? Infinity : +v));
+  const TILL = QS.get('drawTill'), FULL_SCALE = R.mainScale;
+  let past = false;
+  const drawn = (i) => !past && (!DRAW.length || DRAW.some(([a, b]) => i >= a && i < (b === undefined ? Infinity : b)));
   const frameOut = async () => {
     try {
-      const t0 = performance.now(); tick(1 / F); const t1 = performance.now(); gl.finish(); const t2 = performance.now();
-      const png = grab(); const t3 = performance.now();
-      if (QS.has('rectime') && k < 6) console.log(`rec timing ${k}: tick ${(t1 - t0).toFixed(0)} finish ${(t2 - t1).toFixed(0)} grab ${(t3 - t2).toFixed(0)} ms`);
-      if (window.__recFrame) await window.__recFrame(k, png);
+      const on = drawn(k);
+      R.mainScale = on ? FULL_SCALE : 0.05;
+      const t0 = performance.now(); tick(1 / F); const t1 = performance.now();
+      if (TILL && YL.director && YL.director.phase === TILL) past = true;
+      if (on) {
+        gl.finish(); const t2 = performance.now();
+        const png = grab(); const t3 = performance.now();
+        if (QS.has('rectime') && k < 6) console.log(`rec timing ${k}: tick ${(t1 - t0).toFixed(0)} finish ${(t2 - t1).toFixed(0)} grab ${(t3 - t2).toFixed(0)} ms`);
+        if (window.__recFrame) await window.__recFrame(k, png);
+      } else if (k % 240 === 0) console.log(`rec: frame ${k} run, not drawn`);
     }
     catch (e) { console.error('rec frame ' + k + ': ' + e.message + (k < 2 ? ' @ ' + (e.stack || '').split('\n').slice(1, 4).join(' | ') : '')); }
     k++;

@@ -61,6 +61,12 @@ node yiliguang/tools/master.mjs out/film out/一粒光.mp4 1280 720             
 - `Q` 是房间光线追踪的内部分辨率（1 = 满分辨率），`seaq` 是深海的内部分辨率；画面最后都按输出分辨率合成。
 - **没有显卡时很慢。** 软件渲染（SwiftShader）下，720p 一帧：房间约 5.5 秒（`Q=0.5`），深海加鲸约 9 秒，其他世界一到几秒；整部片子约三小时。1080p 要两倍多。有显卡的机器上会快得多。
 - 画面是在页面里直接从画布读出来的（画布保留了绘制缓冲），而不是截整个页面：1080p 的软件渲染画布，截图常常超过浏览器肯等的时间。
+- **只重画改过的一段。** 房间的开头和回家的结尾最慢（软件渲染下各约一个半小时），中间的世界改了，它们不用重画：
+  ```
+  node yiliguang/tools/rec.mjs new/film.mp4 "film&draw=290-&drawTill=surface" 160 1280 720 16   # 整部片子照样从头跑，只画 290 帧起、到回家开始为止
+  python3 yiliguang/tools/splice.py old/film new/film out/film --from 290                          # 接进上一次的整片
+  ```
+  没画的帧照样推进故事、模拟和声音，只是画得极小、不交出来，所以新的声音是完整的一条。`splice.py` 先核对新画面的头几帧和旧画面同一位置的帧一样，再在旧画面里找到新画面最后一帧（回家开始的那一帧，此刻画面是白的），从它的下一帧接着用旧的；中间的世界变长变短都接得上。不加 `drawTill` 就一直画到片尾，`splice.py` 加 `--to-end`，只用旧的开头。
 
 ## 配乐与字体
 
@@ -97,6 +103,7 @@ tools/inline.mjs        生成单文件
 tools/rec.mjs           逐帧录制画面和环境声
 tools/master.mjs        配乐、混音、片名
 tools/cuts.py           找片子里计划外的跳切（逐帧画面差）
+tools/splice.py         把只重画的一段接进上一次的整片渲染
 tools/pack_assets.py    把生成的图层裁切、压缩成 src/assets/*.js
 shots/                  审查用截图
 ```
@@ -114,6 +121,7 @@ shots/                  审查用截图
 | `&fast=k` | 整部片子快 k 倍（测试用） |
 | `&shot&frames=N` | 截图模式：画 N 帧后停下 |
 | `&rec&fps=24&dur=秒` | 录制模式（由 `tools/rec.mjs` 使用） |
+| `&draw=a-b,c-` `&drawTill=阶段` | 录制时只画这些帧；到这一段开始为止（由 `tools/splice.py` 接回整片） |
 | 木刻：`&wh=x,y`、`&shiver=秒` | 把火苗放在版画某点；看灯笼抖雪 |
 | 深海：`&calm=秒`、`&scare=秒`、`&lure=米` | 小鱼靠近与受惊；灯笼鱼 |
 | 鲸：`&whaletest=x&look=0…1&blink=0…1&wz=k&wa=x,y` | 固定机位看鲸的眼睛：滑过多远、看不看光、眨眼、推近 k 倍看某处 |
