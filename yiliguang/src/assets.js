@@ -34,5 +34,11 @@ YL.paperTex = (k) => {
   if (t && !t.mirror) { const gl = YL.gl; gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT); t.mirror = true; }
   return t;
 };
+// a strip made to tile end to end (the stop-motion's waves): repeats along its length
+YL.tileTex = (k) => {
+  const t = YL.assetTex(k);
+  if (t && !t.tile) { const gl = YL.gl; gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); t.tile = true; }
+  return t;
+};
 YL.dropAssetTextures = () => { for (const k in texs) delete texs[k]; };     // (a lost GL context)
 })();

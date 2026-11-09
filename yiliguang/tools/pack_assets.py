@@ -198,10 +198,65 @@ if want('stop'):
         items['stop_' + n[3:]] = (uri(im, 'webp', 86), im.size)
     for i, im in enumerate(split_columns(L('sm_clouds').convert('RGBA'), 3)):
         im = scale(im, h=900); items[f'stop_cloud{i}'] = (uri(im, 'webp', 86), im.size)
-    for n in ['sm_wave_back', 'sm_wave_mid', 'sm_wave_front']:
-        im = L(n).convert('RGBA'); a = im.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
-        im = im.crop((0, max(0, bb[1] - 8), im.width, im.height)); im = scale(im, w=2560)
+    # the three rows of waves: made to tile end to end (the last eighth of each laid over its first, faded across), so the
+    # sea can run past as far as the boat sails
+    import numpy as np
+    for src, n in [('sm_wave_t3', 'sm_wave_back'), ('sm_wave_t2', 'sm_wave_mid'), ('sm_wave_t1', 'sm_wave_front')]:
+        im = L(src).convert('RGBA'); a = im.getchannel('A').point(lambda v: 255 if v > 8 else 0); bb = a.getbbox()
+        im = im.crop((0, max(0, bb[1] - 8), im.width, im.height))
+        A = np.asarray(im).astype(np.float32); Wd = A.shape[1]; o = Wd // 8
+        k = np.linspace(0, 1, o)[None, :, None]
+        head = A[:, :o] * k + A[:, Wd - o:] * (1 - k)
+        T = np.concatenate([head, A[:, o:Wd - o]], 1)
+        im = Image.fromarray(T.clip(0, 255).astype('uint8'), 'RGBA'); im = scale(im, w=2560)
         items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
+    # the puppets that move: the boat with its sailor in six poses (replacement frames), a splash in six, a gull in four
+    def grid(im, cols, rows):
+        W_, H_ = im.width // cols, im.height // rows
+        return [im.crop((c * W_, r * H_, (c + 1) * W_, (r + 1) * H_)) for r in range(rows) for c in range(cols)]
+    def align(cells, h, how):
+        fr = []
+        for c in cells:
+            A_ = np.asarray(c)[..., 3]; m = A_ > 40; ys, xs = np.nonzero(m); bottom = ys.max(); top = ys.min()
+            if how == 'hull': sel = ys > bottom - (bottom - top) * 0.22; cx, cy = xs[sel].mean(), bottom
+            elif how == 'beak': xm = xs.min(); cx, cy = xm, ys[xs < xm + 12].mean()
+            else: cx, cy = xs.mean(), bottom
+            fr.append((c, cx, cy, xs.min(), xs.max(), top, bottom))
+        L_ = max(f[1] - f[3] for f in fr) + 6; R_ = max(f[4] - f[1] for f in fr) + 6
+        T_ = max(f[2] - f[5] for f in fr) + 6; B_ = max(f[6] - f[2] for f in fr) + 6
+        out, offs = [], []
+        for c, cx, cy, *_ in fr:
+            cell = Image.new('RGBA', (int(L_ + R_), int(T_ + B_)), (0, 0, 0, 0)); ox, oy = int(round(L_ - cx)), int(round(T_ - cy))
+            cell.alpha_composite(c, (ox, oy)); out.append(cell); offs.append((ox, oy))
+        k = h / out[0].height
+        return [bleed_edge(f.resize((max(1, round(f.width * k)), h), Image.LANCZOS)) for f in out], (L_ / (L_ + R_), B_ / (T_ + B_)), offs, k
+    # (two sheets: the second's frames brought to the first's size, by the length of the hull)
+    def hull_w(c):
+        A_ = np.asarray(c)[..., 3] > 40; ys, xs = np.nonzero(A_); b, t = ys.max(), ys.min()
+        band = A_[int(b - (b - t) * 0.45):b + 1]; cols = np.nonzero(band.any(0))[0]; return cols.max() - cols.min()
+    cells = grid(L('sm_poses').convert('RGBA'), 3, 2)
+    if os.path.exists(os.path.join(SRC, 'sm_poses2.png')):
+        c2 = grid(L('sm_poses2').convert('RGBA'), 3, 2)
+        r = np.median([hull_w(c) for c in cells]) / np.median([hull_w(c) for c in c2])
+        cells += [c.resize((round(c.width * r), round(c.height * r)), Image.LANCZOS) for c in c2]
+    poses, panc, poffs, pk = align(cells, 640, 'hull')
+    # where the light is in each pose (its brightest warm spot), as a fraction of the frame from its left and its foot
+    # (the near-white core of the glowing ball, the biggest one above the hull)
+    from scipy import ndimage as ndi
+    lights = []
+    for f in poses:
+        A_ = np.asarray(f).astype(np.float32); hgt = A_.shape[0]
+        core = (A_[..., 0] > 235) & (A_[..., 1] > 215) & (A_[..., 2] > 150)
+        core = ndi.binary_opening(core, iterations=1) & ((1 - np.arange(hgt)[:, None] / hgt) > 0.36)
+        lab, nl = ndi.label(core); k = np.argmax(ndi.sum(core, lab, range(1, nl + 1))) + 1
+        y, x = ndi.center_of_mass(core, lab, k)
+        lights.append([round(x / f.width, 4), round(1 - y / f.height, 4)])
+    spray, sanc, _, _ = align(grid(L('sm_spray').convert('RGBA'), 6, 1), 300, 'foot')
+    gull, ganc, _, _ = align(grid(L('sm_gull').convert('RGBA'), 4, 1), 260, 'beak')
+    sat_, smeta = pack_atlas([('poses', poses, panc), ('spray', spray, sanc), ('gull', gull, ganc)])
+    smeta['poses']['lights'] = lights
+    items['stop_atlas'] = (uri(sat_, 'webp', 86), sat_.size)
+    STOP_META = smeta
     # the moon's outline as a signed distance (for the Kandinsky's crescent to grow into its shape): 128 on the edge,
     # +/- 1 per 3 pixels of the moon picture (positive outside), a quarter of its size; the string left out
     import numpy as np
@@ -213,7 +268,7 @@ if want('stop'):
     sd = Image.fromarray(np.clip(128 + d / 3.0, 0, 255).astype('uint8'), 'L').resize((mo.width // 4, mo.height // 4), Image.BILINEAR)
     b = io.BytesIO(); sd.save(b, 'PNG', optimize=True)
     items['stop_moon_sdf'] = ('data:image/png;base64,' + base64.b64encode(b.getvalue()).decode(), sd.size)
-    write('stop', items)
+    write('stop', items, extra=f"window.YL.STOP_ATLAS = {json.dumps(STOP_META)};")
 # ---- papers and a canvas for the older worlds (watercolour paper for the sea, washi for the print, xuan for the ink,
 # linen for the Kandinsky): the middle of each scan, grey, 1024 square; the shaders tile it (mirrored) and take its relief
 if want('paper'):
