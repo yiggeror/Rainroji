@@ -24,6 +24,8 @@ uniform sampler2D uCanvas;    // a scan of primed linen
 uniform sampler2D uMoon;      // the cardboard moon of the next world (its outline: the crescent becomes its shape)
 uniform vec4 uMoonR;          // where that moon will be on the screen: its pivot (top middle) x, y, its width, height
 uniform vec4 uMoonV;          // the eye at the very end (x, y, zoom), and how far the crescent has become the moon's shape
+uniform vec4 uMorph0, uMorph1, uMorph2;   // the way the crescent's horns go to the moon's (see render): where the two shapes are drawn
+vec2 cmul(vec2 a, vec2 b){ return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 out vec4 o;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
@@ -115,12 +117,17 @@ void main(){
     // (the shape changes as one shape: the two outlines' signed distances, on the screen, blended)
     float cres = aY * (1.0 - aB);
     if (mk > 0.0){
-      float dA = max(sdCircle(p, cy, 0.112), -sdCircle(p, cy + vec2(0.30, 0.05) * (1.0 - uView.w) + vec2(0.046, 0.013) * uView.w, 0.094)) * uMoonV.z;
+      // (both shapes are carried partway along one turn-and-grow that takes the crescent's horns onto the moon's — the
+      //  crescent forward from where it is, the moon back from where it will be — and blended there, horn on horn: blended
+      //  where they lie, the moon's upper horn fell inside the crescent's bite, and the outline lost a corner)
       vec2 s = (p - uMoonV.xy) * uMoonV.z;
-      vec2 mu = vec2(0.508 + (s.x - uMoonR.x) / uMoonR.z, 1.0 + (s.y - uMoonR.y) / uMoonR.w);
+      vec2 sA = uMorph0.zw + cmul(s - uMorph0.xy, uMorph1.zw), pA = uMoonV.xy + sA / uMoonV.z;
+      float dA = max(sdCircle(pA, cy, 0.112), -sdCircle(pA, cy + vec2(0.30, 0.05) * (1.0 - uView.w) + vec2(0.046, 0.013) * uView.w, 0.094)) * uMoonV.z * uMorph2.z;
+      vec2 sM = uMorph1.xy + cmul(s - uMorph0.xy, uMorph2.xy);
+      vec2 mu = vec2(0.508 + (sM.x - uMoonR.x) / uMoonR.z, 1.0 + (sM.y - uMoonR.y) / uMoonR.w);
       float inside = step(0.0, mu.x) * step(mu.x, 1.0) * step(0.0, mu.y) * step(mu.y, 1.0);
       float dM = mix(0.5, (texture(uMoon, clamp(mu, vec2(0.0), vec2(1.0))).r * 255.0 - 128.0) * 3.0 / 1100.0 * uMoonR.w, inside);
-      dM = max(dM, (mu.y - 0.70) * uMoonR.w);                      // (not the string)
+      dM = max(dM, (mu.y - 0.70) * uMoonR.w) * uMorph2.w;          // (not the string)
       cres = smoothstep(0.0022, -0.0022, mix(dA, dM, mk) + rough() * uMoonV.z * 0.5);
     }
     C = mix(C, brush(ULTRA), aB * (1.0 - aY) * pow(1.0 - mk, 3.0));       // (the bite where it lies past the yellow)
@@ -258,6 +265,32 @@ W.kand = {
     const a = ease(t / 1.7);
     return [lerp(this.entry[0], P0[0], a) + 0.004 * Math.sin(t * 2.0), lerp(this.entry[1], P0[1], a) + 0.004 * Math.cos(t * 1.7)];
   },
+  // the crescent becomes the moon by one turn-and-grow (a similarity: z → c + α (z − c0)) that carries its two horns onto
+  // the moon's two horns. At k both shapes are drawn carried k of the way along it — the crescent from its own place,
+  // the moon from where the whole turn would have put it — so their horns lie on one another all the way through.
+  // (Screen units of the next world at its start: s = (p − VEND.xy) · VEND.z.)
+  morph(p, MR, bite, k) {
+    const U = YL.U, S = (q) => [(q[0] - VEND[0]) * VEND[2], (q[1] - VEND[1]) * VEND[2]];
+    // the crescent's horns: where its disc and the biting disc cross
+    const c = [-0.57, 0.33], b = [c[0] + 0.30 * (1 - bite) + 0.046 * bite, c[1] + 0.05 * (1 - bite) + 0.013 * bite], r1 = 0.112, r2 = 0.094;
+    const dx = b[0] - c[0], dy = b[1] - c[1], d = Math.hypot(dx, dy), a = (r1 * r1 - r2 * r2 + d * d) / (2 * d), hh = Math.sqrt(Math.max(r1 * r1 - a * a, 0));
+    const ux = dx / d, uy = dy / d, mx = c[0] + a * ux, my = c[1] + a * uy;
+    let h1 = [mx - hh * uy, my + hh * ux], h2 = [mx + hh * uy, my - hh * ux];
+    if (h2[1] > h1[1]) [h1, h2] = [h2, h1];
+    const a1 = S(h1), a2 = S(h2);
+    // the moon's horns (measured on its outline: tools/pack_assets.py's stop_moon_sdf), upper and lower
+    const m1 = [MR[0] + (0.870 - 0.508) * MR[2], MR[1] + (0.656 - 1) * MR[3]], m2 = [MR[0] + (0.981 - 0.508) * MR[2], MR[1] + (0.155 - 1) * MR[3]];
+    const cdiv = (u, w) => { const q = w[0] * w[0] + w[1] * w[1]; return [(u[0] * w[0] + u[1] * w[1]) / q, (u[1] * w[0] - u[0] * w[1]) / q]; };
+    const al = cdiv([m1[0] - m2[0], m1[1] - m2[1]], [a1[0] - a2[0], a1[1] - a2[1]]);
+    const cA = [(a1[0] + a2[0]) / 2, (a1[1] + a2[1]) / 2], cM = [(m1[0] + m2[0]) / 2, (m1[1] + m2[1]) / 2];
+    const mag = Math.hypot(al[0], al[1]), arg = Math.atan2(al[1], al[0]);
+    const mk = Math.pow(mag, k), ak = [mk * Math.cos(k * arg), mk * Math.sin(k * arg)];
+    const ck = [cA[0] + (cM[0] - cA[0]) * k, cA[1] + (cM[1] - cA[1]) * k];
+    const inv = cdiv([1, 0], ak), toM = cdiv(al, ak);
+    U(p, 'uMorph0', [ck[0], ck[1], cA[0], cA[1]]);
+    U(p, 'uMorph1', [cM[0], cM[1], inv[0], inv[1]]);
+    U(p, 'uMorph2', [toM[0], toM[1], mk, mk / mag]);
+  },
   render(target, aspect) {
     const gl = YL.gl, U = YL.U, p = this.p, t = this.t;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
@@ -269,7 +302,9 @@ W.kand = {
     U(p, 'uBg', this.pondTex ? this.bg : 0); U(p, 'uView', [v.x, v.y, v.z, v.bite]);
     // the next world's moon: its outline, where it will be when that world begins
     const st = YL.worlds.stop, mt = YL.assetTex('stop_moon_sdf', false);
-    U(p, 'uMoonR', st && st.moonRect ? st.moonRect(0) : [0, 0, 1, 1]); U(p, 'uMoonV', [VEND[0], VEND[1], VEND[2], mt ? ease((t - 9.9) / 1.0) : 0]);          // (only once the blue has bitten the crescent out)
+    const MR = st && st.moonRect ? st.moonRect(0) : [0, 0, 1, 1], mk = mt ? ease((t - 9.9) / 1.0) : 0;
+    U(p, 'uMoonR', MR); U(p, 'uMoonV', [VEND[0], VEND[1], VEND[2], mk]);          // (only once the blue has bitten the crescent out)
+    this.morph(p, MR, v.bite, mk);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, mt || null); gl.uniform1i(p.u.uMoon, 2);
     U(p, 'uHero', [hp[0], hp[1], 1.0 + 0.08 * Math.sin(t * 2.88), 0.024]);
     if (this.pondTex) YL.bindTex(p, 'uPond', this.pondTex, 0); else { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null); gl.uniform1i(p.u.uPond, 0); }
