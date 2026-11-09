@@ -193,9 +193,7 @@ if want('conte'):
 if want('stop'):
     items = {}
     sky = L('sm_sky').convert('RGB'); items['stop_sky'] = (uri(sky, 'jpeg', 86), sky.size)
-    for n in ['sm_moon', 'sm_boat']:
-        im, _ = crop_alpha(L(n).convert('RGBA')); im = scale(im, h=1100)
-        items['stop_' + n[3:]] = (uri(im, 'webp', 86), im.size)
+    im, _ = crop_alpha(L('sm_moon').convert('RGBA')); im = scale(im, h=1100); items['stop_moon'] = (uri(im, 'webp', 86), im.size)
     for i, im in enumerate(split_columns(L('sm_clouds').convert('RGBA'), 3)):
         im = scale(im, h=900); items[f'stop_cloud{i}'] = (uri(im, 'webp', 86), im.size)
     # the three rows of waves: made to tile end to end (the last eighth of each laid over its first, faded across), so the
@@ -210,7 +208,7 @@ if want('stop'):
         T = np.concatenate([head, A[:, o:Wd - o]], 1)
         im = Image.fromarray(T.clip(0, 255).astype('uint8'), 'RGBA'); im = scale(im, w=2560)
         items['stop_' + n[3:]] = (uri(im, 'webp', 84), im.size)
-    # the puppets that move: the boat with its sailor in six poses (replacement frames), a splash in six, a gull in four
+    # the puppets that move: a splash in six frames, a gull in four
     def grid(im, cols, rows):
         W_, H_ = im.width // cols, im.height // rows
         return [im.crop((c * W_, r * H_, (c + 1) * W_, (r + 1) * H_)) for r in range(rows) for c in range(cols)]
@@ -218,45 +216,86 @@ if want('stop'):
         fr = []
         for c in cells:
             A_ = np.asarray(c)[..., 3]; m = A_ > 40; ys, xs = np.nonzero(m); bottom = ys.max(); top = ys.min()
-            if how == 'hull': sel = ys > bottom - (bottom - top) * 0.22; cx, cy = xs[sel].mean(), bottom
-            elif how == 'beak': xm = xs.min(); cx, cy = xm, ys[xs < xm + 12].mean()
+            if how == 'beak': xm = xs.min(); cx, cy = xm, ys[xs < xm + 12].mean()
             else: cx, cy = xs.mean(), bottom
             fr.append((c, cx, cy, xs.min(), xs.max(), top, bottom))
         L_ = max(f[1] - f[3] for f in fr) + 6; R_ = max(f[4] - f[1] for f in fr) + 6
         T_ = max(f[2] - f[5] for f in fr) + 6; B_ = max(f[6] - f[2] for f in fr) + 6
-        out, offs = [], []
+        out = []
         for c, cx, cy, *_ in fr:
-            cell = Image.new('RGBA', (int(L_ + R_), int(T_ + B_)), (0, 0, 0, 0)); ox, oy = int(round(L_ - cx)), int(round(T_ - cy))
-            cell.alpha_composite(c, (ox, oy)); out.append(cell); offs.append((ox, oy))
+            cell = Image.new('RGBA', (int(L_ + R_), int(T_ + B_)), (0, 0, 0, 0)); cell.alpha_composite(c, (int(round(L_ - cx)), int(round(T_ - cy)))); out.append(cell)
         k = h / out[0].height
-        return [bleed_edge(f.resize((max(1, round(f.width * k)), h), Image.LANCZOS)) for f in out], (L_ / (L_ + R_), B_ / (T_ + B_)), offs, k
-    # (two sheets: the second's frames brought to the first's size, by the length of the hull)
-    def hull_w(c):
-        A_ = np.asarray(c)[..., 3] > 40; ys, xs = np.nonzero(A_); b, t = ys.max(), ys.min()
-        band = A_[int(b - (b - t) * 0.45):b + 1]; cols = np.nonzero(band.any(0))[0]; return cols.max() - cols.min()
-    cells = grid(L('sm_poses').convert('RGBA'), 3, 2)
-    if os.path.exists(os.path.join(SRC, 'sm_poses2.png')):
-        c2 = grid(L('sm_poses2').convert('RGBA'), 3, 2)
-        r = np.median([hull_w(c) for c in cells]) / np.median([hull_w(c) for c in c2])
-        cells += [c.resize((round(c.width * r), round(c.height * r)), Image.LANCZOS) for c in c2]
-    poses, panc, poffs, pk = align(cells, 640, 'hull')
-    # where the light is in each pose (its brightest warm spot), as a fraction of the frame from its left and its foot
-    # (the near-white core of the glowing ball, the biggest one above the hull)
+        return [bleed_edge(f.resize((max(1, round(f.width * k)), h), Image.LANCZOS)) for f in out], (L_ / (L_ + R_), B_ / (T_ + B_))
+    spray, sanc = align(grid(L('sm_spray').convert('RGBA'), 6, 1), 300, 'foot')
+    gull, ganc = align(grid(L('sm_gull').convert('RGBA'), 4, 1), 260, 'beak')
+    sat_, smeta = pack_atlas([('spray', spray, sanc), ('gull', gull, ganc)])
+    # ---- the boat, empty, in two layers round the sailor: all of it, and only the near side of the hull (below its rim),
+    # which is laid over the child. Places on it are in "boat pixels": the picture as generated, 1536 square.
     from scipy import ndimage as ndi
-    lights = []
-    for f in poses:
-        A_ = np.asarray(f).astype(np.float32); hgt = A_.shape[0]
-        core = (A_[..., 0] > 235) & (A_[..., 1] > 215) & (A_[..., 2] > 150)
-        core = ndi.binary_opening(core, iterations=1) & ((1 - np.arange(hgt)[:, None] / hgt) > 0.36)
-        lab, nl = ndi.label(core); k = np.argmax(ndi.sum(core, lab, range(1, nl + 1))) + 1
-        y, x = ndi.center_of_mass(core, lab, k)
-        lights.append([round(x / f.width, 4), round(1 - y / f.height, 4)])
-    spray, sanc, _, _ = align(grid(L('sm_spray').convert('RGBA'), 6, 1), 300, 'foot')
-    gull, ganc, _, _ = align(grid(L('sm_gull').convert('RGBA'), 4, 1), 260, 'beak')
-    sat_, smeta = pack_atlas([('poses', poses, panc), ('spray', spray, sanc), ('gull', gull, ganc)])
-    smeta['poses']['lights'] = lights
+    from PIL import ImageDraw, ImageFilter
+    boat = L('sm_boat_empty').convert('RGBA')
+    RIM = [(0, 1026), (20, 1030), (150, 1078), (300, 1098), (430, 1112), (600, 1108), (750, 1098), (900, 1082), (1050, 1062),
+           (1200, 1030), (1300, 1005), (1400, 960), (1510, 872), (1536, 868)]
+    mk = Image.new('L', boat.size, 0); ImageDraw.Draw(mk).polygon(RIM + [(1536, 1536), (0, 1536)], fill=255)
+    mk = np.asarray(mk.filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32) / 255.0
+    bb = boat.getchannel('A').point(lambda v: 255 if v > 8 else 0).getbbox(); x0, y0 = max(0, bb[0] - 8), max(0, bb[1] - 8)
+    bB = boat.crop((x0, y0, min(1536, bb[2] + 8), min(1536, bb[3] + 8)))
+    F_ = np.asarray(boat).astype(np.float32); F_[..., 3] *= mk
+    bF = Image.fromarray(F_.clip(0, 255).astype('uint8'), 'RGBA').crop((x0, y0, x0 + bB.width, y0 + bB.height))
+    tb = 1000 / bB.height
+    bB = bleed_edge(bB.resize((round(bB.width * tb), 1000), Image.LANCZOS)); bF = bleed_edge(bF.resize(bB.size, Image.LANCZOS))
+    items['stop_boatB'] = (uri(bB, 'webp', 88), bB.size); items['stop_boatF'] = (uri(bF, 'webp', 88), bF.size)
+    A_ = np.asarray(boat)[..., 3] > 40; ys, xs = np.nonzero(A_); bot = ys.max(); sel = ys > bot - (bot - ys.min()) * 0.22
+    rig = {'boat': {'org': [x0, y0], 'size': [round(bB.width / tb, 1), round(bB.height / tb, 1)], 'anchor': [round(float(xs[sel].mean()), 1), int(bot)],
+                    'flag': [468, 88, 940, 268], 'bow': [1322, 1320]}}
+    # ---- the sailor, taken apart (a stop-motion puppet's pieces and its replacement heads and hands): each piece with the
+    # boat pixels it covers per pixel of its picture, its pivot, and the places on it that the rig joins up (pivot-relative,
+    # in boat pixels, y up)
+    TAU = 0.65                                                  # (pixels stored per boat pixel)
+    def cut(sheet, n):
+        im = L(sheet).convert('RGBA'); A = np.asarray(im); m = A[..., 3] > 30
+        m2 = ndi.binary_dilation(m[::4, ::4], iterations=4); lab, nl = ndi.label(m2)
+        sizes = ndi.sum(m2, lab, range(1, nl + 1)); order = np.argsort(-sizes)[:n] + 1; objs = ndi.find_objects(lab); out = []
+        for k in order:
+            sl = objs[k - 1]; Y0, Y1, X0, X1 = sl[0].start * 4, sl[0].stop * 4, sl[1].start * 4, sl[1].stop * 4
+            keep = np.kron(lab == k, np.ones((4, 4), bool))[:A.shape[0], :A.shape[1]]
+            B = A.copy(); B[..., 3] = np.where(keep, B[..., 3], 0)
+            out.append((Y0 // 300, X0, Image.fromarray(B).crop((X0, Y0, X1, Y1))))
+        out.sort(key=lambda o: (o[0], o[1])); return [o[2] for o in out]
+    parts = cut('sm_parts', 9); heads = cut('sm_heads', 8)
+    def fade(im, x1=None, y1=None, w=24):
+        A = np.asarray(im).astype(np.float32); h, wd = A.shape[:2]; f = np.ones((h, wd), np.float32)
+        if x1 is not None: f *= np.clip((x1 - np.arange(wd)[None, :]) / w, 0, 1)
+        if y1 is not None: f *= np.clip((y1 - np.arange(h)[:, None]) / w, 0, 1)
+        A[..., 3] *= f; return Image.fromarray(A.clip(0, 255).astype('uint8'), 'RGBA')
+    # name: (picture, boat px per its px, pivot, {places})
+    PIECES = {
+        'body': (parts[0], 0.55, (330, 900), {'neck': (432, 75), 'shN': (440, 240), 'shF': (392, 222)}),
+        'uarm': (fade(parts[1], x1=300, y1=410, w=40), 0.44, (160, 85), {'elbow': (150, 330)}),
+        'fa_cup': (parts[3], 0.40, (100, 165), {'hand': (655, 100)}),
+        'fa_open': (parts[4], 0.40, (100, 265), {'hand': (620, 215)}),
+        'fa_fist': (parts[5], 0.40, (100, 150), {'hand': (600, 145)}),
+        'fa_reach': (parts[6], 0.40, (100, 140), {'hand': (700, 62)}),
+        'knot': (parts[7], 0.42, (290, 160), {'tail': (80, 205)}),
+    }
+    for i, h in enumerate(heads):
+        PIECES[f'head{i}'] = (fade(h, y1=668, w=20), 0.66, (485, 640), {'face': (575, 420)})
+    sp, pmeta = [], {}
+    for name, (im, s_, piv, pts) in PIECES.items():
+        k_ = s_ * TAU; im2 = bleed_edge(im.resize((max(1, round(im.width * k_)), max(1, round(im.height * k_))), Image.LANCZOS))
+        sp.append((name, [im2], (piv[0] / im.width, 1 - piv[1] / im.height)))
+        pmeta[name] = {'k': round(1 / TAU, 4), 'pts': {n: [round((x - piv[0]) * s_, 1), round((piv[1] - y) * s_, 1)] for n, (x, y) in pts.items()}}
+    # the scarf's loose end: a strip, laid along a line in the wind by the page (its root on the left, the fringe on the right)
+    sc = parts[8]; sc = sc.crop((int(sc.width * 0.30), 0, sc.width, sc.height)); ks = 160 / sc.height
+    sc = bleed_edge(sc.resize((round(sc.width * ks), 160), Image.LANCZOS)); sp.append(('scarf', [sc], (0.0, 0.5)))
+    pmeta['scarf'] = {'band': [round((460 - 400) / 460, 3), round((460 - 60) / 460, 3)]}
+    rat, rmeta = pack_atlas(sp, W=2048)
+    for n in rmeta: rmeta[n].update(pmeta.get(n, {}))
+    rig['pieces'] = rmeta
+    items['stop_rig'] = (uri(rat, 'webp', 88), rat.size)
     items['stop_atlas'] = (uri(sat_, 'webp', 86), sat_.size)
     STOP_META = smeta
+    STOP_RIG = rig
     # the moon's outline as a signed distance (for the Kandinsky's crescent to grow into its shape): 128 on the edge,
     # +/- 1 per 3 pixels of the moon picture (positive outside), a quarter of its size; the string left out
     import numpy as np
@@ -268,7 +307,7 @@ if want('stop'):
     sd = Image.fromarray(np.clip(128 + d / 3.0, 0, 255).astype('uint8'), 'L').resize((mo.width // 4, mo.height // 4), Image.BILINEAR)
     b = io.BytesIO(); sd.save(b, 'PNG', optimize=True)
     items['stop_moon_sdf'] = ('data:image/png;base64,' + base64.b64encode(b.getvalue()).decode(), sd.size)
-    write('stop', items, extra=f"window.YL.STOP_ATLAS = {json.dumps(STOP_META)};")
+    write('stop', items, extra=f"window.YL.STOP_ATLAS = {json.dumps(STOP_META)}; window.YL.STOP_RIG = {json.dumps(STOP_RIG)};")
 # ---- papers and a canvas for the older worlds (watercolour paper for the sea, washi for the print, xuan for the ink,
 # linen for the Kandinsky): the middle of each scan, grey, 1024 square; the shaders tile it (mirrored) and take its relief
 if want('paper'):
