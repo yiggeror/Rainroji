@@ -20,7 +20,7 @@ void main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position
 const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uAtlas;
-uniform vec4 uA[${NP}], uB[${NP}], uC[${NP}];
+uniform vec4 uA[${NP}], uB[${NP}], uC[${NP}], uD[${NP}];   // (D.x: how far the piece is turned toward the screen, signed: a turned-over piece shows its mirror image)
 uniform float uN;
 uniform vec2 uRes;
 uniform vec3 uLamp;           // x, y on the screen, how bright
@@ -47,10 +47,11 @@ void main(){
     float s = A.z;
     vec2 Y = Lp + (${D.toFixed(2)} - s) / ${D.toFixed(2)} * (X - Lp);
     vec2 q = rot(-B.x) * (Y - A.xy);
-    vec2 a = B.yz + vec2(q.x / A.w, -q.y / abs(A.w));
+    float ys = uD[i].x;
+    vec2 a = B.yz + vec2(q.x / A.w, -q.y / (abs(A.w) * ys));
     if (a.x < C.x || a.x > C.z || a.y < C.y || a.y > C.w) continue;
     float pen = lampR * s / ${D.toFixed(2)} / abs(A.w);
-    vec3 tc = textureLod(uAtlas, vec2(a.x, uAtSize.y - a.y) / uAtSize, min(log2(max(pen, 0.7)), 3.2)).rgb;
+    vec3 tc = textureLod(uAtlas, vec2(a.x, uAtSize.y - a.y) / uAtSize, min(log2(max(pen, 0.7)) + max(0.0, -0.5 * log2(max(abs(ys), 0.05))), 3.2)).rgb;
     tc = pow(tc, vec3(0.80));                                      // (dyed hide lets the light through well)
     bool tile = B.w > 1.5;
     float ex = tile ? 1e3 : min(a.x - C.x, C.z - a.x);
@@ -124,7 +125,7 @@ W.stage = {
     this.empty = gl.createVertexArray();
     // the pieces of carved hide (generated; see assets/prompts/pi_*, sh_*), laid on white in one atlas
     this.atlas = YL.assetTex('stage_atlas');
-    this.A = new Float32Array(NP * 4); this.B = new Float32Array(NP * 4); this.C = new Float32Array(NP * 4);
+    this.A = new Float32Array(NP * 4); this.B = new Float32Array(NP * 4); this.C = new Float32Array(NP * 4); this.Dv = new Float32Array(NP * 4);
     this.reset();
     this.ready = true;
   },
@@ -140,12 +141,17 @@ W.stage = {
   way() {
     if (this._way) return this._way;
     const pts = [];
-    for (let i = 0; i <= 40; i++) { const u = i / 40; pts.push([-3.0 + 2.2 * u, 0.42 - 0.18 * u + 0.05 * Math.sin(u * 3.0)]); }
-    const f8 = (s) => [1.02 * Math.sin(s), 0.20 + 0.23 * Math.sin(2 * s)];
-    // join the figure of eight where it is heading right along its left side, s = -pi/2 … going up the lobe
-    const s0 = -Math.PI * 0.62;
-    const j = f8(s0), last = pts[pts.length - 1];
-    for (let i = 1; i <= 20; i++) { const u = i / 20, e = u * u * (3 - 2 * u); pts.push([last[0] + (j[0] - last[0]) * e, last[1] + (j[1] - last[1]) * e]); }
+    // (it keeps above the bank: the general rides beneath it, his plume reaching to about y 0.1; and its turns stay wide
+    // enough for a body of eight joints: the lobes' ends bend at a radius of about 0.17)
+    const f8 = (s) => [0.95 * Math.sin(s), 0.41 + 0.20 * Math.sin(2 * s)];
+    // in from the left in one smooth curve, joining the figure of eight along its way: on the left lobe's lower side,
+    // heading right and down toward the middle (no turning back on itself)
+    const s0 = -Math.PI / 2 + 0.5, j = f8(s0), dj = [0.95 * Math.cos(s0), 0.40 * Math.cos(2 * s0)];
+    const P0 = [-3.0, 0.56], T0 = [2.4, 0], kT = 2.4 / Math.hypot(dj[0], dj[1]), T1 = [dj[0] * kT, dj[1] * kT];
+    for (let i = 0; i <= 60; i++) {
+      const u = i / 60, h00 = 2 * u ** 3 - 3 * u * u + 1, h10 = u ** 3 - 2 * u * u + u, h01 = -2 * u ** 3 + 3 * u * u, h11 = u ** 3 - u * u;
+      pts.push([h00 * P0[0] + h10 * T0[0] + h01 * j[0] + h11 * T1[0], h00 * P0[1] + h10 * T0[1] + h01 * j[1] + h11 * T1[1]]);
+    }
     for (let i = 1; i <= 2400; i++) pts.push(f8(s0 + i * 0.01));
     const d = [0]; for (let i = 1; i < pts.length; i++) d.push(d[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     return (this._way = { pts, d });
@@ -162,18 +168,24 @@ W.stage = {
     const k = smooth(0.4, 3.0, t);
     p = [enter[0] + (p[0] - enter[0]) * k, enter[1] + (p[1] - enter[1]) * k];
     if (this.drop) {
-      const u = t - this.drop.t0, a = this.drop.p0;
-      p = [a[0] + 0.10 * Math.sin(u * 2.0) * Math.min(u, 1), a[1] - 0.25 * u * u - 0.15 * u];
+      // (it carries on a little the way it was going, then sinks: no stop where the fall begins)
+      const u = t - this.drop.t0, a = this.drop.p0, v = this.drop.v0 || [0, 0], c = (1 - Math.exp(-1.8 * u)) / 1.8;
+      p = [a[0] + v[0] * c + 0.10 * Math.sin(u * 2.0) * Math.min(u, 1), a[1] + v[1] * c - 0.25 * u * u - 0.15 * u];
     }
     return p;
   },
   // the head's distance along the way at t: in fast from the left, then at a swimming pace
   dS(t) { const t0 = 0.8; if (t < t0) return 0; const a = t - t0; return 1.6 * a - 0.95 * Math.max(0, a - 1.6) + 0.04 * Math.sin(a * 1.7); },
-  startDrop() { this.drop = { t0: this.t, p0: this.pearlAt(this.t) }; },
-  // what the eye sees of the screen: all of it as the stage is reached; it leans in to the play; back out as the pearl falls
+  startDrop() {
+    const t = this.t, p0 = this.pearlAt(t), p1 = this.pearlAt(t - 0.05);
+    this.drop = { t0: t, p0, v0: [(p0[0] - p1[0]) / 0.05, (p0[1] - p1[1]) / 0.05] };
+  },
+  // what the eye sees of the screen: all of it as the stage is reached; it leans in to the play, after the pearl (the
+  // lamp: where it is, the screen is lit); back out as the pearl falls
   viewAt(t) {
     const full = this.FULL || SH / 2, k = smooth(2.8, 6.0, t) * (1 - smooth(7.4, 9.3, t));
-    return [0.22 * k * Math.sin(0.3 + t * 0.15), 0.07 * k, full * (1 - 0.17 * k)];
+    const px = this.wayAt(this.dS(t) + 0.55)[0];
+    return [0.40 * k * px, 0.07 * k, full * (1 - 0.17 * k)];
   },
   pieces() {
     const out = [], t = this.t, AT = YL.STAGE_ATLAS;
@@ -181,10 +193,10 @@ W.stage = {
     if (!AT) return out;
     // name, the pivot on the screen (m), how far behind the screen (m), metres per atlas pixel, turn, the pivot in the piece
     // (fractions of its width and height, from its top left), mirrored, how dense the hide
-    const put = (name, x, y, s, mpp, ang, pu, pv, flip = 1, dens = 1) => {
+    const put = (name, x, y, s, mpp, ang, pu, pv, flip = 1, dens = 1, ys = 1) => {
       const P = AT[name]; if (!P) return;
       const [ax, ay] = P.at;
-      out.push([x, y, s, mpp * flip, ang, ax + pu * P.w, ay + pv * P.h, dens, ax, ay, ax + P.w, ay + P.h]);
+      out.push([x, y, s, mpp * flip, ang, ax + pu * P.w, ay + pv * P.h, dens, ax, ay, ax + P.w, ay + P.h, ys]);
     };
     // where a point of a piece is on the screen, once placed
     const at = (name, x, y, mpp, ang, pu, pv, u, v, flip = 1) => {
@@ -245,27 +257,45 @@ W.stage = {
     }
     // ---- the cranes: high across, right to left, their wings beating about the root
     for (let k = 0; k < 2; k++) {
-      const x = 2.0 - 0.32 * (t - 1.2 - k * 1.3), y = 0.50 + 0.06 * k + 0.02 * Math.sin(t * 0.9 + k);
+      const x = 2.0 - 0.32 * (t - 1.2 - k * 1.3), y = 0.635 + 0.045 * k + 0.02 * Math.sin(t * 0.9 + k);      // (up among the clouds, over the dragon's way)
       if (x < -2.2 || x > 2.2) continue;
       const g = t * 4.4 + k * 1.7, m = 0.00046;
       const root = at('crane', x, y, m, 0.04 * Math.sin(g - 1.0), 0.5, 0.5, 0.36, 0.30, -1);
       put('crane', x, y, 0.03, m, 0.04 * Math.sin(g - 1.0), 0.5, 0.5, -1, 1);
       put('cwing', root[0], root[1], 0.028, m, 0.65 * Math.sin(g) - 0.15, 0.93, 0.80, -1, 0.95);
     }
-    // ---- the dragon: head, eight joints (two of them with claws) and the tail, all on its way behind one another
+    // ---- the dragon: head, eight joints (two of them with claws) and the tail, all on its way behind one another.
+    // As in a dragon dance, a wave runs down it from the head to the tail (the poles lifted one after another), across
+    // its way; the head keeps to the way, after the pearl. Where the way turns back on itself the hide is turned over (the
+    // player rolls the rod: its shadow narrows to the edge and opens again, mirrored) so the crest stays on top.
     {
       const m = 0.00040, segL = 0.92 * 560 * m, sH = this.dS(t);
-      const joints = []; for (let i = 0; i <= 10; i++) joints.push(this.wayAt(sH - 0.04 - i * segL));
+      const tan = (s) => { const a = this.wayAt(s - 0.02), b = this.wayAt(s + 0.02), l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; };
+      const joints = [], roll = [];
+      for (let i = 0; i <= 10; i++) {
+        const d = 0.04 + i * segL, s = sH - d, p = this.wayAt(s), tg = tan(s);
+        const w = 0.062 * smooth(0.05, 0.45, d) * Math.sin(2.6 * t - 5.4 * d);
+        joints.push([p[0] - tg[1] * w, p[1] + tg[0] * w]);
+        // (it narrows as it turns, but never to a line: a piece seen nearly edge-on would leave a gap in the body; it
+        // turns over in the last few degrees, while it is narrow)
+        const r = Math.max(-1, Math.min(1, tg[0] / 0.45)); roll.push((r < 0 ? -1 : 1) * Math.max(0.42, Math.pow(Math.abs(r), 0.7)));
+      }
       const ang = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
       const hp = this.wayAt(sH + 0.08);
+      // (a piece turned over is mirrored about its long axis: the same pivot, its far side up)
+      const putR = (name, p, mpp, a, pu, pv, flip, dens, r) => put(name, p[0], p[1], 0.012, mpp, a, pu, pv, flip, dens, r);
       // (the pieces face right: each body piece runs from the joint behind it to the joint ahead, its front at the front)
       for (let i = 7; i >= 0; i--) {
         const a = ang(joints[i + 1], joints[i]);
         const claw = i === 1 || i === 5;
-        put(claw ? 'dclaw' : 'dbody', joints[i][0], joints[i][1], 0.012, m, a, 0.96, claw ? 0.36 : 0.55);
+        const rr = roll[i] * roll[i + 1] > 0 ? 0.5 * (roll[i] + roll[i + 1]) : roll[i];
+        putR(claw ? 'dclaw' : 'dbody', joints[i], m, a, 0.96, claw ? 0.36 : 0.55, 1, 1, rr);
       }
-      put('dtail', joints[8][0], joints[8][1], 0.012, m, ang(joints[9], joints[8]) + Math.PI, 0.03, 0.52, -1);
-      put('dhead', joints[0][0], joints[0][1], 0.012, m * 1.1, ang(joints[0], hp) * 0.85 + ang(joints[1], joints[0]) * 0.15, 0.06, 0.78);
+      // (the tail's fins flare out behind: the piece is mirrored end to end, its root at the last joint)
+      putR('dtail', joints[8], m, ang(joints[9], joints[8]), 0.03, 0.60, -1, 1, roll[8]);
+      const a1 = ang(joints[1], joints[0]), aH = ang(joints[0], hp);
+      putR('dhead', joints[0], m * 1.1, aH + 0.15 * wrap(a1 - aH), 0.06, 0.78, 1, 1, roll[0]);
       rod(joints[0][0], joints[0][1], 0.02); rod(joints[5][0], joints[5][1], 0.02);
     }
     // ---- on the water: the fisherman's boat, rocking; a carp leaps beside it
@@ -309,12 +339,13 @@ W.stage = {
     const gl = YL.gl, U = YL.U, p = this.p;
     const w = target ? target.w : gl.drawingBufferWidth, h = target ? target.h : gl.drawingBufferHeight;
     const ps = this.pieces();
-    this.A.fill(0); this.B.fill(0); this.C.fill(0);
-    ps.slice(0, NP).forEach((q, i) => { this.A.set([q[0], q[1], q[2], q[3]], i * 4); this.B.set([q[4], q[5], q[6], q[7]], i * 4); this.C.set([q[8], q[9], q[10], q[11]], i * 4); });
+    this.A.fill(0); this.B.fill(0); this.C.fill(0); this.Dv.fill(0);
+    if (ps.length > NP && !this._warned) { this._warned = true; console.log('stage: ' + ps.length + ' pieces, room for ' + NP); }
+    ps.slice(0, NP).forEach((q, i) => { this.A.set([q[0], q[1], q[2], q[3]], i * 4); this.B.set([q[4], q[5], q[6], q[7]], i * 4); this.C.set([q[8], q[9], q[10], q[11]], i * 4); this.Dv[i * 4] = q[12]; });
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fb : null); gl.viewport(0, 0, w, h);
     gl.useProgram(p.p);
     U(p, 'uRes', [w, h]); U(p, 'uTime', this.t);
-    U(p, 'uA', this.A); U(p, 'uB', this.B); U(p, 'uC', this.C); U(p, 'uN', Math.min(ps.length, NP));
+    U(p, 'uA', this.A); U(p, 'uB', this.B); U(p, 'uC', this.C); U(p, 'uD', this.Dv); U(p, 'uN', Math.min(ps.length, NP));
     U(p, 'uLamp', [this.lamp[0], this.lamp[1], this.light]);
     U(p, 'uView', this.view);
     U(p, 'uSea', this.sea);
