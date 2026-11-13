@@ -39,7 +39,7 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
     roof = pal((206, 122, 92), (220, 140, 100), (190, 104, 96)) if roof is None else roof
     roof_sh = pal((132, 90, 120), (120, 84, 110), (150, 100, 116)) if roof_sh is None else roof_sh
     for (oo, uu, nn) in ((o, ax * w, -az), (o + az * d, ax * w, az), (o, az * d, -ax), (o + ax * w, az * d, ax)):
-        quad(sb, rng, oo, uu, up * h, nn, size, wall_sh, wall)
+        quad(sb, rng, oo, uu, up * h, nn, size, wall_sh, wall, jit=0.08, cover=2.8)
     # gables
     for (oo, nn) in ((o, -ax), (o + ax * w, ax)):
         m = max(3, int(d * rh / (size * size * 0.42) * 1.3))
