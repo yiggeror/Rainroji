@@ -58,7 +58,7 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
         if snow > 0:
             quad(sb, rng, base + nn * 0.08, ax * (w + 2 * e), slope, nn, size * 1.25,
                  pal((176, 184, 226), (190, 190, 232), (160, 172, 220)), pal((255, 246, 236), (250, 238, 232), (255, 250, 244)),
-                 along='u', cover=2.4 * snow, spr=DAB, aspect=0.5, bias=0.03)
+                 along='u', cover=4.0 * snow, spr=DAB, aspect=0.55, bias=0.03, occ=1.0)
     if chimney:
         cx = o + ax * w * rng.uniform(0.2, 0.8) + az * d * 0.5 + up * (h + rh * 0.8)
         for nn in (ax, -ax, az, -az):
@@ -70,7 +70,7 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
     return g
 
 
-def windows(o, ax, az, w, d, h, rng, n_long=3):
+def windows(o, ax, az, w, d, h, rng, n_long=2):
     """Window positions on the two long walls: list of (point, normal)."""
     out = []
     for k in range(n_long):

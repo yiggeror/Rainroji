@@ -44,7 +44,7 @@ def _water_rgb(env, x, z, rnd, dist):
     # the mirror is never perfect: each touch looks at a slightly different piece of sky
     r[:, 1] = np.abs(r[:, 1] + (rnd[:, 2] - 0.5) * 0.10) + 0.01
     r /= np.linalg.norm(r, axis=1, keepdims=True)
-    skyc = sky_rgb(env, r, rnd)
+    skyc = sky_rgb(env, r, rnd, glow_k=0.45)
     cosi = h / dist
     Fr = 0.20 + 0.80 * (1 - cosi) ** 3
     flow = noise(x / 7.0 + 3.0, z / 34.0 - t * 0.02, 1)
@@ -75,7 +75,7 @@ def water_shader(lvl):
             ph = np.sin(t * (0.8 + 1.4 * rnd[:, 4]) + rnd[:, 5] * 6.28)
             keep = smooth(0.50, 0.75, rnd[:, 2] + 0.14 * ph)
             lite = rnd[:, 3] > 0.5
-            spec = np.clip(r @ env.sun, 0, 1) ** 90
+            spec = np.clip(r @ env.sun, 0, 1) ** 260
             glit = smooth(0.2, 0.8, spec * 4.0 + 0.3 * ph - rnd[:, 4] * 0.8) * L['glitter']
             c2 = np.where(lite[:, None], rgb * 1.10 + 0.05, rgb * 0.80)
             rgb = mix(c2, L['sun_col'][None, :], glit[:, None])
@@ -84,6 +84,9 @@ def water_shader(lvl):
             a = (0.96 if lvl == 0 else 0.9) * m
         D = flat_dir(env, x, z, dist, env.C[1], (1.0, 0.0, 0.0))
         sway = np.sin(t * (0.6 + 0.6 * rnd[:, 4]) + rnd[:, 5] * 6.28)
+        from core import haze_of
+        vx = (x - env.C[0]) * env.sun[0] + (z - env.C[2]) * env.sun[2]
+        rgb = haze_of(env, rgb, dist, vx / dist, 0.85)
         return dict(y=0.0, rgb=jit(rgb, rnd), a=a, D=D, kl=1.0 + 0.14 * sway,
                     spr=np.where(rnd[:, 1] < (0.3 if lvl == 0 else 0.08), SCUM, DASH) + (rnd[:, 5] * 4).astype(np.int32))
     return sh
@@ -104,7 +107,7 @@ GSHADE = pal((72, 140, 132), (38, 88, 92), (104, 96, 120), (132, 150, 214))     
 FLOWERS = np.array([[(252, 224, 84), (255, 252, 240), (250, 236, 120), (255, 250, 236)],
                     [(250, 240, 150), (236, 96, 80), (255, 250, 240), (150, 150, 226)],
                     [(232, 120, 60), (246, 196, 80), (206, 96, 70), (250, 220, 120)]], np.float32) / 255.0
-SHADE_AMT = np.array([0.72, 0.8, 0.7, 0.9], np.float32)
+SHADE_AMT = np.array([0.72, 0.8, 0.7, 0.84], np.float32)
 GSHADE2 = pal((88, 128, 170), (30, 70, 96), (128, 96, 132), (160, 160, 226))
 
 

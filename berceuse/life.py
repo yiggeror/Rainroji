@@ -29,7 +29,7 @@ def merge(parts):
 
 
 def falling(env, seed, cell, R, H, vy, drift, size, csh, cli, dens, layers=2, tumble=3.0, sway=0.35, aspect=0.6,
-            spr=DAB, smin=2.0, ground=True, swirl=0.0, a=0.95, emis=0.0, haze=0.6):
+            spr=DAB, smin=2.0, ground=True, swirl=0.0, a=0.95, emis=0.0, haze=0.6, round_=False):
     """Petals, leaves, snow: an endless lattice of falling touches around the camera.
 
     dens(x, z) -> 0..1 share of lattice points that carry a particle.
@@ -62,7 +62,7 @@ def falling(env, seed, cell, R, H, vy, drift, size, csh, cli, dens, layers=2, tu
         phi = t * tumble * (0.5 + Rn[:, 4]) + ph
         D = unit(np.stack([np.cos(phi), 0.6 * np.sin(phi), np.sin(phi * 0.7 + 1.0)], axis=1))
         L = size * (0.7 + 0.6 * Rn[:, 1])
-        Wd = L * aspect * (0.35 + 0.65 * np.abs(np.sin(phi * 1.3 + 0.5)))
+        Wd = L * aspect * (1.0 if round_ else (0.35 + 0.65 * np.abs(np.sin(phi * 1.3 + 0.5))))
         N = unit(np.stack([0.6 * np.sin(phi), 0.6 + 0.4 * np.cos(phi * 1.3), 0.6 * np.cos(phi)], axis=1))
         al = a * smooth(0.0, 0.06, u) * smooth(1.0, 0.94, u)
         out.append(strokes(np.stack([X, Y, Z], axis=1), D, L, Wd, spr + (Rn[:, 4] * 4).astype(np.int32),

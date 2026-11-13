@@ -139,9 +139,13 @@ class SB:
 
 class Group:
     def __init__(self, A, reflect=True, passid=STAND, name='', span=(-1e9, 1e9)):
+        o = np.argsort(A['r'], kind='stable')          # sorted by detail rank: a far group only needs a prefix
+        A = {k: np.ascontiguousarray(v[o]) for k, v in A.items()}
         self.A = A
         self.span = span
         self.n = len(A['P'])
+        self.lmax = float(A['L'].max())
+        self.smin = float(A['smin'].min())
         lo, hi = A['P'].min(0), A['P'].max(0)
         self.c = ((lo + hi) / 2).astype(np.float64)
         self.rad = float(np.linalg.norm(hi - lo) / 2 + A['L'].max())
@@ -166,6 +170,23 @@ class Group:
         return (-m - 200 < x < 1920 + m + 200) and (-m - 200 < y < 1080 + m + 200)
 
 
+    def lod(self, env, mirror=False):
+        """The strokes of this group that can matter at its present distance (a cheap prefix)."""
+        c = self.c.copy()
+        if mirror:
+            c[1] = -c[1]
+        d = max(float(np.linalg.norm(c - env.C)) - self.rad, 0.5)
+        frac = (self.lmax * env.f / d / (self.smin * LOD_K * (1.6 if mirror else 1.0))) ** LOD_P
+        if mirror:
+            frac *= 0.75
+        if frac >= 0.84:
+            return self.A
+        n = int(np.searchsorted(self.A['r'], frac + 0.17))
+        if n <= 0:
+            return None
+        return {k: v[:n] for k, v in self.A.items()}
+
+
 def take(A, idx):
     return {k: v[idx] for k, v in A.items()}
 
@@ -185,6 +206,8 @@ def _dirproj(env, vr, vu, vf, D):
 
 
 MIRROR_STRETCH = 1.12
+LOD_P = 2.0          # ... keeping the painted area of a distant mass the same
+LOD_K = 2.2          # touches smaller than about 8 px (at 1920 wide) are merged into fewer, larger ones
 
 
 def shade(env, A, mirror=False, passid=STAND, sway=True, grade=True):
@@ -223,8 +246,8 @@ def shade(env, A, mirror=False, passid=STAND, sway=True, grade=True):
     mg = np.minimum(px, 500.0) * 0.6 + 20
     ok &= (x > -mg) & (x < 1920 + mg) & (y > -mg) & (y < 1080 + mg)
     # level of detail: far away a mass is painted with fewer, relatively larger touches
-    smin = A['smin'] * (1.6 if mirror else 1.0)
-    frac = np.clip(px / smin, 0.0, 1.0) ** 1.5
+    smin = A['smin'] * (LOD_K * (1.6 if mirror else 1.0))
+    frac = np.clip(px / smin, 0.0, 1.0) ** LOD_P
     if mirror:
         frac *= 0.75
     lod = np.clip((frac - A['r']) * 6.0 + 1.0, 0.0, 1.0)

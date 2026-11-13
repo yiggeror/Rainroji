@@ -124,8 +124,8 @@ def jitter(rgb, rnd, val=0.06, chroma=0.04):
 
 # --------------------------------------------------------------------------- brushes
 SW, SH = 192, 64
-DASH, DAB, SCUM, LENS = 0, 8, 12, 16      # sprite families (DASH has 8, the rest 4)
-NSPR = 20
+DASH, DAB, SCUM, LENS, WASH = 0, 8, 12, 16, 20      # sprite families (DASH has 8, the rest 4)
+NSPR = 24
 
 
 def _n1(rng, n, sigma):
@@ -171,11 +171,16 @@ def _make_sprites(seed=5):
             patch = gaussian_filter(rng.standard_normal((SH, SW)), (5, 9))
             patch /= patch.std()
             a = a * smooth(-1.1, 0.7, patch + 0.55 * br + 0.35)
-        else:                                         # lens: pointed at both ends
+        elif k < WASH:                                # lens: pointed at both ends
             env = (1 - u * u) ** rng.uniform(0.8, 1.3) * 0.9
             d = env * edge - np.abs(v)
             a = smooth(0.0, 0.2, d)
             a = a * (1 - 0.15 * np.clip(-br, 0, 1))
+        else:                                         # wash: a full, soft-edged lay-in with no dry gaps
+            rr = np.sqrt(np.abs(u) ** 2.4 + np.abs(v) ** 2.4) ** (1 / 1.2)
+            a = smooth(1.0, 0.55, rr + 0.05 * br)
+            br = br * 0.5
+            fine = fine * 0.5
         # paint piles up a little at the rim of a stroke and along the bristle tracks
         rim = smooth(0.0, 0.25, a) * smooth(1.0, 0.55, a)
         tone = np.clip(0.55 * br + 0.25 * fine + 0.5 * rim, -1.5, 1.5)

@@ -2,13 +2,13 @@
 slides.  The same colour model is used for the dome, for the mirror image in the water and
 for the air that distance puts in front of things."""
 import numpy as np
-from engine import smooth, mix, noise, snoise, DASH, DAB, SCUM, LENS
+from engine import smooth, mix, noise, snoise, DASH, DAB, SCUM, LENS, WASH
 from core import SKY, _PASS, _dirproj
 
 F = np.float32
 
 
-def sky_rgb(env, d, rnd=None, clouds=True):
+def sky_rgb(env, d, rnd=None, clouds=True, glow_k=1.0):
     """Colour of the sky in unit directions d (n,3)."""
     L = env.L
     t = env.t
@@ -19,20 +19,20 @@ def sky_rgb(env, d, rnd=None, clouds=True):
     col = mix(col, L['zen'], smooth(0.18, 0.92, e + (r1 - 0.5) * 0.10)[:, None])
     S = env.sun
     ca = d @ S
-    glow = L['glow_wide'] * np.exp(-(1 - ca) / 0.22) + L['glow_tight'] * np.exp(-(1 - ca) / 0.018)
+    glow = (L['glow_wide'] * np.exp(-(1 - ca) / 0.22) + L['glow_tight'] * np.exp(-(1 - ca) / 0.018)) * glow_k
     col = col + glow[:, None] * L['glow'][None, :]
     if clouds and L['cover'] > 0.01:
         k = L['cloud_scale']
         den = e + 0.16
         qx = d[:, 0] / den * 0.30 * k + t * 0.004
         qz = d[:, 2] / den * 0.30 * k + t * 0.002
-        n = 0.78 * snoise(qx, qz, 0) + 0.22 * snoise(qx * 2.3 + 1.7, qz * 2.3, 1)
-        n = n + (r0 - 0.5) * 0.045
+        n = 0.74 * snoise(qx, qz, 0) + 0.26 * snoise(qx * 1.35 + 1.7, qz * 1.35, 1)
+        n = n + (r0 - 0.5) * 0.02
         th = 1.0 - L['cover']
         dens = smooth(th - 0.05, th + 0.09, n) * smooth(-0.02, 0.10, d[:, 1])
         # light side / shadow side: compare with the density a step toward the sun
         sx, sz = S[0], S[2]
-        n2 = 0.78 * snoise(qx + 0.16 * sx, qz + 0.16 * sz, 0) + 0.22 * snoise((qx + 0.16 * sx) * 2.3 + 1.7, (qz + 0.16 * sz) * 2.3, 1)
+        n2 = 0.74 * snoise(qx + 0.16 * sx, qz + 0.16 * sz, 0) + 0.26 * snoise((qx + 0.16 * sx) * 1.35 + 1.7, (qz + 0.16 * sz) * 1.35, 1)
         lit = smooth(-0.10, 0.12, n - n2 + (r1 - 0.5) * 0.10 + 0.25 * (th + 0.2 - n))
         cc = mix(L['cloud_sh'], L['cloud_lit'], lit[:, None])
         cc = cc + (glow * 0.6)[:, None] * L['glow'][None, :]
@@ -42,7 +42,7 @@ def sky_rgb(env, d, rnd=None, clouds=True):
 
 class Sky:
     def __init__(self, rng):
-        specs = [(0.125, 3.2, 3.4, 0), (0.070, 3.2, 2.8, 1), (0.040, 3.2, 1.5, 2)]     # angular length, aspect, cover, level
+        specs = [(0.30, 1.9, 4.0, -1), (0.125, 3.2, 3.4, 0), (0.070, 3.2, 2.8, 1), (0.040, 3.2, 1.5, 2)]     # angular length, aspect, cover, level
         ds, ls, ws, lv = [], [], [], []
         for (al, asp, cover, lvl) in specs:
             band = 2 * np.pi * (1 + 0.10)
@@ -70,7 +70,7 @@ class Sky:
         D = np.where(use1[:, None], D1, D0) + rng.normal(0, 0.16, (n, 3))
         D = D - (D * self.d).sum(1, keepdims=True) * self.d
         self.D = D / np.linalg.norm(D, axis=1, keepdims=True)
-        self.spr = (np.where(self.rnd[:, 2] < 0.3, SCUM, DASH) + rng.integers(0, 4, n)).astype(np.int32)
+        self.spr = (np.where(self.lvl < 0, WASH, np.where(self.rnd[:, 2] < 0.3, SCUM, DASH)) + rng.integers(0, 4, n)).astype(np.int32)
         # stars
         m = 420
         y = rng.uniform(0.02, 1.0, m)
@@ -89,7 +89,7 @@ class Sky:
         sc = f / np.maximum(vf, 0.12)
         x = 960 + vr * sc
         y = 540 - vu * sc
-        mg = 160
+        mg = 160 + 0.6 * self.L * sc
         ok &= (x > -mg) & (x < 1920 + mg) & (y > -mg) & (y < 1080 + mg)
         i = np.nonzero(ok)[0]
         if len(i) == 0:
@@ -99,13 +99,14 @@ class Sky:
         rgb = sky_rgb(env, d, rnd)
         # broken colour
         rgb = rgb * (1.0 + (rnd[:, 3:4] - 0.5) * 0.07)
-        rgb[:, 0] += (rnd[:, 4] - 0.5) * 0.035
-        rgb[:, 2] -= (rnd[:, 4] - 0.5) * 0.035
+        lum = np.clip(rgb.mean(1) * 1.4, 0.15, 1.0)            # broken colour in proportion to the light
+        rgb[:, 0] += (rnd[:, 4] - 0.5) * 0.035 * lum
+        rgb[:, 2] -= (rnd[:, 4] - 0.5) * 0.035 * lum
         sway = np.sin(env.t * (0.3 + 0.3 * rnd[:, 5]) + rnd[:, 4] * 6.28)
         out = dict(x=(x[i] + 2.0 * sway).astype(F), y=y[i].astype(F), ang=ang.astype(F), L=(self.L[i] * sc[i]).astype(F),
                    W=(self.W[i] * sc[i]).astype(F), spr=self.spr[i], rgb=rgb.astype(F),
-                   a=np.where(self.lvl[i] == 2, 0.85, 0.95).astype(F), hb=(0.5 + 0.5 * rnd[:, 5]).astype(F),
-                   key=SKY * _PASS + self.lvl[i] * 1e5 + rnd[:, 2] * 9e4)
+                   a=np.where(self.lvl[i] == 2, 0.85, np.where(self.lvl[i] < 0, 1.0, 0.95)).astype(F), hb=(0.5 + 0.5 * rnd[:, 5]).astype(F),
+                   key=SKY * _PASS + (self.lvl[i] + 1) * 1e5 + rnd[:, 2] * 9e4)
         parts = [out]
         L = env.L
         if L['sundisc'] > 0.01:
@@ -115,14 +116,14 @@ class Sky:
                 s = f / zf
                 sx, sy = 960 + (S @ env.rt) * s, 540 - (S @ env.up) * s
                 k = 9
-                rr = np.array([0, 0.5, 0.5, 0.5, 0.5, 0.9, 0.9, 0.9, 0.9]) * 0.011 * s
+                rr = np.array([0, 0.5, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8, 0.8]) * 0.010 * s
                 aa = np.array([0, 0.3, 1.9, 3.5, 5.0, 1.0, 2.6, 4.2, 5.8])
-                size = 0.030 * s * np.array([1.0, 0.7, 0.7, 0.7, 0.7, 0.5, 0.5, 0.5, 0.5]) * (0.8 + 0.2 * L['sundisc'])
+                size = 0.034 * s * np.array([1.25, 0.7, 0.7, 0.7, 0.7, 0.45, 0.45, 0.45, 0.45]) * (0.8 + 0.2 * L['sundisc'])
                 col = np.tile(L['sun_col'], (k, 1)) * (1.0 + 0.05 * np.sin(aa * 3.0))[:, None]
                 parts.append(dict(x=(sx + rr * np.cos(aa)).astype(F), y=(sy + rr * np.sin(aa)).astype(F), ang=(aa * 0.7).astype(F),
-                                  L=size.astype(F), W=(size * 0.8).astype(F), spr=(DAB + np.arange(k) % 4).astype(np.int32),
+                                  L=size.astype(F), W=(size * 0.92).astype(F), spr=(DAB + np.arange(k) % 4).astype(np.int32),
                                   rgb=col.astype(F), a=np.full(k, 0.95 * min(L['sundisc'], 1.0), F), hb=np.full(k, 0.9, F),
-                                  key=np.full(k, SKY * _PASS + 5e5) + np.arange(k)))
+                                  key=np.full(k, SKY * _PASS + 6e5) + np.arange(k)))
         if L['stars'] > 0.01:
             d = self.sd
             vf = d @ env.fw
@@ -141,5 +142,5 @@ class Sky:
                 parts.append(dict(x=x[j].astype(F), y=y[j].astype(F), ang=(r[:, 1] * 3.0).astype(F), L=size.astype(F),
                                   W=(size * 0.85).astype(F), spr=(DAB + (r[:, 0] * 4).astype(np.int32) % 4),
                                   rgb=col.astype(F), a=(0.9 * tw * appear).astype(F), hb=np.full(len(j), 0.9, F),
-                                  key=np.full(len(j), SKY * _PASS + 6e5)))
+                                  key=np.full(len(j), SKY * _PASS + 7e5)))
         return parts

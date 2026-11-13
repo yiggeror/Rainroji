@@ -27,9 +27,13 @@ def frame_strokes(env):
     cam_low = env.C[1] < 60
     for g in GROUPS:
         if g.visible(env):
-            parts.append(shade(env, g.A, passid=g.passid))
+            A = g.lod(env)
+            if A is not None:
+                parts.append(shade(env, A, passid=g.passid))
         if g.reflect and cam_low and g.visible(env, mirror=True, far=MIRROR_FAR):
-            parts.append(shade(env, g.A, mirror=True))
+            A = g.lod(env, mirror=True)
+            if A is not None:
+                parts.append(shade(env, A, mirror=True))
     for act in ACTORS:
         for (A, kw) in act(env) or []:
             if A is None:
@@ -49,7 +53,7 @@ def frame(t, H=1080, env=None, stats=False):
         env = Env(t, PATH, LK.look)
     S = frame_strokes(env)
     L = env.L
-    im = engine.render(S, H, fade=float(L.get('fade', 0.0)), fade_rgb=L.get('fade_rgb', None))
+    im = engine.render(S, H, fade=float(L.get('fade', 0.0)), fade_rgb=L.get('fade_rgb', None), ground=L.get('ground', None))
     if stats:
         print('strokes', 0 if S is None else len(S['x']))
     return im

@@ -161,7 +161,7 @@ def weeds(env):
     return [(life.merge(out), dict(passid=WATER, reflect=False))]
 
 
-def floaters(seed, cell, size, csh, cli, dens, speed=0.38, tmin=0.0, tmax=1e9, aspect=0.7, R=42.0, a=0.95):
+def floaters(seed, cell, size, csh, cli, dens, speed=0.38, tmin=0.0, tmax=1e9, aspect=0.7, R=42.0, a=0.95, sunny=0.0):
     """Things lying on the water and going with the current: petals, leaves, ice."""
     def act(env):
         t = env.t
@@ -184,8 +184,10 @@ def floaters(seed, cell, size, csh, cli, dens, speed=0.38, tmin=0.0, tmax=1e9, a
         ang = Rn[:, 2] * 6.283 + t * 0.25 * (Rn[:, 3] - 0.5)
         D = np.stack([np.cos(ang), 0 * ang, np.sin(ang)], axis=1)
         L = size * (0.65 + 0.7 * Rn[:, 1])
-        A = life.strokes(np.stack([X, np.full(len(X), 0.012), Z], axis=1), D, L, L * aspect, DAB + (Rn[:, 4] * 4).astype(np.int32),
-                         pick(csh, Rn[:, 3]), pick(cli, Rn[:, 4]), N=np.tile([0.0, 1.0, 0.0], (len(X), 1)) + (Rn[:, :3] - 0.5) * 0.8,
+        dist = np.sqrt((X - env.C[0]) ** 2 + (Z - env.C[2]) ** 2 + env.C[1] ** 2)
+        flat = np.clip(2.2 * env.C[1] / dist + 0.12, 0.22, 1.0) if size > 0.3 else 1.0
+        A = life.strokes(np.stack([X, np.full(len(X), 0.012), Z], axis=1), D, L, L * aspect * flat, DAB + (Rn[:, 4] * 4).astype(np.int32),
+                         pick(csh, Rn[:, 3]), pick(cli, Rn[:, 4]), N=np.tile(np.array([0.0, 1.0, 0.0]) + sunny * env.sun * [1, 0, 1], (len(X), 1)) + (Rn[:, :3] - 0.5) * 0.8,
                          r=Rn[:, 1], ph=Rn[:, 5] * 6.28, a=a, smin=2.2, haze=0.7, bias=0.3)
         return [(A, dict(passid=RIPPLE, reflect=False))]
     return act

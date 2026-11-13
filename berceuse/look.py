@@ -23,7 +23,7 @@ _BASE = dict(
     haze=c(196, 208, 226), hazesun=c(236, 226, 214), vis=420.0, hazemax=0.88,
     water_tint=np.array([0.18, 0.34, 0.30, 0.22], F), deep=c(46, 92, 82), mirror_gain=0.92, mirror_a=0.82,
     ripple=1.0, wind=1.0, wind_dir=0.6, sundisc=0.0, sun_col=c(255, 240, 210), stars=0.0,
-    glitter=0.5, expo=1.0, sat=1.0, fade=0.0, fade_rgb=c(229, 219, 198),
+    glitter=0.5, expo=1.0, sat=1.0, mist=0.0, snow=0.0, lamps=0.0, ground=c(229, 219, 198), fade=0.0, fade_rgb=c(229, 219, 198),
 )
 
 KEYS = []          # (t, dict)
