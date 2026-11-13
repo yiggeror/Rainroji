@@ -1,0 +1,12 @@
+"""Build the whole world once (deterministic)."""
+import numpy as np
+import film, shots
+import sc_spring, sc_summer
+
+film.PATH = shots.PATH
+film.DUR = shots.DUR
+rng = np.random.default_rng(1872)
+film.GROUPS += sc_spring.build(rng)
+film.ACTORS += sc_spring.actors(rng)
+film.GROUPS += sc_summer.build(rng)
+film.ACTORS += sc_summer.actors(rng)
