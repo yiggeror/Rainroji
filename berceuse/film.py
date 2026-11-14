@@ -2,6 +2,7 @@
 import numpy as np
 import engine
 from core import Env, Path, shade, compose, STAND, FPS
+from engine import smooth
 import look as LK
 import sky as SKYM
 import surf
@@ -26,14 +27,27 @@ def frame_strokes(env):
         parts.append(f.emit(env))
     cam_low = env.C[1] < 60
     for g in GROUPS:
-        if g.visible(env):
-            A = g.lod(env)
-            if A is not None:
-                parts.append(shade(env, A, passid=g.passid))
-        if g.reflect and cam_low and g.visible(env, mirror=True, far=MIRROR_FAR):
-            A = g.lod(env, mirror=True)
-            if A is not None:
-                parts.append(shade(env, A, mirror=True))
+        w = 1.0
+        if g.fade is not None:
+            w = float(g.fade(env.t))
+            if w <= 0.004:
+                continue
+        vis = g.visible(env)
+        mir = g.reflect and cam_low and g.visible(env, mirror=True, far=MIRROR_FAR)
+        if not (vis or mir):
+            continue
+        for mirror in (False, True):
+            if not (mir if mirror else vis):
+                continue
+            A = g.lod(env, mirror=mirror)
+            if A is None:
+                continue
+            if w < 0.996:
+                # strokes arrive (or leave) one after another, each in its own time
+                u = A['ph'] * (0.75 / 6.2832)
+                A = dict(A)
+                A['a'] = A['a'] * smooth(u, u + 0.25, w)
+            parts.append(shade(env, A, mirror=mirror, passid=g.passid))
     for act in ACTORS:
         for (A, kw) in act(env) or []:
             if A is None:

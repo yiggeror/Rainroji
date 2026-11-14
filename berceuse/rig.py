@@ -81,3 +81,44 @@ class Part:
         A['D'] = A['D'] @ Mt
         A['N'] = A['N'] @ Mt
         return A
+
+
+ARM = 0.31                 # upper arm = forearm (metres) for an adult
+
+
+def align_y(v):
+    """Rotation taking the local +y axis onto the direction v."""
+    v = np.asarray(v, np.float64)
+    v = v / (np.linalg.norm(v) + 1e-9)
+    a = np.cross([0.0, 1.0, 0.0], v)
+    s = np.linalg.norm(a)
+    c = v[1]
+    if s < 1e-6:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    k = a / s
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + s * K + (1 - c) * (K @ K)
+
+
+def limb2(rng, csh, cli, w=0.07, hand=True, l=ARM, skin=None):
+    """Upper arm and forearm (each l metres along +y) for two-bone arms."""
+    up = Part(rng).seg((0, 0, 0), (0, l, 0), w, csh, cli, n=4).done()
+    fo = Part(rng).seg((0, 0, 0), (0, l, 0), w * 0.88, csh, cli, n=4)
+    if hand:
+        sk = skin if skin is not None else ((0.75, 0.58, 0.62), (0.95, 0.80, 0.71))
+        fo.dab((0, l + 0.025, 0), (0, 1, 0), 0.085, 0.06, sk[0], sk[1])
+    return up, fo.done()
+
+
+def arm_ik(up, fo, S, H, pole=(0.0, -1.0, 0.0), l=ARM):
+    S, H = np.asarray(S, np.float64), np.asarray(H, np.float64)
+    d = H - S
+    dist = min(np.linalg.norm(d), 2 * l - 1e-3)
+    dn = d / (np.linalg.norm(d) + 1e-9)
+    pole = np.asarray(pole, np.float64)
+    pole = pole - (pole @ dn) * dn
+    pole = pole / (np.linalg.norm(pole) + 1e-9)
+    E = S + dn * dist / 2 + pole * np.sqrt(max(l * l - (dist / 2) ** 2, 0.0))
+    return [up.at(align_y(E - S), S), fo.at(align_y(S + dn * dist - E), E)]
+
+

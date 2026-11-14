@@ -185,12 +185,82 @@ def floaters(seed, cell, size, csh, cli, dens, speed=0.38, tmin=0.0, tmax=1e9, a
         D = np.stack([np.cos(ang), 0 * ang, np.sin(ang)], axis=1)
         L = size * (0.65 + 0.7 * Rn[:, 1])
         dist = np.sqrt((X - env.C[0]) ** 2 + (Z - env.C[2]) ** 2 + env.C[1] ** 2)
-        flat = np.clip(2.2 * env.C[1] / dist + 0.12, 0.22, 1.0) if size > 0.3 else 1.0
+        flat = np.clip(2.2 * env.C[1] / dist + 0.12, 0.22, 1.0) if size > 0.15 else 1.0
         A = life.strokes(np.stack([X, np.full(len(X), 0.012), Z], axis=1), D, L, L * aspect * flat, DAB + (Rn[:, 4] * 4).astype(np.int32),
                          pick(csh, Rn[:, 3]), pick(cli, Rn[:, 4]), N=np.tile(np.array([0.0, 1.0, 0.0]) + sunny * env.sun * [1, 0, 1], (len(X), 1)) + (Rn[:, :3] - 0.5) * 0.8,
                          r=Rn[:, 1], ph=Rn[:, 5] * 6.28, a=a, smin=2.2, haze=0.7, bias=0.3)
         return [(A, dict(passid=RIPPLE, reflect=False))]
     return act
+
+
+def ducks(rng, z0, t0, t1):
+    """A duck and her brood crossing the river ahead of the skiff, each drawing its own small wake."""
+    import people as PP
+    n = 6
+    off = np.array([[0.0, 0.0]] + [[-0.55 - 0.42 * i + rng.normal(0, 0.05), rng.normal(0, 0.16)] for i in range(n - 1)])
+    size = np.array([1.0] + [0.5] * (n - 1))
+    ph = rng.uniform(0, 6.28, n)
+
+    def act(env):
+        t = env.t
+        if t < t0 or t > t1:
+            return []
+        u = (t - t0) / (t1 - t0)
+        zc = z0 + 9.0 * u
+        xc = float(W.rx(zc)) - 5.2 + 9.0 * u + 0.5 * np.sin(u * 7.0)
+        hd = np.array([0.72, 0.0, 0.69])
+        sd = np.array([-hd[2], 0.0, hd[0]])
+        P, D, L, Wd, cs, cl = [], [], [], [], [], []
+        wk = []
+        for i in range(n):
+            wob = 0.06 * np.sin(t * 2.4 + ph[i])
+            p = np.array([xc, 0.0, zc]) + hd * (off[i, 0] + wob) + sd * (off[i, 1] + 0.04 * np.sin(t * 1.7 + ph[i]))
+            s_ = size[i]
+            bob = 0.012 * np.sin(t * 3.1 + ph[i])
+            brown = i == 0
+            P += [p + [0, 0.07 * s_ + bob, 0], p + hd * 0.14 * s_ + [0, 0.17 * s_ + bob, 0], p + hd * 0.21 * s_ + [0, 0.17 * s_ + bob, 0]]
+            D += [hd, hd + [0, 0.5, 0], hd]
+            L += [0.36 * s_, 0.14 * s_, 0.07 * s_]
+            Wd += [0.17 * s_, 0.11 * s_, 0.03 * s_]
+            cs += [(0.36, 0.26, 0.22) if brown else (0.50, 0.42, 0.20), (0.30, 0.22, 0.20) if brown else (0.50, 0.42, 0.20), (0.5, 0.36, 0.1)]
+            cl += [(0.78, 0.62, 0.46) if brown else (0.98, 0.90, 0.48), (0.66, 0.52, 0.40) if brown else (0.98, 0.90, 0.48), (0.95, 0.7, 0.2)]
+            for sgn in (-1, 1):
+                wk.append((p - hd * (0.25 * s_ + 0.12) + sd * sgn * 0.10 * s_, hd + sd * sgn * 0.45, 0.42 * s_ + 0.1))
+        A = life.strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), DAB + (np.arange(len(P)) % 4), np.array(cs), np.array(cl),
+                         N=np.tile([0.3, 0.8, 0.0], (len(P), 1)), r=0.05, smin=1.6, haze=0.5, bias=0.05)
+        Wk = life.strokes(np.array([w_[0] for w_ in wk]) + [0, 0.012, 0], np.array([w_[1] for w_ in wk]), np.array([w_[2] for w_ in wk]), 0.03, LENS,
+                          (0.80, 0.90, 0.86), (0.86, 0.94, 0.90), r=0.05, a=0.45, smin=1.4, emis=0.6, bias=0.4)
+        return [(A, dict(reflect=True)), (Wk, dict(passid=RIPPLE, reflect=False))]
+    return act
+
+
+def fish_rings(env):
+    """A fish rises: a ring opens on the still water and is gone."""
+    t = env.t
+    if t < 36 or t > 100 or env.C[1] > 12:
+        return []
+    X, Z, Rn = scatter(env, 577, 5.5, 46.0, 0.0)
+    if len(X) == 0:
+        return []
+    d = W.edge(X, Z)
+    per = 5.0 + 6.0 * Rn[:, 1]
+    ph = np.mod(t / per + Rn[:, 2], 1.0)
+    keep = (d < -1.5) & (ph < 0.42) & (Rn[:, 0] < 0.6)
+    if not keep.any():
+        return []
+    X, Z, Rn, ph = X[keep], Z[keep], Rn[keep], ph[keep] / 0.42
+    out = []
+    k = 14
+    a = np.arange(k) * 6.283 / k
+    for ring, lag in ((0, 0.0), (1, 0.22)):
+        pr = np.clip(ph - lag, 0, 1)
+        rad = 0.10 + 0.85 * pr ** 0.8
+        P = np.stack([(X[:, None] + rad[:, None] * np.cos(a)[None]).ravel(), np.full(len(X) * k, 0.012), (Z[:, None] + rad[:, None] * np.sin(a)[None]).ravel()], axis=1)
+        D = np.tile(np.stack([-np.sin(a), 0 * a, np.cos(a)], axis=1), (len(X), 1))
+        col = np.tile(np.where((np.arange(k) % 2 == ring)[:, None], np.array([0.88, 0.95, 0.90]), np.array([0.10, 0.28, 0.24])), (len(X), 1))
+        al = np.repeat(0.6 * (1 - pr) ** 1.3 * (pr > 0), k)
+        out.append(life.strokes(P, D, np.repeat(rad * 0.42 + 0.04, k), 0.03, LENS, col, col, a=al, smin=1.4, emis=0.6, haze=0.5, bias=0.4, r=0.1))
+    return [(life.merge(out), dict(passid=RIPPLE, reflect=False))]
 
 
 def dragonflies(pts):
@@ -361,6 +431,20 @@ def actors(rng):
     acts = [reeds, weeds, floaters(881, 0.42, 0.085, P_SH, P_LI, pdens, tmax=74.0), caustics(rng)]
     df = [(float(W.rx(z)) + dx, 0.5 + 0.4 * (i % 3), z) for i, (z, dx) in enumerate(((84, -2), (96, 2.5), (108, -1), (118, 3), (128, -2.5), (138, 1)))]
     acts.append(dragonflies(df))
+    PAD_SH = pal((30, 96, 80), (40, 110, 76), (26, 84, 92))
+    PAD_LI = pal((110, 176, 96), (150, 196, 104), (90, 160, 110), (176, 206, 120))
+
+    def pad_dens(x, z, d):
+        s_ = W.season(z)
+        return 0.75 * smooth(0.45, 0.7, noise(x / 3.2, z / 5.5, 0)) * smooth(-3.6, -1.2, d) * smooth(-0.25, -0.7, d) * smooth(0.6, 1.0, s_) * smooth(2.0, 1.4, s_)
+
+    def lily_dens(x, z, d):
+        return 0.10 * pad_dens(x, z, d)
+    acts.append(floaters(883, 0.36, 0.36, PAD_SH, PAD_LI, pad_dens, speed=0.0, tmin=30.0, tmax=90.0, aspect=0.78, sunny=0.3))
+    acts.append(floaters(885, 0.36, 0.20, pal((214, 190, 226), (230, 200, 220)), pal((255, 250, 244), (255, 226, 232), (255, 240, 200)), lily_dens,
+                         speed=0.0, tmin=30.0, tmax=90.0, aspect=0.8, sunny=0.3))
+    acts.append(fish_rings)
+    acts.append(ducks(rng, 93.0, 50.0, 66.0))
     import boat
     acts.append(boat.make(rng))
     return acts

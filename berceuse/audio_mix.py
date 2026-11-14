@@ -202,23 +202,24 @@ def build(src):
     place(mix, wet, 78.5)
 
     # ------------------------------------------------------------- autumn: wind in the poplars, rooks far off
-    autumn = env([(0, 0), (81.5, 0), (84.5, 1), (101, 1), (106.5, 0.45), (110, 0.0), (DUR, 0)])
-    gain = autumn * (0.30 + 1.0 * gT)
+    autumn = env([(0, 0), (81.5, 0), (84.5, 1), (98, 1), (103, 1.5), (107, 0.6), (110.5, 0.0), (DUR, 0)])
+    gain = autumn * (0.30 + 1.0 * np.minimum(gT, 1.2))
     bed(mix, tame(level(filt(sfx(src, '0904'), 180), -30)), gain, offset=15)
     bed(mix, tame(level(filt(sfx(src, '0659'), 250), -34)), gain, offset=30)
     for (sid, t0, g, pan) in (('3464', 88.4, 0.035, -0.5), ('3465', 95.6, 0.03, 0.4)):
         place(mix, filt(fade(sfx(src, sid), 0.02, 0.3), 300, 2600), t0, g, pan)
 
     # ------------------------------------------------------------- the mist, and winter: almost nothing
-    winter = env([(0, 0), (103, 0), (108, 0.8), (114, 0.6), (136, 0.7), (143, 1.0), (146.0, 0.5), (DUR, 0)])
+    winter = env([(0, 0), (103, 0), (108, 0.8), (113, 0.6), (128, 0.7), (134, 0.3), (140, 0.0), (DUR, 0)])
     bed(mix, tame(level(filt(sfx(src, '0147'), 150, 3500), -41)), winter, offset=10)
     bed(mix, tame(level(filt(sfx(src, '0595'), 120, 1800), -40)), winter * (0.5 + 0.6 * gT), offset=5)
     # the magpie: a chatter from the gate, again as it goes, and its wings
-    for (sid, t0, g) in (('2764', 115.3, 0.11), ('2766', 115.75, 0.09), ('2767', 119.55, 0.12), ('2765', 119.95, 0.10), ('2764', 120.9, 0.07)):
+    TF = sc_poplars.T_FLY
+    for (sid, dt, g) in (('2764', -5.1, 0.11), ('2766', -4.65, 0.09), ('2767', -0.85, 0.12), ('2765', -0.45, 0.10), ('2764', 0.55, 0.07), ('2766', 2.4, 0.035)):
         c = fade(sfx(src, sid), 0.005, 0.08)
-        place(mix, filt(c, 400, 7000) + reverb(filt(c, 400, 5000), 0.9, 0.10, seed=6)[:len(c)], t0, g, -0.05)
+        place(mix, filt(c, 400, 7000) + reverb(filt(c, 400, 5000), 0.9, 0.10, seed=6)[:len(c)], TF + dt, g, -0.05)
     wings = fade(sfx(src, '0476', 0.25, 2.2), 0.03, 0.5)
-    place(mix, filt(wings, 200, 6000), sc_poplars.T_FLY - 0.05, 0.9, 0.0)
+    place(mix, filt(wings, 200, 6000), TF - 0.05, 0.9, 0.0)
     # five o'clock from the church across the river - retuned so that it sits inside the music's D flat
     bell = sfx(src, '3445')
     m = bell[:int(2.0 * SR)].mean(1)
@@ -234,10 +235,28 @@ def build(src):
     bell = np.stack([resample_poly(bell[:, c], up, down) for c in (0, 1)], axis=1).astype(np.float32)
     print('bell partial %.1f Hz (midi %.2f) -> %d, ratio %.4f' % (f0, midi, tgt, ratio))
     bell = filt(fade(bell, 0.005, 1.5), 180, 2400)
-    place(mix, bell * 0.10 + reverb(bell, 2.6, 0.12, hi=2500, seed=8)[:len(bell)], 128.6, 1.0, -0.25)
+    place(mix, bell * 0.10 + reverb(bell, 2.6, 0.12, hi=2500, seed=8)[:len(bell)], 123.2, 1.0, -0.25)
+
+    # ------------------------------------------------------------- the spring rain, the thaw, and morning again
+    rainT = np.array([float(LK.look(t)['rain']) for t in ts])
+    rain_env = np.interp(T, ts, rainT).astype(np.float32)
+    bed(mix, tame(level(filt(sfx(src, '2679'), 200, 9000), -29), -14), rain_env, offset=2)
+    bed(mix, tame(level(filt(sfx(src, '1290'), 250, 8000), -34), -16), rain_env, offset=6)
+    # meltwater falling from the boughs
+    drops = sfx(src, '1384')
+    for (td, src_t, g, pan) in ((136.4, 0.2, 0.10, -0.4), (137.6, 3.05, 0.14, 0.3), (138.5, 5.9, 0.10, -0.1), (139.7, 8.75, 0.16, 0.5), (140.6, 11.65, 0.12, -0.5),
+                                (141.8, 14.55, 0.14, 0.2), (143.1, 17.45, 0.10, -0.3)):
+        c = filt(fade(drops[int(src_t * SR):int((src_t + 0.9) * SR)], 0.01, 0.3), 300)
+        place(mix, c + reverb(c, 0.8, 0.12, seed=11)[:len(c)], td, g, pan)
+    # and the birds that opened the film
+    dawn = env([(0, 0), (138.5, 0), (142.5, 0.9), (146.5, 1.0), (DUR, 0.8)])
+    bed(mix, tame(level(filt(sfx(src, '1906'), 300), -34)), dawn, offset=120)
+    bed(mix, tame(level(filt(sfx(src, '0912'), 200), -38)), dawn, offset=60)
+    for (sid, t0, g, pan) in (('3486', 141.6, 0.07, 0.4), ('1667', 143.8, 0.05, -0.3), ('3476', 145.4, 0.075, -0.5)):
+        place(mix, fade(sfx(src, sid), 0.02, 0.2), t0, g, pan)
 
     # ------------------------------------------------------------- master
-    mix *= env([(0, 0), (0.4, 1), (DUR - 2.2, 1), (DUR - 0.15, 0), (DUR, 0)])[:, None]
+    mix *= env([(0, 0), (0.4, 1), (DUR - 1.6, 1), (DUR - 0.1, 0), (DUR, 0)])[:, None]
     mix = filt(mix, 28)
     pk = np.abs(mix).max()
     print('peak before limiting %.3f' % pk)

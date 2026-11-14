@@ -7,7 +7,7 @@ import math
 import numpy as np
 from engine import DASH, DAB, SCUM, LENS, pal, smooth, noise
 from core import RIPPLE, F
-from rig import Part, rx, ry, rz
+from rig import Part, rx, ry, rz, align_y, limb2, arm_ik, ARM
 from trees import pick, unit
 from life import merge, strokes
 import people as PP
@@ -17,7 +17,8 @@ T_STROKE = 3.6
 V0 = 1.22                      # mean speed, m/s
 T_REF, Z_REF = 64.0, 106.5     # the boat is at Z_REF at film time T_REF
 SIDE = 1.25                    # metres right of the middle of the river
-LOCK = np.array([0.60, 0.42, 0.05])       # starboard oarlock in boat coordinates
+LOCK = np.array([0.60, 0.42, -0.10])      # starboard oarlock in boat coordinates
+SEAT_Z = 0.30                             # the rower sits forward of the pins and faces aft
 INB, OUTB = 0.72, 1.95
 
 HULL_LI = pal((232, 160, 140), (240, 178, 150), (220, 138, 128), (244, 190, 170))
@@ -70,7 +71,7 @@ def hull(rng):
     P = np.stack([rng.uniform(-1, 1, m) * beam(s) * 0.66, np.full(m, 0.05), 2.4 * s], axis=1)
     sb.add(P, unit(np.tile([0.0, 0.0, 1.0], (m, 1)) + rng.normal(0, 0.04, (m, 3))), 0.5, 0.11, DASH + rng.integers(0, 8, m),
            pick(IN_SH, rng.random(m)), pick(IN_LI, rng.random(m)), N=np.tile([0.0, 1.0, 0.0], (m, 1)), smin=3.0, occ=0.55, bias=-0.04, haze=0.8)
-    for zt in (-1.45, -0.12, 1.25):
+    for zt in (-1.45, SEAT_Z + 0.02, 1.45):
         st = zt / 2.4
         hb = float(beam(np.array([st]))[0]) * 0.9
         p.seg((-hb, 0.30, zt), (hb, 0.30, zt), 0.16, IN_SH, IN_LI, n=6, bias=0.0)
@@ -85,53 +86,23 @@ def oar(rng, sgn):
     return p.done()
 
 
-def align_y(v):
-    """Rotation taking the local +y axis onto the direction v."""
-    v = np.asarray(v, np.float64)
-    v = v / (np.linalg.norm(v) + 1e-9)
-    a = np.cross([0.0, 1.0, 0.0], v)
-    s = np.linalg.norm(a)
-    c = v[1]
-    if s < 1e-6:
-        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
-    k = a / s
-    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
-    return np.eye(3) + s * K + (1 - c) * (K @ K)
-
-
-def limb2(rng, csh, cli, w=0.062, hand=True):
-    """Upper arm and forearm (each 0.27 m along +y) for two-bone arms."""
-    up = Part(rng).seg((0, 0, 0), (0, 0.27, 0), w, csh, cli, n=3).done()
-    fo = Part(rng).seg((0, 0, 0), (0, 0.27, 0), w * 0.9, csh, cli, n=3)
-    if hand:
-        fo.dab((0, 0.29, 0), (0, 1, 0), 0.07, 0.05, PP.SKIN_SH[0], PP.SKIN_LI[0])
-    return up, fo.done()
-
-
-def arm_ik(up, fo, S, H, pole=(0.0, -1.0, 0.0), l=0.27):
-    S, H = np.asarray(S, np.float64), np.asarray(H, np.float64)
-    d = H - S
-    dist = min(np.linalg.norm(d), 2 * l - 1e-3)
-    dn = d / (np.linalg.norm(d) + 1e-9)
-    pole = np.asarray(pole, np.float64)
-    pole = pole - (pole @ dn) * dn
-    pole = pole / (np.linalg.norm(pole) + 1e-9)
-    E = S + dn * dist / 2 + pole * math.sqrt(max(l * l - (dist / 2) ** 2, 0.0))
-    return [up.at(align_y(E - S), S), fo.at(align_y(S + dn * dist - E), E)]
-
-
 def cycle(t):
-    """Rowing cycle at time t -> sweep angle, dip angle, lean of the rower, phase."""
+    """Rowing cycle at time t -> sweep angle, dip angle, lean of the rower, phase.
+
+    The rower faces aft.  Catch (phase 0): she is reached forward, arms straight, blades far toward
+    the bow.  Drive (to 0.40): legs and back swing her upright and past it, the hands come in to
+    the body, the blades travel aft through the water.  Then the blades come out and she rocks
+    forward again, slowly, while the boat runs."""
     ph = ((t - T_REF) / T_STROKE) % 1.0
     if ph < 0.40:
         e = float(smooth(0.0, 0.40, ph))
         e = 0.5 * e + 0.5 * (ph / 0.40)
         dip = -0.07 - 0.20 * float(smooth(0.0, 0.05, ph)) * float(smooth(0.40, 0.34, ph))
     else:
-        e = 1.0 - float(smooth(0.42, 1.0, ph))
+        e = 1.0 - float(smooth(0.44, 1.0, ph))
         dip = -0.06
-    sweep = -0.86 + 1.40 * e
-    lean = 0.36 - 0.56 * e
+    sweep = -0.62 + 1.07 * e
+    lean = 0.50 - 0.76 * e
     return sweep, dip, lean, ph
 
 
@@ -152,15 +123,15 @@ def make(rng):
     HUL = hull(rng)
     OAR_S, OAR_P = oar(rng, 1), oar(rng, -1)
     # the rower: white dress, straw hat with a red ribbon
-    r_skirt = Part(rng).ell((0, 0.10, -0.22), (0.30, 0.17, 0.36), 0, PP.WHITE_SH, PP.WHITE_LI, 0.15, flow=(0.1, -0.3, -1.0)).done()
+    r_skirt = Part(rng).ell((0, 0.10, 0.24), (0.30, 0.17, 0.38), 0, PP.WHITE_SH, PP.WHITE_LI, 0.15, flow=(0.1, -0.3, 1.0)).done()
     r_torso = Part(rng).ell((0, 0.27, 0.0), (0.18, 0.29, 0.135), 0, PP.WHITE_SH, PP.WHITE_LI, 0.11, flow=(0.1, 1.0, 0.0)) \
-        .dab((0.0, 0.16, -0.12), (1, 0, 0), 0.22, 0.05, PP.BLUE_SH[0], PP.BLUE_LI[0]).done()
+        .seg((-0.17, 0.06, 0.02), (0.17, 0.06, 0.02), 0.06, PP.BLUE_SH, PP.BLUE_LI, n=4, bias=0.02).done()
     r_head = Part(rng).ell((0, 0.10, 0.0), (0.09, 0.11, 0.095), 0, PP.SKIN_SH, PP.SKIN_LI, 0.08, occ_lo=0.6) \
-        .ell((0, 0.13, 0.05), (0.095, 0.095, 0.085), 0, PP.HAIR, PP.HAIR_LI, 0.075) \
+        .ell((0, 0.13, -0.05), (0.095, 0.095, 0.085), 0, PP.HAIR, PP.HAIR_LI, 0.075) \
         .ell((0, 0.21, 0.0), (0.175, 0.026, 0.175), 0, PP.STRAW_SH, PP.STRAW_LI, 0.09, flow=(1, 0, 0.3), occ_lo=0.7) \
         .ell((0, 0.245, 0.0), (0.105, 0.055, 0.105), 0, PP.STRAW_SH, PP.STRAW_LI, 0.08) \
         .seg((-0.11, 0.218, 0.0), (0.11, 0.218, 0.0), 0.032, pal((180, 50, 56)), pal((236, 96, 84)), n=4, bias=0.02) \
-        .seg((0.0, 0.215, 0.12), (0.02, 0.05, 0.24), 0.028, pal((180, 50, 56)), pal((236, 96, 84)), n=4, flex=0.08).done()
+        .seg((0.0, 0.215, -0.12), (0.02, 0.05, -0.24), 0.028, pal((180, 50, 56)), pal((236, 96, 84)), n=4, flex=0.08).done()
     r_up, r_fo = limb2(rng, PP.WHITE_SH, PP.WHITE_LI)
     # the passenger in the stern: rose dress, blue ribbon
     p_skirt = Part(rng).ell((0, 0.10, 0.24), (0.31, 0.18, 0.38), 0, PP.PINK_SH, PP.PINK_LI, 0.15, flow=(0.1, -0.3, 1.0)).done()
@@ -205,14 +176,15 @@ def make(rng):
             hands.append(w(piv + M @ np.array([-sgn * (INB - 0.04), 0, 0])))
         # rower: sits on the middle thwart facing aft and swings from the hips
         R = B @ ry(math.pi)
-        hip = w([0.0, 0.34, -0.02])
+        hip = w([0.0, 0.34, SEAT_Z])
         Mt = R @ rx(lean)
         sh = hip + Mt @ np.array([0, 0.50, 0.0])
         parts += [r_skirt.at(R, hip - B @ np.array([0, 0.05, 0])), r_torso.at(Mt, hip),
-                  r_head.at(R @ rx(lean * 0.45 + 0.08) @ ry(0.25 * math.sin(t * 0.37)), sh)]
+                  r_head.at(R @ rx(lean * 0.35 + 0.05) @ ry(0.18 * math.sin(t * 0.37)), sh)]
         for sgn, H in ((1, hands[0]), (-1, hands[1])):
             S = hip + Mt @ np.array([-sgn * 0.19, 0.46, 0.0])
-            parts += arm_ik(r_up, r_fo, S, H, pole=B @ np.array([sgn * 0.5, -1.0, 0.0]))
+            # elbows always down and out to the side, never flipping over
+            parts += arm_ik(r_up, r_fo, S, H, pole=B @ np.array([sgn * 0.9, -0.75, 0.35]))
         # passenger: in the stern facing forward, swaying against each pull, a hand in the water
         surge = math.sin(2 * math.pi * (ph - 0.15))
         hip2 = w([0.02, 0.34, -1.42])

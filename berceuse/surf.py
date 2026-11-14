@@ -119,6 +119,11 @@ def ground_rgb(env, x, z, rnd, d):
     w = s - k0
     # broken colour: each touch belongs wholly to one season or the other
     use = np.where(rnd[:, 0] < w, k0 + 1, k0)
+    th = W.thaw()
+    if th > 0:
+        # the snow goes in patches, and what it uncovers is already green
+        pat = 0.65 * noise(x / 13.0 + 2.0, z / 13.0, 3) + 0.35 * rnd[:, 4]
+        use = np.where((use == 3) & (pat < th * 1.12 - 0.04), 0, use)
     rgb = np.zeros((len(x), 3), F)
     shc = np.zeros((len(x), 3), F)
     for k in range(4):
@@ -127,11 +132,14 @@ def ground_rgb(env, x, z, rnd, d):
             rgb[mk] = ramp(GRASS[k], v[mk])
             shc[mk] = np.where(rnd[mk, 1:2] < 0.5, GSHADE[k], GSHADE2[k])
     sh = shadow_at(env, x, z)
+    if env.L['cloudsh'] > 0.01:
+        from core import cloud_shadow
+        sh = 1 - (1 - sh) * (1 - 0.62 * env.L['cloudsh'] * cloud_shadow(env, x, z))
     shs = smooth(0.25, 0.75, sh + (rnd[:, 5] - 0.5) * 0.3)
     rgb = mix(rgb, shc * (0.85 + 0.3 * v[:, None]), (SHADE_AMT[np.clip(use, 0, 3)] * shs)[:, None])
     lit = 1 - shs
     rgb = rgb * (env.L['shade'][None, :] * (1 - lit[:, None]) + env.L['light'][None, :] * lit[:, None])
-    return rgb, s, v, sh
+    return rgb, s, v, sh, use
 
 
 def ground_shader(lvl):
@@ -141,9 +149,9 @@ def ground_shader(lvl):
         if not m.any():
             return None
         y = W.ground(x, z, d)
-        rgb, s, v, shd = ground_rgb(env, x, z, rnd, d)
+        rgb, s, v, shd, use = ground_rgb(env, x, z, rnd, d)
         # wet earth at the water's edge
-        rgb = mix(rgb, np.array([0.36, 0.34, 0.30], F) * (1 + 0.0 * v[:, None]), (0.5 * smooth(0.9, 0.0, d) * (s < 2.6))[:, None])
+        rgb = mix(rgb, np.array([0.36, 0.34, 0.30], F) * (1 + 0.0 * v[:, None]), (0.5 * smooth(0.9, 0.0, d) * (use < 3))[:, None])
         h = np.maximum(env.C[1] - y, 0.3)
         D = flat_dir(env, x, z, dist, h, (0.94, 0.0, 0.34))
         from core import haze_of
@@ -153,7 +161,7 @@ def ground_shader(lvl):
                    spr=np.where(rnd[:, 1] < 0.25, SCUM, DASH) + (rnd[:, 5] * 4).astype(np.int32))
         if lvl >= 1:
             # blades of grass stand up; snow lies in soft level touches
-            grassy = (s < 2.5 + rnd[:, 0] * 0.4)
+            grassy = use < 3
             sc = env.f / np.maximum(dist, 0.3)
             up = np.clip(0.42 * sc / 60.0, 0.22, 1.0) * grassy
             g = env.wind(x, z)
@@ -164,8 +172,9 @@ def ground_shader(lvl):
             if lvl == 2:
                 # the flowers of each season, set down as single touches among the grass
                 patch = smooth(0.45, 0.8, noise(x / 11.0 + 5.0, z / 11.0, 2)) * (0.4 + 0.6 * noise(x / 3.0, z / 3.0 + 2.0, 3))
-                fl = (rnd[:, 3] < 0.012 + 0.20 * patch) & (s < 2.2) & (d > 0.5)
-                k = np.clip(np.round(s), 0, 2).astype(np.int32)
+                again = (z > 150.0) & (use == 0)            # spring come round again: flowers open with the blossom
+                fl = (rnd[:, 3] < (0.012 + 0.20 * patch) * np.where(again, W.bloom(), 1.0)) & (use < 3) & (d > 0.5)
+                k = np.clip(use, 0, 2).astype(np.int32)
                 fc = FLOWERS[k, (rnd[:, 4] * 4).astype(np.int32) % 4]
                 sun = 1 - 0.45 * smooth(0.3, 0.7, shd)
                 out['rgb'] = np.where(fl[:, None], haze_of(env, fc * sun[:, None], dist, vx / dist, 0.8), out['rgb'])

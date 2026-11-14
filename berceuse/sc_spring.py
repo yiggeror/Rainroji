@@ -156,4 +156,5 @@ def actors(rng):
     surf.SHADOWS.append(fig_shadow)
     homes = [(-10.0, props.gy(-10, -12) + 0.9, -12.0), (-4.0, props.gy(-4, 2) + 0.8, 2.0), (-16.0, props.gy(-16, -22) + 1.1, -22.0),
              (3.0, props.gy(3, 12) + 0.7, 12.0), (-13.0, props.gy(-13, -4) + 1.3, -4.0)]
-    return [a1, a2, petals, life.butterflies(homes)]
+    sw = [(-2.0, props.gy(-2, -8) + 4.5, -8.0), (8.0, 4.0, 14.0), (-12.0, props.gy(-12, -24) + 5.5, -24.0), (14.0, 3.2, 40.0)]
+    return [a1, a2, petals, life.butterflies(homes), life.swallows(sw, 6.0, 52.0)]

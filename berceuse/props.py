@@ -30,6 +30,7 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
           chimney=True, size=0.55, y=None, snow=0.0):
     """A cottage: four walls and a pitched roof, every face painted with its own light."""
     sb = SB(rng)
+    sbs = SB(rng)
     y0 = gy(x, z) if y is None else y
     c, s = np.cos(yaw), np.sin(yaw)
     ax = np.array([c, 0, s]); az = np.array([-s, 0, c]); up = np.array([0, 1.0, 0])
@@ -56,7 +57,7 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
         nn = unit(sgn * az * rh + up * d / 2)
         quad(sb, rng, base, ax * (w + 2 * e), slope, nn, size * 1.05, roof_sh, roof, along='v', cover=2.6)
         if snow > 0:
-            quad(sb, rng, base + nn * 0.08, ax * (w + 2 * e), slope, nn, size * 1.25,
+            quad(sbs, rng, base + nn * 0.08, ax * (w + 2 * e), slope, nn, size * 1.25,
                  pal((176, 184, 226), (190, 190, 232), (160, 172, 220)), pal((255, 246, 236), (250, 238, 232), (255, 250, 244)),
                  along='u', cover=4.0 * snow, spr=DAB, aspect=0.55, bias=0.03, occ=1.0)
     if chimney:
@@ -64,9 +65,17 @@ def house(rng, x, z, w=8.0, d=6.0, h=3.4, rh=2.6, yaw=0.0, wall=None, wall_sh=No
         for nn in (ax, -ax, az, -az):
             side = np.cross(nn, up)
             quad(sb, rng, cx + nn * 0.3 - side * 0.3, side * 0.6, up * 1.3, nn, 0.35, roof_sh, wall, along='v')
+    # a line of shadow under the eaves and a darker foot to the walls give the house its drawing
+    for sgn in (-1, 1):
+        base = o + (az * d if sgn > 0 else 0) + up * (h - 0.12) + az * sgn * 0.06
+        m = max(4, int(w / 0.5))
+        P = base[None] + (ax * w)[None] * ((np.arange(m) + 0.5) / m)[:, None]
+        sb.add(P, ax, 0.62, 0.16, DASH + rng.integers(0, 4, m), pick(roof_sh, rng.random(m)) * 0.7, pick(roof_sh, rng.random(m)) * 0.85,
+               N=np.tile(sgn * az, (m, 1)), smin=3.0, bias=0.04)
     g = sb.group(name='house')
     g.top = (o + ax * w * 0.5 + az * d * 0.5 + up * (h + rh + 1.2))
     g.frame = (o, ax, az, w, d, h)
+    g.snow = sbs.group(name='roofsnow')
     return g
 
 
@@ -113,7 +122,9 @@ def church(rng, x, z, yaw=0.0, scale=1.0, snow=0.0, y=None):
     for kk in A:
         A[kk] = np.concatenate([nave.A[kk], A[kk]])
     from core import Group
-    return Group(A, name='church')
+    g = Group(A, name='church')
+    g.snow = nave.snow
+    return g
 
 
 def treeline(rng, pts, h=9.0, wid=7.0, psh=None, pli=None, size=1.0, dens=1.0, flex=0.1, trunks=None, smin=5.0):

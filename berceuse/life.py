@@ -97,3 +97,82 @@ def butterflies(homes, col=(1.0, 0.99, 0.94), col2=(0.86, 0.88, 0.97)):
                     r=np.tile(0.2 + 0.05 * (np.arange(n) % 5), 2), smin=1.5, haze=0.4)
         return [(A, dict(reflect=True))]
     return act
+
+
+def _bird(pos, fw, flap, size, body, wing, belly, tail=0.5):
+    """Strokes of one small flying bird: body, tail and two wings at flap angle."""
+    up = np.array([0.0, 1.0, 0.0])
+    rt = np.cross(up, fw)
+    rt /= (np.linalg.norm(rt) + 1e-9)
+    u2 = np.cross(fw, rt)
+    P = [pos, pos - u2 * 0.12 * size, pos - fw * (0.55 + 0.4 * tail) * size]
+    D = [fw, fw, fw]
+    L = [1.0 * size, 0.6 * size, tail * 1.1 * size]
+    Wd = [0.36 * size, 0.24 * size, 0.12 * size]
+    cs = [body, belly, body]
+    for sgn in (-1, 1):
+        w = rt * sgn * np.cos(flap) + u2 * np.sin(flap) - fw * 0.25
+        w /= np.linalg.norm(w)
+        P += [pos + w * 0.55 * size, pos + w * 1.25 * size - fw * 0.15 * size]
+        D += [w, w - fw * 0.5]
+        L += [1.0 * size, 0.9 * size]
+        Wd += [0.34 * size, 0.2 * size]
+        cs += [wing, wing]
+    return P, D, L, Wd, cs
+
+
+def swallows(centres, t0=0.0, t1=60.0):
+    """Swallows hawking over the meadow and the river: long fast curves, a few beats and a glide."""
+    centres = np.asarray(centres, np.float64)
+    n = len(centres)
+    ph = np.arange(n) * 2.1
+
+    def act(env):
+        t = env.t
+        if t < t0 or t > t1:
+            return []
+        P, D, L, Wd, cs = [], [], [], [], []
+        for i in range(n):
+            a = t * (0.55 + 0.07 * i) + ph[i]
+
+            def at(a_):
+                return centres[i] + np.array([16.0 * np.sin(a_), 2.2 * np.sin(a_ * 2.3 + ph[i]) + 1.2 * np.sin(a_ * 0.7), 9.0 * np.sin(a_ * 2.0 + 0.6 * i)])
+            pos = at(a)
+            fw = at(a + 0.02) - pos
+            fw /= np.linalg.norm(fw)
+            beat = (t * 1.3 + ph[i]) % 1.0
+            flap = 0.9 * np.sin(t * 34.0 + ph[i]) if beat < 0.55 else 0.12
+            p, d, l, w, c = _bird(pos, fw, flap, 0.11, (0.10, 0.12, 0.26), (0.14, 0.16, 0.32), (0.92, 0.86, 0.80), tail=0.9)
+            P += p; D += d; L += l; Wd += w; cs += c
+        A = strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), LENS + (np.arange(len(P)) % 4), np.array(cs), np.array(cs) * 1.6 + 0.05,
+                    N=np.tile([0.2, 0.9, 0.2], (len(P), 1)), r=0.05, smin=1.4, haze=0.5)
+        return [(A, dict(reflect=True))]
+    return act
+
+
+def geese(t0, t1, start, vel, n=13):
+    """A skein of wild geese crossing the autumn sky."""
+    start, vel = np.asarray(start, np.float64), np.asarray(vel, np.float64)
+    fw = vel / np.linalg.norm(vel)
+    side = np.cross([0.0, 1.0, 0.0], fw)
+
+    def act(env):
+        t = env.t
+        if t < t0 or t > t1:
+            return []
+        P, D, L, Wd, cs = [], [], [], [], []
+        lead = start + vel * (t - t0)
+        for i in range(n):
+            k = (i + 1) // 2
+            sgn = 1 if i % 2 else -1
+            pos = lead - fw * 3.2 * k + side * sgn * 2.4 * k + np.array([0, 0.5 * np.sin(t * 0.7 + i), 0]) + np.array([0, 0.3 * k, 0])
+            flap = 0.55 * np.sin(t * 6.0 - 0.7 * k + i)
+            p, d, l, w, c = _bird(pos, fw, flap, 0.62, (0.30, 0.26, 0.34), (0.36, 0.30, 0.38), (0.62, 0.56, 0.60), tail=0.25)
+            # the long neck
+            p.append(pos + fw * 0.62); d.append(fw); l.append(0.62); w.append(0.10); c.append((0.26, 0.22, 0.30))
+            P += p; D += d; L += l; Wd += w; cs += c
+        fade = float(smooth(t0, t0 + 2.0, t) * smooth(t1, t1 - 2.0, t))
+        A = strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), LENS + (np.arange(len(P)) % 4), np.array(cs), np.array(cs) * 1.5 + 0.1,
+                    N=np.tile([0.2, 0.9, 0.2], (len(P), 1)), r=0.05, smin=2.2, haze=0.8, a=0.9 * fade)
+        return [(A, dict(reflect=True))]
+    return act

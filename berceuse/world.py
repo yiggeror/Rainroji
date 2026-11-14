@@ -11,8 +11,38 @@ from scipy.interpolate import PchipInterpolator, CubicSpline
 from engine import smooth, noise
 
 NOW = 0.0                       # film time, set for every frame (the seasons turn in time too)
-T_WINTER = (106.0, 109.0)       # inside the mist the year turns from autumn to winter
 Z_BRIDGE = 152.0
+
+# The year on the poplar reach (film seconds).  Nothing switches: every change is a slow one.
+T_FALL = (97.0, 108.0)          # a wind takes the leaves, a few at first and then all of them
+T_WINTER = (105.0, 110.5)       # frost on the twigs, snow on the ground
+T_THAW = (131.5, 139.5)         # the spring rain: ice and snow go
+T_BLOOM = (136.0, 145.0)        # leaf and blossom open
+
+
+def _ramp(T):
+    return float(smooth(T[0], T[1], NOW))
+
+
+def fall():
+    return _ramp(T_FALL)
+
+
+def winter():
+    return _ramp(T_WINTER)
+
+
+def thaw():
+    return _ramp(T_THAW)
+
+
+def bloom():
+    return _ramp(T_BLOOM)
+
+
+def snowcover():
+    return winter() * (1.0 - thaw())
+
 
 _RZ = np.array([-200, -80, 0, 40, 80, 115, 150, 185, 225, 265, 310, 360, 500], np.float64)
 _RX = np.array([34, 30, 22, 15, 7, -3, 4, 10, 2, -14, -6, 8, 20], np.float64)
@@ -50,10 +80,6 @@ def side(x, z):
     return np.sign(x - rx(z))
 
 
-def winter():
-    return float(smooth(T_WINTER[0], T_WINTER[1], NOW))
-
-
 def season(z):
     """0 spring, 1 summer, 2 autumn, 3 winter."""
     z = np.asarray(z, np.float64)
@@ -70,6 +96,8 @@ def ground(x, z, d=None):
     # the orchard climbs gently away from the river
     west = (x < rx(z))
     h = h + np.where(west, 0.045 * np.minimum(dd, 90.0) * (1 - smooth(30.0, 75.0, z)), 0.0)
+    # the village across the poplar reach climbs a hillside, its church at the top
+    h = h + np.where(west, 0.15 * np.clip(dd - 4.0, 0.0, 75.0) * smooth(196.0, 222.0, z) * smooth(298.0, 270.0, z), 0.0)
     return h
 
 

@@ -143,6 +143,7 @@ class Group:
         A = {k: np.ascontiguousarray(v[o]) for k, v in A.items()}
         self.A = A
         self.span = span
+        self.fade = None                # callable t -> 0..1: the group comes and goes touch by touch
         self.n = len(A['P'])
         self.lmax = float(A['L'].max())
         self.smin = float(A['smin'].min())
@@ -196,6 +197,14 @@ def cat(dicts):
     if not dicts:
         return None
     return {k: np.concatenate([d[k] for d in dicts]) for k in dicts[0]}
+
+
+def cloud_shadow(env, x, z):
+    """0..1 shade of the clouds on the land: broad soft patches that travel with the wind."""
+    from engine import snoise
+    t = env.t
+    n = snoise((x - 5.5 * t) / 150.0 + 3.0, (z - 2.5 * t) / 150.0, 2)
+    return smooth(0.50, 0.68, n)
 
 
 def _dirproj(env, vr, vu, vf, D):
@@ -270,6 +279,8 @@ def shade(env, A, mirror=False, passid=STAND, sway=True, grade=True):
     nd = A['N'] @ S.astype(F)
     lit = np.clip(0.5 + 0.62 * nd + (A['r'] - 0.5) * 0.36, 0.0, 1.0)
     lit = lit * lit * (3 - 2 * lit) * A['occ']
+    if L['cloudsh'] > 0.01 and not mirror:
+        lit = lit * (1.0 - 0.55 * L['cloudsh'] * cloud_shadow(env, P[:, 0], P[:, 2]))
     em = A['emis'][:, None]
     rgb = A['csh'] * (1 - lit[:, None]) + A['cli'] * lit[:, None]
     if grade:

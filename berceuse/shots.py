@@ -6,7 +6,7 @@ import look as LK
 from look import c, sundir, key
 
 MUSIC_T0 = 1.0
-DUR = 147.0
+DUR = 148.5
 
 
 def R(z, off=0.0):
@@ -18,7 +18,7 @@ def E(z, back):
     return float(W.rx(z)) + float(W.hw(z)) + back
 
 
-GAP = 239.6          # set by scenes.py to the middle of a gap between two poplars
+TZ = 238.0           # the old apple tree on the bank (sc_poplars.TREE_Z)
 
 #       t     camera x, y, z                 looking at x, y, z                 fov
 KEYS = [
@@ -51,14 +51,18 @@ KEYS = [
     [106.0, E(214, 2), 26.0, 214.0,          E(214, -28), 12.0, 262.0,          58],
     [109.5, E(226, 22), 24.0, 226.0,         E(236, -10), 3.0, 236.0,           58],
     # --- winter: down onto the snowfield, the gate and its magpie, out over the ice
-    [113.5, E(243, 40), 5.0, 243.0,          E(240, 10), 1.5, 240.0,            56],
-    [117.0, E(242.5, 35), 1.9, 242.5,        E(240, 22), 1.2, 240.3,            52],
-    [121.0, E(241.6, 28.8), 1.65, 241.6,     E(240, 22), 1.3, 240.3,            48],
-    [126.0, E(241, 24), 3.4, 241.0,          E(238, -10), 4.0, 238.0,           54],
-    [132.0, E(GAP, 8), 4.0, GAP,             E(240, -60), 5.0, 242.0,           56],
-    [138.0, E(GAP, -4), 3.2, GAP,            E(242, -80), 7.0, 244.0,           56],
-    [143.0, E(GAP, -10), 3.4, GAP,           E(242, -70), 60.0, 244.0,          54],
-    [DUR,   E(GAP, -12), 3.5, GAP,           E(242, -60), 110.0, 244.0,         54],
+    [113.0, E(243, 40), 5.0, 243.0,          E(240, 10), 1.5, 240.0,            56],
+    [116.0, E(242.3, 33), 1.9, 242.3,        E(240, 22), 1.2, 240.3,            52],
+    [118.6, E(241.6, 28.6), 1.65, 241.6,     E(240, 22), 1.3, 240.3,            48],
+    [122.5, E(240.2, 21), 3.0, 240.2,        E(236, -14), 4.0, 233.0,           54],
+    # --- beside the old apple tree on the bank: sunset on the ice, the lamps, the rain, the thaw
+    [126.5, E(237.4, 13.5), 2.3, 237.4,      E(232, -45), 5.5, 228.0,           56],
+    [131.0, E(TZ - 3.0, 9.6), 2.0, TZ - 3.0, E(230, -62), 7.0, 226.0,           56],
+    [139.0, E(TZ - 2.8, 9.0), 2.0, TZ - 2.8, E(234, -62), 9.0, 232.0,           55],
+    # --- and up into its blossom, where the film began
+    [142.6, E(TZ - 2.2, 8.2), 2.4, TZ - 2.2, E(TZ, -26), 14.0, TZ - 1.0,        54],
+    [146.4, E(TZ - 0.9, 6.2), 4.2, TZ - 0.9, E(TZ, 1.5), 22.0, TZ + 0.4,        52],
+    [DUR,   E(TZ - 0.6, 5.6), 5.0, TZ - 0.6, E(TZ, 2.0), 26.0, TZ + 0.5,        52],
 ]
 
 
@@ -92,42 +96,57 @@ key(0.0, sun=sundir(118, 34), zen=c(88, 142, 218), mid=c(140, 186, 234), hor=c(2
     cover=0.40, cloud_lit=c(255, 252, 244), cloud_sh=c(200, 208, 234), glow=c(255, 240, 210), glow_wide=0.10, glow_tight=0.22,
     haze=c(200, 214, 232), hazesun=c(240, 232, 220), vis=520.0, hazemax=0.9,
     water_tint=np.array([0.30, 0.46, 0.40, 0.20]), deep=c(58, 104, 96), wind=0.9, wind_dir=0.5, glitter=0.5,
-    fade=1.0, fade_rgb=c(250, 244, 238))
+    fade=1.0, fade_rgb=c(250, 244, 238), cloudsh=1.0)
 key(1.2, fade=0.85)
 key(6.0, fade=0.0)
 key(40.0)
 # summer noon under the trees
 key(52.0, sun=sundir(185, 60), zen=c(70, 128, 214), mid=c(120, 172, 228), hor=c(196, 220, 232), cover=0.22,
     haze=c(170, 204, 196), hazesun=c(226, 232, 190), vis=260.0, hazemax=0.8,
-    water_tint=np.array([0.12, 0.33, 0.26, 0.34]), deep=c(30, 80, 66), wind=0.6, glitter=0.9, mirror_gain=0.86)
+    water_tint=np.array([0.12, 0.33, 0.26, 0.34]), deep=c(30, 80, 66), wind=0.6, glitter=0.9, mirror_gain=0.86, cloudsh=0.0)
 key(78.0)
 # autumn, late afternoon: gold on the poplars, the sky deep and clear
 key(83.5, sun=sundir(250, 22), zen=c(56, 116, 206), mid=c(118, 176, 222), hor=c(236, 216, 176), cover=0.30,
     cloud_lit=c(255, 228, 184), cloud_sh=c(190, 154, 184), glow=c(255, 212, 140), glow_wide=0.20, glow_tight=0.45,
     haze=c(216, 194, 186), hazesun=c(255, 216, 156), vis=520.0, hazemax=0.9, light=c(255, 250, 236),
-    water_tint=np.array([0.36, 0.44, 0.50, 0.10]), deep=c(40, 84, 112), wind=1.25, glitter=0.8, mirror_gain=0.95)
+    water_tint=np.array([0.36, 0.44, 0.50, 0.10]), deep=c(40, 84, 112), wind=1.25, glitter=0.8, mirror_gain=0.95, cloudsh=0.9)
 key(100.0)
 # the mist
-key(106.3, vis=30.0, hazemax=1.0, haze=c(236, 226, 230), hazesun=c(250, 234, 222), mist=1.0, cover=0.6, wind=0.7, snow=0.12)
+key(103.0, wind=1.7)
+key(106.3, vis=30.0, hazemax=1.0, cloudsh=0.0, haze=c(236, 226, 230), hazesun=c(250, 234, 222), mist=1.0, cover=0.6, wind=0.7, snow=0.12)
 key(109.2, vis=36.0, sun=sundir(246, 7.0), zen=c(126, 164, 214), mid=c(208, 208, 216), hor=c(250, 216, 176),
     cloud_lit=c(255, 216, 192), cloud_sh=c(178, 154, 192), cover=0.36, glow=c(255, 172, 96), glow_wide=0.32, glow_tight=0.7,
     light=c(255, 240, 222), shade=c(236, 242, 255), water_tint=np.array([0.50, 0.50, 0.62, 0.14]), deep=c(62, 72, 122),
     sun_col=c(255, 150, 70), snow=0.3)
 # winter afternoon: rose light on the snow, blue shadows
-key(114.0, vis=420.0, hazemax=0.93, haze=c(228, 208, 216), hazesun=c(255, 198, 152), mist=0.22, sundisc=1.0, glitter=1.0,
-    wind=0.45, snow=0.22)
-key(126.0, sun=sundir(246, 4.2), sun_col=c(255, 128, 60), hor=c(252, 196, 150), snow=0.3)
-# the sun goes; lamps are lit
-key(135.0, sun=sundir(246, 0.6), zen=c(70, 92, 162), mid=c(156, 128, 176), hor=c(244, 150, 108), cloud_lit=c(250, 150, 120),
-    cloud_sh=c(120, 104, 160), glow=c(255, 120, 70), glow_wide=0.30, glow_tight=0.5, light=c(176, 168, 200), shade=c(140, 152, 214),
-    haze=c(150, 130, 176), hazesun=c(236, 150, 120), sun_col=c(250, 96, 56), sundisc=0.7, lamps=0.75, ground=c(150, 132, 170), snow=0.6, glitter=0.5, mist=0.3,
-    deep=c(40, 46, 100))
-key(141.5, sun=sundir(246, -3.0), zen=c(24, 34, 88), mid=c(52, 58, 120), hor=c(118, 92, 136), cloud_lit=c(110, 96, 140),
-    cloud_sh=c(50, 52, 104), glow_wide=0.06, glow_tight=0.1, light=c(104, 112, 164), shade=c(84, 96, 160),
-    haze=c(58, 62, 118), hazesun=c(110, 90, 130), sundisc=0.0, lamps=1.0, snow=1.0, ground=c(34, 42, 96), glitter=0.1, deep=c(24, 28, 70), fade=0.0,
-    fade_rgb=c(12, 16, 38))
-key(144.0, fade=0.0)
-key(147.0, fade=1.0)
+key(113.5, vis=420.0, hazemax=0.93, haze=c(228, 208, 216), hazesun=c(255, 198, 152), mist=0.22, sundisc=1.0, glitter=1.0,
+    wind=0.45, snow=0.20)
+key(121.0, sun=sundir(246, 4.6), sun_col=c(255, 132, 62), hor=c(252, 198, 152), snow=0.25)
+# sunset; the lamps are lit; snow thickens
+key(128.0, sun=sundir(246, 1.0), zen=c(84, 104, 172), mid=c(170, 136, 180), hor=c(246, 156, 110), cloud_lit=c(252, 156, 124),
+    cloud_sh=c(128, 110, 166), cover=0.46, glow=c(255, 124, 72), glow_wide=0.30, glow_tight=0.5, light=c(196, 180, 204),
+    shade=c(150, 160, 220), haze=c(160, 138, 180), hazesun=c(238, 156, 124), sun_col=c(250, 98, 58), sundisc=0.75, lamps=0.7,
+    snow=0.6, glitter=0.5, mist=0.3, deep=c(44, 50, 104), ground=c(170, 150, 180))
+# blue hour: the snow turns to rain
+key(133.0, sun=sundir(246, -2.0), zen=c(58, 74, 132), mid=c(96, 100, 150), hor=c(150, 124, 150), cloud_lit=c(138, 128, 164),
+    cloud_sh=c(74, 80, 128), cover=0.80, glow_wide=0.05, glow_tight=0.05, light=c(140, 146, 190), shade=c(112, 124, 186),
+    haze=c(96, 104, 150), hazesun=c(140, 124, 150), sundisc=0.0, lamps=1.0, snow=0.25, rain=0.7, glitter=0.15, mist=0.35,
+    deep=c(34, 44, 92), water_tint=np.array([0.36, 0.40, 0.56, 0.16]), ground=c(84, 92, 138), vis=300.0, wind=0.8)
+key(136.5, sun=sundir(110, -2.0), zen=c(64, 84, 140), mid=c(110, 120, 164), hor=c(164, 150, 170), cloud_lit=c(160, 154, 182),
+    cloud_sh=c(86, 94, 140), cover=0.82, light=c(150, 158, 196), shade=c(118, 132, 190), haze=c(118, 128, 166),
+    hazesun=c(170, 150, 166), lamps=0.9, snow=0.0, rain=1.0, mist=0.4, deep=c(36, 56, 96), ground=c(100, 110, 150))
+# the rain thins and the morning comes up behind us: a sun-shower, and everything opening
+key(141.0, sun=sundir(110, 9.0), zen=c(98, 148, 214), mid=c(170, 198, 230), hor=c(250, 226, 204), cloud_lit=c(255, 232, 214),
+    cloud_sh=c(170, 170, 206), cover=0.56, glow=c(255, 226, 190), glow_wide=0.16, glow_tight=0.3, light=c(255, 244, 228),
+    shade=c(236, 240, 255), haze=c(210, 214, 230), hazesun=c(250, 230, 210), lamps=0.0, rain=0.35, mist=0.25, glitter=0.9,
+    deep=c(52, 100, 104), water_tint=np.array([0.30, 0.46, 0.42, 0.18]), ground=c(229, 219, 198), vis=460.0, wind=0.9,
+    sun_col=c(255, 240, 210))
+key(145.0, sun=sundir(114, 22.0), zen=c(88, 142, 218), mid=c(140, 186, 234), hor=c(214, 228, 240), cloud_lit=c(255, 252, 244),
+    cloud_sh=c(200, 208, 234), cover=0.40, glow=c(255, 240, 210), glow_wide=0.10, glow_tight=0.22, light=c(255, 255, 255),
+    shade=c(255, 255, 255), haze=c(200, 214, 232), hazesun=c(240, 232, 220), rain=0.0, mist=0.0, vis=520.0, hazemax=0.9,
+    fade=0.0, fade_rgb=c(250, 244, 238))
+key(146.6, fade=0.0)
+key(148.3, fade=1.0)
 
 
 # ------------------------------------------------------------------ following the skiff
@@ -198,14 +217,18 @@ PATH.post = _follow
 
 def _rig(t, C, T):
     C, T = _follow(t, C, T)
-    if 118.0 < t < 133.0:
+    if 116.5 < t < 128.0:
         # the eye goes with the magpie when it leaves the gate
         from engine import smooth
         import sc_poplars
-        w = float(smooth(119.6, 122.0, t) * smooth(131.5, 126.5, t))
+        w = 0.8 * float(smooth(117.6, 119.6, t) * smooth(126.5, 121.5, t))
         if w > 0:
             pos, _, _ = sc_poplars.magpie_pos(t)
-            T = T * (1 - w) + (pos + np.array([-1.5, 0.3, 0.0])) * w
+            da = (T - C) / np.linalg.norm(T - C)
+            db = (pos + np.array([-2.0, -1.2, 0.0]) - C)
+            db /= np.linalg.norm(db)
+            d = da * (1 - w) + db * w
+            T = C + d / np.linalg.norm(d) * 14.0
     return C, T
 
 

@@ -1,15 +1,18 @@
 #!/bin/bash
-# renderseg.sh OUTDIR H NPROC [CRF] [T0 T1]  -> OUTDIR/video.mp4 (segments rendered in parallel)
-OUT=$1; H=$2; N=$3; CRF=${4:-14}
+# renderseg.sh OUTDIR H NSEG [CRF] [NPROC]  -> OUTDIR/video.mp4
+# The film is cut into NSEG equal pieces which are rendered NPROC at a time (heavy and light
+# passages then even out), encoded, and joined without re-encoding.
+OUT=$1; H=$2; N=$3; CRF=${4:-14}; P=${5:-4}
 W=$((H*16/9))
-F0=$(python3 -c "print(int(30*${5:-0}))"); F1=$(python3 -c "import shots; print(int(30*${6:-0}) if ${6:-0} else int(30*shots.DUR))")
+TOTAL=$(python3 -c "import shots; print(int(round(30*shots.DUR)))")
 mkdir -p $OUT
-for i in $(seq 0 $((N-1))); do
-  A=$((F0+(F1-F0)*i/N)); B=$((F0+(F1-F0)*(i+1)/N))
-  ( python3 render.py pipe $A $B $H | ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgb24 -s ${W}x${H} -r 30 -i - \
-      -c:v libx264 -preset medium -crf $CRF -pix_fmt yuv420p $OUT/seg_$(printf %02d $i).mp4 ) &
-done
-wait
-ls $OUT/seg_*.mp4 | sed "s/^/file '/;s/$/'/" > $OUT/list.txt
+one() {
+  i=$1; A=$((TOTAL*i/N)); B=$((TOTAL*(i+1)/N)); f=$OUT/seg_$(printf %02d $i).mp4
+  python3 render.py pipe $A $B $H | ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgb24 -s ${W}x${H} -r 30 -i - \
+      -c:v libx264 -preset medium -crf $CRF -pix_fmt yuv420p $f.part.mp4 && mv $f.part.mp4 $f
+}
+export -f one; export OUT H N CRF W TOTAL
+seq 0 $((N-1)) | xargs -P $P -I{} bash -c 'one {}'
+ls $OUT/seg_??.mp4 | sed "s/^/file '/;s/$/'/" > $OUT/list.txt
 ffmpeg -loglevel error -y -f concat -safe 0 -i $OUT/list.txt -c copy $OUT/video.mp4
 echo rendered $OUT/video.mp4
