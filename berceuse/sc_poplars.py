@@ -327,8 +327,8 @@ def farmyard(rng):
 
 def flock(rng, n=9):
     """White geese about the yard: they wander, stop, stretch a neck, put a head down to the grass."""
-    home = np.array([edge_x(238.0, 5.0), 0.0, 238.0])
-    off = np.stack([rng.uniform(-2.2, 2.6, n), np.zeros(n), rng.uniform(-9.0, 8.0, n)], axis=1)
+    home = np.array([edge_x(246.0, 9.5), 0.0, 246.0])
+    off = np.stack([rng.uniform(-3.5, 3.5, n), np.zeros(n), rng.uniform(-5.0, 4.5, n)], axis=1)
     ph = rng.uniform(0, 100, n)
 
     def act(env):
@@ -502,7 +502,7 @@ def build(rng):
     built(gsb.group(name='gate'), gsn.group(name='gate_snow'))
     build.perch = perch
     wall = pal((236, 214, 196), (244, 224, 204), (226, 200, 190), (240, 210, 186))
-    wall_sh = pal((126, 116, 160), (140, 124, 160), (116, 112, 156))
+    wall_sh = pal((150, 134, 164), (164, 142, 166), (140, 130, 162))
     roofs = [(pal((190, 124, 110), (204, 138, 112), (176, 110, 110)), pal((112, 84, 122), (124, 90, 120))),
              (pal((150, 150, 176), (164, 160, 184)), pal((92, 94, 140), (102, 100, 146)))]
     rf = roofs[0]
@@ -510,6 +510,28 @@ def build(rng):
                        roof=rf[0], roof_sh=rf[1], size=0.5, snow=1.0)
     built(farm, farm.snow)
     build.farm = farm
+    # the front of the farm: a green door, shuttered windows, and a creeper that is scarlet in autumn
+    r2 = np.random.default_rng(77)          # its own dice, so that the rest of the world is not reshuffled
+    o, ax, az, w_, d_, h_ = farm.frame
+    nrm = -az
+    up = np.array([0.0, 1.0, 0.0])
+    sb = SB(r2)
+    sb.add(np.array([o + ax * w_ * 0.52 + up * 1.0 + nrm * 0.06]), up, 1.95, 0.9, DASH, (0.14, 0.34, 0.32), (0.34, 0.56, 0.44), N=nrm, smin=2.5, bias=0.05)
+    for s_ in (0.2, 0.82):
+        p = o + ax * w_ * s_ + up * 1.75 + nrm * 0.06
+        sb.add(np.array([p]), up, 1.0, 0.55, DAB, (0.26, 0.28, 0.44), (0.52, 0.56, 0.72), N=nrm, smin=2.5, bias=0.05)
+        for sg in (-1, 1):
+            sb.add(np.array([p + ax * sg * 0.5]), up, 1.1, 0.3, DASH, (0.30, 0.40, 0.56), (0.56, 0.68, 0.84), N=nrm, smin=2.5, bias=0.06)
+    built(sb.group(name='farmfront'))
+    cr_a, cr_s = SB(r2), SB(r2)
+    for k in range(11):
+        c_ = o + ax * w_ * r2.uniform(0.55, 1.0) + up * r2.uniform(0.6, h_ + 0.6) + nrm * 0.25
+        rad = (r2.uniform(0.6, 1.3), r2.uniform(0.5, 1.1), 0.22)
+        crown(cr_a, c_, rad, 0, pal((130, 30, 60), (150, 50, 50), (120, 60, 80)), pal((236, 60, 50), (250, 110, 60), (214, 40, 64), (250, 160, 70)), 0.19, r2,
+              flex=0.04, smin=4.0, cover=1.0)
+        crown(cr_s, c_, rad, 0, NEW_SH, NEW_LI, 0.19, r2, flex=0.04, smin=4.0, cover=0.9)
+    G.append(_grp(cr_a, 'creeper', f_autumn))
+    G.append(_grp(cr_s, 'creeper_new', f_spring))
     # the village climbs the far bank in tiers: big houses and small, a barn, garden trees, the church above
     VILL = []
     k = 0
