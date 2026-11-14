@@ -263,6 +263,49 @@ def fish_rings(env):
     return [(life.merge(out), dict(passid=RIPPLE, reflect=False))]
 
 
+def sunshafts(rng):
+    """Sun coming down through the gaps in the leaves: slanting veils of light over the water,
+    and in them the dust and midges of a summer noon, turning."""
+    zs = np.arange(74.0, 148.0, 5.2)
+    base = []
+    for z in zs:
+        z = z + rng.uniform(-1.5, 1.5)
+        base.append((float(W.rx(z)) + rng.uniform(-4.5, 4.5), z, rng.uniform(0, 6.28), rng.uniform(0.7, 1.3)))
+    base = np.array(base)
+
+    def act(env):
+        t = env.t
+        if t < 40 or t > 86:
+            return []
+        S = env.sun
+        out = []
+        m = 7
+        f = (np.arange(m) + 0.5) / m
+        for (bx, bz, ph, k) in base:
+            if abs(bz - env.C[2]) > 70:
+                continue
+            top = np.array([bx, 0.0, bz]) + S * (10.5 / max(S[1], 0.3))
+            P = top[None] * f[:, None] + np.array([bx, 0.0, bz])[None] * (1 - f[:, None])
+            wob = 0.5 + 0.5 * np.sin(t * 0.45 + ph)
+            out.append(life.strokes(P, np.tile(S, (m, 1)), 3.6, 1.0 * k, SCUM + (np.arange(m) % 4), (1.0, 0.97, 0.72), (1.0, 0.97, 0.72),
+                                    r=0.1, a=0.30 * (0.45 + 0.55 * wob) * k * (1 - 0.45 * f), smin=3.0, emis=1.0, haze=0.0, bias=0.2))
+        if not out:
+            return []
+        return [(life.merge(out), dict(reflect=False))]
+
+    def motes(env):
+        t = env.t
+        if t < 44 or t > 84:
+            return []
+
+        def dens(x, z):
+            return 0.9 * smooth(66.0, 80.0, z) * smooth(150.0, 140.0, z) * smooth(0.45, 0.7, noise(x / 4.2 + 0.25 * np.sin(t * 0.5), z / 4.2, 3))
+        A = life.falling(env, 739, 0.9, 15.0, 5.0, 0.05, (0.12, 0.05), 0.045, pal((250, 236, 170)), pal((255, 250, 210)), dens, layers=3,
+                         tumble=1.0, sway=0.5, swirl=0.6, smin=1.2, aspect=0.9, emis=1.0, haze=0.0, round_=True, ground=False, a=0.8)
+        return [(A, dict(reflect=False))]
+    return [act, motes]
+
+
 def dragonflies(pts):
     """Blue darts over the water: hover, then a sudden straight dash."""
     pts = np.asarray(pts, np.float64)
@@ -444,6 +487,7 @@ def actors(rng):
     acts.append(floaters(885, 0.36, 0.20, pal((214, 190, 226), (230, 200, 220)), pal((255, 250, 244), (255, 226, 232), (255, 240, 200)), lily_dens,
                          speed=0.0, tmin=30.0, tmax=90.0, aspect=0.8, sunny=0.3))
     acts.append(fish_rings)
+    acts += sunshafts(rng)
     acts.append(ducks(rng, 93.0, 50.0, 66.0))
     import boat
     acts.append(boat.make(rng))

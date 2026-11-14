@@ -193,8 +193,8 @@ def make(rng):
         look = 0.5 * math.sin(t * 0.21 + 1.0) + 0.5
         parts += [p_skirt.at(B, hip2 - B @ np.array([0, 0.05, 0])), p_torso.at(Mp, hip2),
                   p_head.at(B @ ry(0.9 * look - 0.2) @ rx(0.05 + 0.14 * look), sh2)]
-        parts += arm_ik(p_up, p_fo, hip2 + Mp @ np.array([0.19, 0.45, 0.0]), w([0.56 + 0.02 * math.sin(t * 1.3), 0.03, -1.30 + 0.05 * math.sin(t * 0.8)]),
-                        pole=B @ np.array([0.6, 0.6, -0.5]))
+        parts += arm_ik(p_up, p_fo, hip2 + Mp @ np.array([0.19, 0.45, 0.0]), w([0.50, 0.44, -1.22 + 0.03 * math.sin(t * 0.8)]),
+                        pole=B @ np.array([0.8, -0.5, -0.4]))
         parts += arm_ik(p_up, p_fo, hip2 + Mp @ np.array([-0.19, 0.45, 0.0]), w([-0.12, 0.40, -1.12]), pole=B @ np.array([-0.6, -0.6, 0.0]))
         res = [(merge(parts), dict(sway=True))]
         # ---- what the boat does to the water

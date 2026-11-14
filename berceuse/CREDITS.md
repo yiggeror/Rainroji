@@ -10,7 +10,8 @@ whose works are in the public domain:
 | spring | *Printemps*, the apple trees in blossom at Vétheuil |
 | summer | *La barque rose*, *En norvégienne*, the bridges of the Seine and the Epte |
 | autumn | the *Peupliers* (Poplars on the Epte) series |
-| winter | *La Pie* (The Magpie), *Coucher de soleil sur la Seine, effet d'hiver*, the winters at Lavacourt |
+| winter | *La Pie* (The Magpie), *Coucher de soleil sur la Seine, effet d'hiver*, the winters at Lavacourt and Vétheuil |
+| spring again | *Le Printemps*, *Vétheuil*, the *Peupliers* in their spring green |
 
 ## Music
 Frédéric Chopin, **Berceuse in D-flat major, Op. 57** (1844), played by Olga Gurevich.
@@ -39,6 +40,8 @@ Field recordings by Joseph Sardin, **BigSoundBank.com** — free of rights (CC0)
 | 0904, 0659 | Wind in the Trees, Wind in a Tree | wind in the poplars (follows the gusts in the picture) |
 | 3464, 3465 | Carrion Crow | rooks far off |
 | 0147, 0595 | Whistling of the Wind #1, Wind | winter air |
+| 2679, 1290 | Rain Under an Umbrella, Rain on Puddle | the spring rain |
+| 1384 | Drops of water #1 | meltwater dripping from the boughs |
 | 2764–2767 | Crow #1–#4 (a corvid at night, probably a magpie) | the magpie on the gate |
 | 0476 | Flight of a pigeon | the magpie's wings |
 | 3445 | Bell 5 O'clock (church of La Loupe) | the village bell at dusk, retuned to the key of the music |
