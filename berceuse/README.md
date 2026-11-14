@@ -1,6 +1,6 @@
 # Berceuse — a second code-painted short film after Claude Monet
 
-One continuous take, 3 min 20 s, through a whole year on one river - and round to spring again.
+One continuous take, 2 min 51 s, through a whole year on one river - and round to spring again.
 Every frame is built from tens of thousands of individual brush strokes that are generated,
 animated and composited by the Python code in this folder — no image assets, no 3-D renderer,
 no AI image model.
@@ -8,19 +8,19 @@ no AI image model.
 | time | scene |
 |------|-------|
 | 0:00 | **spring** - down from above an orchard in blossom; cloud shadows cross it, swallows hunt over it |
-| 0:21 | through the trees: a girl on a swing in an apple tree, her mother reading on a blue cloth |
-| 0:36 | to the river and out along it |
-| 0:46 | **summer** - a painter at his easel under a white umbrella, cows in the meadow behind him |
-| 1:02 | the garden: a pink house with green shutters, beds of flowers down to the water, washing on the line |
-| 1:12 | after a rose-coloured skiff, alongside it, past it; ducks, lily pads, shafts of sun under the willows |
-| 1:34 | under the old stone bridge … |
-| 1:37 | **autumn** - the wide water, sails, gold poplars, wild geese going over |
-| 1:50 | ashore into a farm orchard: red apples, baskets, a ladder, geese in the grass, a fire of leaves |
-| 2:08 | a wind gets up and takes the leaves, a few and then all; up over the yard into the mist |
-| 2:26 | **winter** - the same yard under snow; a magpie on the gate; it flies off over the roofs |
-| 2:43 | sunset on the ice from beside an old apple tree; the village lights its lamps |
-| 2:49 | the snow turns to rain; ice and snow go; the roofs come out red |
-| 2:57 | morning, a sun-shower, blossom - and the camera draws back and up over the whole reach in spring |
+| 0:18 | through the trees: a girl on a swing in an apple tree, her mother reading on a blue cloth |
+| 0:32 | to the river and out along it |
+| 0:39 | **summer** - a painter at his easel under a white umbrella, cows in the meadow behind him |
+| 0:51 | the garden: a pink house with green shutters, beds of flowers down to the water, washing on the line |
+| 1:01 | after a rose-coloured skiff, alongside it, past it; ducks, lily pads, shafts of sun under the willows |
+| 1:20 | under the old stone bridge … |
+| 1:22 | **autumn** - the wide water, sails, gold poplars, wild geese going over |
+| 1:32 | ashore into a farm orchard: red apples, baskets, a ladder, geese in the grass, a fire of leaves, a scarlet creeper on the house |
+| 1:44 | a wind gets up and takes the leaves, a few and then all; up over the yard into the mist |
+| 2:03 | **winter** - the same yard under snow; a magpie on the gate; it flies off over the roofs |
+| 2:17 | sunset on the ice from beside an old apple tree; the village lights its lamps |
+| 2:22 | the snow turns to rain; ice and snow go; the roofs come out red |
+| 2:30 | morning, a sun-shower, blossom - and the camera draws back and up over the whole reach in spring |
 
 Nothing in the year is switched: leaves leave stroke by stroke, frost and snow arrive and melt in
 patches, blossom opens touch by touch (`world.py` keeps the calendar, `film.py` fades each group).
@@ -50,8 +50,9 @@ of poplars, turns in the mist, follows a bird.
   `sc_poplars.py` the poplar reach and its farm through autumn, winter and spring — the scenes; `people.py`, `boat.py`, `rig.py`
   — the figures (rigid parts, two-bone arms, a rowing cycle that drives the boat's speed, the
   rings its oars leave); `life.py` — whatever falls or flies.
-* `shots.py` — the single take: camera keys, the rig that follows the skiff, and the light of
-  the film keyed over time.
+* `shots.py` — the single take: camera keys, the rig that follows the skiff, the light of the
+  film keyed over time, and the *pace*: the story is written in its own time and the film plays
+  it faster where the picture would only repeat itself, slower where something is happening.
 * `audio_mix.py` — the soundtrack; `audio/` — how the music was cut and where the sounds come from.
 
 ## Rebuild
