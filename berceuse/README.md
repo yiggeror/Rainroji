@@ -1,27 +1,31 @@
 # Berceuse — a second code-painted short film after Claude Monet
 
-One continuous take, about two and a half minutes, through a whole year on one river - and round
-to spring again.  Every frame is built from tens of thousands of individual brush strokes that are
-generated, animated and composited by the Python code in this folder — no image assets, no 3-D
-renderer, no AI image model.
+One continuous take, 3 min 20 s, through a whole year on one river - and round to spring again.
+Every frame is built from tens of thousands of individual brush strokes that are generated,
+animated and composited by the Python code in this folder — no image assets, no 3-D renderer,
+no AI image model.
 
 | time | scene |
 |------|-------|
-| 0:00 | inside the blossom of an apple tree; the camera sinks out of it into an orchard in spring |
-| 0:10 | through the orchard under travelling cloud shadows, swallows overhead, past a woman reading and a child reaching for petals |
-| 0:38 | out over the water, looking down: petals on the current, weeds in the stream |
-| 0:52 | summer: up a green reach after a rose-coloured skiff - lily pads, a duck and her brood, shafts of sun - and past it |
-| 1:18 | under the old stone bridge … |
-| 1:22 | … into autumn: gold poplars along the bank, wild geese going over |
-| 1:38 | a wind gets up and takes the leaves, a few and then all of them, as the camera climbs the trees |
-| 1:45 | mist; the first snow |
-| 1:52 | winter on the same reach: snowfield, wattle fence, a magpie on the gate; it flies off over the roofs |
-| 2:03 | sunset on the ice seen from under an old apple tree; the village lights its lamps |
-| 2:11 | the snow turns to rain; ice and snow go; the roofs come out red |
-| 2:19 | morning behind us, a sun-shower, the tree breaks into blossom - and the camera rises into it, where the film began |
+| 0:00 | **spring** - down from above an orchard in blossom; cloud shadows cross it, swallows hunt over it |
+| 0:21 | through the trees: a girl on a swing in an apple tree, her mother reading on a blue cloth |
+| 0:36 | to the river and out along it |
+| 0:46 | **summer** - a painter at his easel under a white umbrella, cows in the meadow behind him |
+| 1:02 | the garden: a pink house with green shutters, beds of flowers down to the water, washing on the line |
+| 1:12 | after a rose-coloured skiff, alongside it, past it; ducks, lily pads, shafts of sun under the willows |
+| 1:34 | under the old stone bridge … |
+| 1:37 | **autumn** - the wide water, sails, gold poplars, wild geese going over |
+| 1:50 | ashore into a farm orchard: red apples, baskets, a ladder, geese in the grass, a fire of leaves |
+| 2:08 | a wind gets up and takes the leaves, a few and then all; up over the yard into the mist |
+| 2:26 | **winter** - the same yard under snow; a magpie on the gate; it flies off over the roofs |
+| 2:43 | sunset on the ice from beside an old apple tree; the village lights its lamps |
+| 2:49 | the snow turns to rain; ice and snow go; the roofs come out red |
+| 2:57 | morning, a sun-shower, blossom - and the camera draws back and up over the whole reach in spring |
 
 Nothing in the year is switched: leaves leave stroke by stroke, frost and snow arrive and melt in
 patches, blossom opens touch by touch (`world.py` keeps the calendar, `film.py` fades each group).
+Nothing in the picture is switched on either: whatever lives in the world is there from the first
+frame and only fades with distance.
 
 ## What is different from the first film (`monet/` on `claude/laughing-volta-yn071i`)
 
@@ -42,7 +46,8 @@ of poplars, turns in the mist, follows a bird.
 * `sky.py` — a dome of strokes anchored to directions; the same colour model gives the mirror
   image in the water and the colour of the air.
 * `world.py`, `surf.py` — the river, its banks, the seasons along it (and, in the mist, in time).
-* `sc_spring.py`, `sc_summer.py`, `sc_poplars.py` — the scenes; `people.py`, `boat.py`, `rig.py`
+* `sc_spring.py` orchard · `sc_summer.py` river, bridge · `sc_garden.py` garden, painter, cows ·
+  `sc_poplars.py` the poplar reach and its farm through autumn, winter and spring — the scenes; `people.py`, `boat.py`, `rig.py`
   — the figures (rigid parts, two-bone arms, a rowing cycle that drives the boat's speed, the
   rings its oars leave); `life.py` — whatever falls or flies.
 * `shots.py` — the single take: camera keys, the rig that follows the skiff, and the light of
@@ -54,7 +59,7 @@ of poplars, turns in the mist, follows a bird.
 ```bash
 pip install numpy scipy numba opencv-python-headless
 python3 render.py still frame.png 66            # one 1080p frame at t = 66 s
-./renderseg.sh out 1080 4                       # the whole film, 4 processes -> out/video.mp4
+./renderseg.sh out 1080 16 14 4                 # the whole film: 16 segments, crf 14, 4 at a time -> out/video.mp4
 ./audio/get_sfx.sh SRC/sfx                      # field recordings (see CREDITS.md)
 python3 audio_mix.py SRC out/mix.wav            # needs SRC/music/berceuse_edit.wav (audio/music_edit.py)
 ffmpeg -i out/video.mp4 -i out/mix.wav -c:v copy -c:a aac -b:a 256k out/berceuse.mp4

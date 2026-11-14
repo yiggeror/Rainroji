@@ -15,7 +15,7 @@ import world as W
 
 T_STROKE = 3.6
 V0 = 1.22                      # mean speed, m/s
-T_REF, Z_REF = 64.0, 106.5     # the boat is at Z_REF at film time T_REF
+T_REF, Z_REF = 80.0, 122.0     # the boat is at Z_REF at film time T_REF
 SIDE = 1.25                    # metres right of the middle of the river
 LOCK = np.array([0.60, 0.42, -0.10])      # starboard oarlock in boat coordinates
 SEAT_Z = 0.30                             # the rower sits forward of the pins and faces aft
@@ -159,8 +159,10 @@ def make(rng):
     def act(env):
         t = env.t
         T0, yaw = boat_pose(t)
-        if t < 36 or t > 86 or (env.C[0] - T0[0]) ** 2 + (env.C[2] - T0[2]) ** 2 > 130 ** 2:
+        far = math.sqrt((env.C[0] - T0[0]) ** 2 + (env.C[2] - T0[2]) ** 2)
+        if far > 170 or T0[2] > 150.0:          # once it is under the bridge, and behind us, it has gone its way
             return []
+        vis = float(smooth(170.0, 120.0, far))
         sweep, dip, lean, ph = cycle(t)
         pitch = 0.012 * math.sin(2 * math.pi * (ph - 0.05)) + 0.006 * math.sin(t * 0.9)
         roll = 0.02 * math.sin(t * 0.8 + 1.0)
@@ -196,7 +198,9 @@ def make(rng):
         parts += arm_ik(p_up, p_fo, hip2 + Mp @ np.array([0.19, 0.45, 0.0]), w([0.50, 0.44, -1.22 + 0.03 * math.sin(t * 0.8)]),
                         pole=B @ np.array([0.8, -0.5, -0.4]))
         parts += arm_ik(p_up, p_fo, hip2 + Mp @ np.array([-0.19, 0.45, 0.0]), w([-0.12, 0.40, -1.12]), pole=B @ np.array([-0.6, -0.6, 0.0]))
-        res = [(merge(parts), dict(sway=True))]
+        M_ = merge(parts)
+        M_['a'] = M_['a'] * vis
+        res = [(M_, dict(sway=True))]
         # ---- what the boat does to the water
         P, D, L, Wd, col, al = [], [], [], [], [], []
         n0 = int(math.floor((t - T_REF) / T_STROKE))

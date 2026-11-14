@@ -4,6 +4,7 @@ import numpy as np
 from engine import DASH, DAB, SCUM, LENS, pal, smooth, noise
 from rig import Part, rx, ry, rz, limb2, arm_ik
 from life import merge
+from trees import pick
 import props
 
 WHITE_LI = pal((255, 252, 244), (252, 246, 236), (255, 248, 250), (246, 240, 246))
@@ -78,7 +79,7 @@ def reader(rng, x, z, yaw):
 
     def act(env):
         t = env.t
-        if t > 60 or (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 120 ** 2:
+        if (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 140 ** 2:
             return []
         br = 0.012 * np.sin(t * 1.4)
         # she looks up from the page now and then, toward the child
@@ -102,55 +103,148 @@ def reader(rng, x, z, yaw):
     return act, (x, z, 1.0)
 
 
-def child(rng, x, z, yaw):
-    """A small girl in a pink frock and white pinafore, bare-headed, reaching up for the falling petals."""
+def swinger(rng, x, z, yaw, H=3.5, Lr=2.75):
+    """A small girl on a swing hung in an apple tree.  She is carried by a pendulum, so nothing
+    about her movement has to be invented: the ropes, her weight and her kicking legs agree."""
     FAIR = pal((170, 120, 70), (150, 104, 64))
     FAIR_LI = pal((240, 200, 130), (250, 214, 150))
     STK = pal((176, 180, 214), (190, 190, 222))
     STK_LI = pal((250, 246, 240), (255, 250, 244))
-    dress = Part(rng).ell((0, 0.21, 0), (0.16, 0.20, 0.135), 0, PINK_SH, PINK_LI, 0.09, flow=(0.1, -1, 0.1), flex=0.01) \
-        .ell((0, 0.05, 0), (0.24, 0.10, 0.22), 0, PINK_SH, PINK_LI, 0.10, flow=(1, -0.3, 0.2), flex=0.05) \
-        .ell((0, 0.17, 0.085), (0.11, 0.20, 0.06), 0, WHITE_SH, WHITE_LI, 0.08, flow=(0, -1, 0.1), bias=0.02) \
-        .seg((-0.10, 0.37, 0.03), (0.10, 0.37, 0.03), 0.045, WHITE_SH, WHITE_LI, n=4, bias=0.03) \
-        .seg((-0.12, 0.12, -0.10), (0.12, 0.12, -0.10), 0.05, WHITE_SH, WHITE_LI, n=3, bias=0.02, flex=0.03) \
-        .ell((-0.145, 0.34, 0.0), (0.06, 0.06, 0.06), 0, PINK_SH, PINK_LI, 0.06).ell((0.145, 0.34, 0.0), (0.06, 0.06, 0.06), 0, PINK_SH, PINK_LI, 0.06) \
-        .seg((0.0, 0.40, 0.01), (0.0, 0.445, 0.01), 0.055, SKIN_SH, SKIN_LI, n=2).done()
-    legs = Part(rng).seg((-0.06, 0.0, 0), (-0.065, -0.24, 0.005), 0.05, STK, STK_LI).seg((0.06, 0.0, 0), (0.065, -0.24, 0.005), 0.05, STK, STK_LI) \
-        .dab((-0.065, -0.285, 0.03), (0, 0, 1), 0.11, 0.06, DARK[0], DARK_LI[0]).dab((0.065, -0.285, 0.03), (0, 0, 1), 0.11, 0.06, DARK[0], DARK_LI[0]).done()
-    up, fo = limb2(rng, PINK_SH, PINK_LI, w=0.05, l=0.17, skin=(SKIN_SH[0], SKIN_LI[0]))
-    fo = limb2(rng, SKIN_SH, SKIN_LI, w=0.044, l=0.17, skin=(SKIN_SH[0], SKIN_LI[0]))[1]
-    head = Part(rng).ell((0, 0.085, 0.01), (0.082, 0.092, 0.088), 0, SKIN_SH, SKIN_LI, 0.065, occ_lo=0.6) \
-        .ell((0, 0.11, -0.03), (0.092, 0.092, 0.085), 0, FAIR, FAIR_LI, 0.065) \
-        .seg((-0.07, 0.07, -0.05), (-0.085, -0.07, -0.07), 0.045, FAIR, FAIR_LI, n=3, flex=0.05) \
-        .seg((0.07, 0.07, -0.05), (0.085, -0.07, -0.07), 0.045, FAIR, FAIR_LI, n=3, flex=0.05) \
-        .seg((0.0, 0.08, -0.085), (0.0, -0.09, -0.10), 0.06, FAIR, FAIR_LI, n=3, flex=0.06) \
-        .dab((-0.035, 0.195, -0.01), (-1, 0.5, 0), 0.085, 0.05, (0.72, 0.16, 0.20), (0.95, 0.30, 0.28), bias=0.03) \
-        .dab((0.035, 0.195, -0.01), (1, 0.5, 0), 0.085, 0.05, (0.72, 0.16, 0.20), (0.95, 0.30, 0.28), bias=0.03).done()
+    ROPE = pal((120, 100, 90), (136, 110, 92))
+    ROPE_LI = pal((226, 204, 160), (236, 214, 170))
+    body = Part(rng)
+    for sx in (-0.21, 0.21):
+        body.seg((sx, 0.0, 0.0), (sx, Lr, 0.0), 0.028, ROPE, ROPE_LI, n=14, smin=2.0)
+    body.seg((-0.24, -0.01, 0.0), (0.24, -0.01, 0.0), 0.11, ROPE, ROPE_LI, n=4)
+    body.ell((0, 0.06, 0.09), (0.17, 0.075, 0.19), 0, PINK_SH, PINK_LI, 0.085, flow=(1, -0.2, 0.4), flex=0.03) \
+        .ell((0, 0.24, 0.0), (0.105, 0.18, 0.085), 0, PINK_SH, PINK_LI, 0.075, flow=(0.1, -1, 0.1)) \
+        .ell((0, 0.21, 0.06), (0.075, 0.15, 0.04), 0, WHITE_SH, WHITE_LI, 0.065, flow=(0, -1, 0.1), bias=0.02) \
+        .seg((0.0, 0.41, 0.0), (0.0, 0.45, 0.0), 0.05, SKIN_SH, SKIN_LI, n=2)
+    for sx in (-1, 1):
+        body.seg((sx * 0.105, 0.37, 0.0), (sx * 0.175, 0.27, 0.07), 0.045, PINK_SH, PINK_LI, n=3) \
+            .seg((sx * 0.175, 0.27, 0.07), (sx * 0.205, 0.40, 0.02), 0.038, SKIN_SH, SKIN_LI, n=3) \
+            .dab((sx * 0.21, 0.42, 0.015), (0, 1, 0), 0.055, 0.045, SKIN_SH[0], SKIN_LI[0], bias=0.03)
+    body.ell((0, 0.535, 0.01), (0.074, 0.084, 0.08), 0, SKIN_SH, SKIN_LI, 0.058, occ_lo=0.6) \
+        .ell((0, 0.555, -0.028), (0.083, 0.083, 0.078), 0, FAIR, FAIR_LI, 0.058) \
+        .seg((0.0, 0.53, -0.08), (0.0, 0.34, -0.12), 0.07, FAIR, FAIR_LI, n=4, flex=0.10) \
+        .dab((-0.032, 0.635, -0.01), (-1, 0.5, 0), 0.075, 0.045, (0.72, 0.16, 0.20), (0.95, 0.30, 0.28), bias=0.03) \
+        .dab((0.032, 0.635, -0.01), (1, 0.5, 0), 0.075, 0.045, (0.72, 0.16, 0.20), (0.95, 0.30, 0.28), bias=0.03)
+    body = body.done()
+    shin = Part(rng).seg((-0.055, 0.0, 0.0), (-0.055, -0.25, 0.0), 0.045, STK, STK_LI, n=4).seg((0.055, 0.0, 0.0), (0.055, -0.25, 0.0), 0.045, STK, STK_LI, n=4) \
+        .dab((-0.055, -0.275, 0.03), (0, 0, 1), 0.10, 0.055, DARK[0], DARK_LI[0]).dab((0.055, -0.275, 0.03), (0, 0, 1), 0.10, 0.055, DARK[0], DARK_LI[0]).done()
     y0 = props.gy(x, z)
+    piv = np.array([x, y0 + H, z])
+    B = ry(yaw)
+    om = np.sqrt(9.81 / Lr)
 
     def act(env):
         t = env.t
-        if t > 60 or (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 120 ** 2:
+        if (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 140 ** 2:
             return []
-        # she turns after the petals, rises on her toes, reaches with one hand and then the other
-        turn = yaw + 0.9 * (noise(t * 0.10, 0.3, 1) - 0.5) * 2
-        reach = pulse(t, 5.2, 3.4)
-        hop = 0.05 * max(0.0, np.sin(t * 2.6)) ** 2 * (0.3 + 0.7 * reach)
-        step = 0.25 * (noise(t * 0.07, 5.0, 2) - 0.5)
-        Y = ry(turn)
-        T = np.array([x + step * np.cos(turn), y0 + 0.32 + hop, z + step * 0.6])
-        swayb = 0.06 * np.sin(t * 1.3)
-        Mb = Y @ rz(swayb) @ rx(-0.06 * reach)
-        sh = T + Mb @ np.array([0, 0.445, 0.01])
-        parts = [legs.at(Y, T - [0, hop * 0.4, 0]), dress.at(Mb, T),
-                 head.at(Y @ rx(-0.15 - 0.35 * reach + 0.08 * np.sin(t * 0.9)) @ rz(swayb * 0.5), sh)]
-        for sgn, ph in ((-1, 0.0), (1, 2.3)):
-            S = T + Mb @ np.array([sgn * 0.15, 0.35, 0.0])
-            u = 0.5 + 0.5 * np.sin(t * 1.7 + ph)
-            hi = Mb @ np.array([sgn * (0.16 + 0.05 * u), 0.26 + 0.07 * u, 0.12])       # reaching up
-            lo = Mb @ np.array([sgn * 0.07, -0.30, 0.04])                              # hanging by her side
-            k = reach * (0.55 + 0.45 * u)
-            H = S + lo * (1 - k) + hi * k
-            parts += arm_ik(up, fo, S, H, pole=Mb @ np.array([sgn * 1.0, -0.4, -0.3]), l=0.17)
+        th = 0.46 * np.sin(om * t)
+        M = B @ rx(-th)
+        seat = piv + M @ np.array([0.0, -Lr, 0.0])
+        kick = 0.15 + 0.75 * (0.5 + 0.5 * np.sin(om * t + 0.9))          # legs out in front going forward, tucked coming back
+        knee = seat + M @ np.array([0.0, 0.02, 0.23])
+        parts = [body.at(M, seat), shin.at(M @ rx(-kick), knee)]
         return [(merge(parts), dict(sway=True))]
-    return act, (x, z, 0.45)
+    return act, (x, z, 0.5)
+
+
+def painter(rng, x, z, yaw):
+    """A painter at his easel under a white umbrella, on the bank, working at the motif across the water."""
+    CREAM_SH = pal((170, 164, 200), (184, 172, 200))
+    CREAM_LI = pal((250, 240, 216), (255, 246, 226))
+    TR = pal((70, 76, 120), (84, 86, 128))
+    TR_LI = pal((140, 150, 190), (156, 160, 196))
+    WD = pal((96, 76, 80), (110, 84, 80))
+    WD_LI = pal((206, 170, 120), (220, 184, 134))
+    fig = Part(rng).ell((0, 0.44, 0.12), (0.17, 0.11, 0.26), 0, TR, TR_LI, 0.10, flow=(0, -0.2, 1)) \
+        .seg((-0.09, 0.42, 0.34), (-0.10, 0.05, 0.42), 0.085, TR, TR_LI).seg((0.09, 0.42, 0.34), (0.10, 0.05, 0.42), 0.085, TR, TR_LI) \
+        .dab((-0.10, 0.03, 0.47), (0, 0, 1), 0.2, 0.08, DARK[0], DARK_LI[0]).dab((0.10, 0.03, 0.47), (0, 0, 1), 0.2, 0.08, DARK[0], DARK_LI[0]) \
+        .seg((-0.16, 0.0, -0.02), (-0.14, 0.38, 0.0), 0.04, WD, WD_LI, n=3).seg((0.16, 0.0, -0.02), (0.14, 0.38, 0.0), 0.04, WD, WD_LI, n=3) \
+        .ell((0, 0.74, 0.0), (0.185, 0.29, 0.135), 0, CREAM_SH, CREAM_LI, 0.11, flow=(0.1, 1, 0)).done()
+    head = Part(rng).ell((0, 0.10, 0.012), (0.090, 0.108, 0.098), 0, SKIN_SH, SKIN_LI, 0.07, occ_lo=0.6) \
+        .ell((0, 0.03, 0.065), (0.075, 0.085, 0.055), 0, pal((170, 170, 190), (184, 180, 196)), pal((244, 240, 236), (250, 246, 240)), 0.06, bias=0.01) \
+        .ell((0, 0.205, 0.0), (0.21, 0.024, 0.21), 0, STRAW_SH, STRAW_LI, 0.095, flow=(1, 0, 0.3), occ_lo=0.7) \
+        .ell((0, 0.24, 0.0), (0.105, 0.055, 0.105), 0, STRAW_SH, STRAW_LI, 0.08).done()
+    up, fo = limb2(rng, CREAM_SH, CREAM_LI, w=0.07, skin=(SKIN_SH[0], SKIN_LI[0]))
+    gear = Part(rng)
+    apex = np.array([0.0, 1.62, 1.02])
+    for foot in ((-0.42, 0.0, 0.80), (0.42, 0.0, 0.80), (0.0, 0.0, 1.55)):
+        gear.seg(foot, apex, 0.035, WD, WD_LI, n=8)
+    gear.seg((-0.36, 0.86, 0.90), (0.36, 0.86, 0.90), 0.04, WD, WD_LI, n=4)
+    m = 60
+    P = np.stack([rng.uniform(-0.34, 0.34, m), rng.uniform(0.90, 1.42, m), 0.93 + 0.0 * np.arange(m)], axis=1)
+    P[:, 2] += (P[:, 1] - 0.9) * 0.16
+    cols = pal((250, 244, 230), (250, 244, 230), (150, 196, 120), (240, 180, 190), (150, 180, 230), (250, 220, 120), (250, 246, 236))
+    c = pick(cols, rng.random(m))
+    gear.sb.add(P, (1, 0.1, 0), 0.15, 0.085, DAB + rng.integers(0, 4, m), c * 0.8, c, N=np.tile([0.0, 0.3, -1.0], (m, 1)), smin=2.5, bias=0.02, haze=0.8)
+    gear.seg((-0.62, 0.0, -0.25), (-0.5, 2.32, -0.05), 0.03, WD, WD_LI, n=10)
+    gear.ell((-0.42, 2.34, 0.15), (1.02, 0.25, 1.02), 0, pal((176, 184, 230), (190, 190, 232), (166, 176, 224)), pal((255, 252, 244), (255, 246, 236)), 0.26,
+             flow=(1, 0, 0.2), occ_lo=0.25, cover=2.2)
+    gear = gear.done()
+    pal_ = Part(rng).ell((0, 0, 0), (0.15, 0.015, 0.11), 0, WD, WD_LI, 0.07, flow=(1, 0, 0)).dab((0.04, 0.02, 0.03), (1, 0, 0), 0.05, 0.04, (0.9, 0.3, 0.3)) \
+        .dab((-0.04, 0.02, 0.0), (1, 0, 0), 0.05, 0.04, (0.3, 0.5, 0.9)).dab((0.0, 0.02, -0.04), (1, 0, 0), 0.05, 0.04, (0.98, 0.9, 0.4)).done()
+    brush = Part(rng).seg((0, 0, 0), (0, 0.02, 0.22), 0.015, WD, WD_LI, n=3).done()
+    y0 = props.gy(x, z)
+    T0 = np.array([x, y0, z])
+    Y = ry(yaw)
+
+    def act(env):
+        t = env.t
+        if (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 150 ** 2:
+            return []
+        look = pulse(t, 7.0, 2.6, 0.3)                    # he looks up at the motif, then back to the canvas
+        lean = 0.10 + 0.05 * np.sin(t * 0.6)
+        Mt = Y @ rx(lean)
+        hip = T0 + Y @ np.array([0, 0.40, 0.0])
+        sh = T0 + Y @ np.array([0, 0.44, 0.0]) + Mt @ np.array([0, 0.60, 0.0])
+        hx = 0.10 + 0.16 * (noise(t * 0.35, 0.2, 0) - 0.5) * (1 - 0.7 * look)
+        hy = 1.14 + 0.18 * (noise(t * 0.30, 3.0, 1) - 0.5) * (1 - 0.7 * look) + 0.012 * np.sin(t * 9.0) * (1 - look)
+        hand = T0 + Y @ np.array([hx, hy, 0.74 - 0.10 * look])
+        lhand = T0 + Y @ np.array([-0.24, 0.80, 0.30])
+        parts = [gear.at(Y, T0), fig.at(Y, T0 + Y @ np.array([0, 0.0, 0.0])), head.at(Y @ ry(0.35 * look - 0.1) @ rx(0.18 - 0.22 * look), sh),
+                 pal_.at(Y @ rz(0.3), lhand), brush.at(Y @ rx(-0.2), hand)]
+        parts += arm_ik(up, fo, sh + Mt @ np.array([0.19, -0.10, 0.0]), hand, pole=Y @ np.array([0.7, -0.7, -0.2]))
+        parts += arm_ik(up, fo, sh + Mt @ np.array([-0.19, -0.10, 0.0]), lhand, pole=Y @ np.array([-0.7, -0.6, -0.3]))
+        return [(merge(parts), dict(sway=True))]
+    return act, (x, z, 1.1)
+
+
+def cow(rng, x, z, yaw, grazing=True, seed=0.0):
+    """A Normandy cow: white with red-brown patches.  It grazes, lifts its head, switches its tail."""
+    BR = pal((120, 62, 60), (134, 72, 62), (106, 56, 66))
+    BR_LI = pal((206, 124, 86), (220, 140, 96), (190, 110, 84))
+    WS = pal((176, 176, 214), (190, 184, 216))
+    WL = pal((252, 246, 236), (255, 250, 240))
+    body = Part(rng).ell((0, 0.98, 0.0), (0.33, 0.35, 0.84), 0, WS, WL, 0.20, flow=(0, -0.3, 1), occ_lo=0.45)
+    for k in range(4):
+        c = (rng.uniform(-0.15, 0.15), 0.98 + rng.uniform(-0.05, 0.2), rng.uniform(-0.6, 0.6))
+        body.ell(c, (0.30, rng.uniform(0.2, 0.3), rng.uniform(0.25, 0.42)), 0, BR, BR_LI, 0.18, flow=(0, -0.3, 1), occ_lo=0.45, bias=0.01)
+    for sx in (-0.2, 0.2):
+        for sz in (-0.6, 0.58):
+            body.seg((sx, 0.72, sz), (sx, 0.0, sz + 0.02), 0.085, WS if rng.random() < 0.5 else BR, WL if rng.random() < 0.6 else BR_LI, n=5)
+    body.seg((0.0, 1.22, -0.84), (0.0, 0.52, -0.94), 0.04, BR, BR_LI, n=5, flex=0.25)
+    body = body.done()
+    head = Part(rng).seg((0, 0, 0), (0, -0.06, 0.42), 0.20, BR, BR_LI, n=3).ell((0, -0.10, 0.60), (0.12, 0.13, 0.23), 0, BR, BR_LI, 0.11, flow=(0, 0, 1)) \
+        .dab((0, -0.13, 0.80), (1, 0, 0), 0.16, 0.11, (0.72, 0.62, 0.66), (0.98, 0.90, 0.86), bias=0.02) \
+        .dab((-0.13, 0.0, 0.50), (-1, 0.3, 0), 0.12, 0.05, BR[0], BR_LI[0]).dab((0.13, 0.0, 0.50), (1, 0.3, 0), 0.12, 0.05, BR[0], BR_LI[0]).done()
+    y0 = props.gy(x, z)
+    T0 = np.array([x, y0, z])
+    Y = ry(yaw)
+
+    def act(env):
+        t = env.t
+        if (env.C[0] - x) ** 2 + (env.C[2] - z) ** 2 > 170 ** 2:
+            return []
+        if grazing:
+            up_ = pulse(t, 17.0, 5.0, seed)
+            ang = 1.0 - 0.95 * up_ + 0.05 * np.sin(t * 2.6 + seed * 9) * (1 - up_)
+            turn = 0.5 * up_ * np.sin(seed * 20)
+        else:
+            ang = 0.05 + 0.05 * np.sin(t * 0.5 + seed)
+            turn = 0.5 * np.sin(t * 0.17 + seed * 7)
+        parts = [body.at(Y, T0), head.at(Y @ ry(turn) @ rx(ang), T0 + Y @ np.array([0, 1.18, 0.74]))]
+        return [(merge(parts), dict(sway=True))]
+    return act, (x, z, 1.0)

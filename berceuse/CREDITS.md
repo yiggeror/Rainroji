@@ -8,8 +8,8 @@ whose works are in the public domain:
 | season | after |
 |--------|-------|
 | spring | *Printemps*, the apple trees in blossom at Vétheuil |
-| summer | *La barque rose*, *En norvégienne*, the bridges of the Seine and the Epte |
-| autumn | the *Peupliers* (Poplars on the Epte) series |
+| summer | *Le jardin de l'artiste à Vétheuil*, the house at Giverny, *La barque rose*, *En norvégienne*, the painter under his umbrella |
+| autumn | the *Peupliers* (Poplars on the Epte) series, the regattas at Argenteuil, *Les Dindons* |
 | winter | *La Pie* (The Magpie), *Coucher de soleil sur la Seine, effet d'hiver*, the winters at Lavacourt and Vétheuil |
 | spring again | *Le Printemps*, *Vétheuil*, the *Peupliers* in their spring green |
 
@@ -19,7 +19,8 @@ Recorded and released by Musopen ("The Complete Works of Frédéric Chopin", 201
 **CC0 1.0 / public domain**.
 Source: https://archive.org/details/musopen-chopin-complete-works-flac
 
-The film uses bars 1–14 and bars 47–70 of the recording, joined on the downbeat of a bar
+The film uses bars 1–30 and bars 47–70 of the recording, joined on the downbeat of a bar, where one
+four-bar variation ends and another begins
 (`audio/music_edit.py`); nothing else is altered.
 
 ## Sound
@@ -29,7 +30,7 @@ Field recordings by Joseph Sardin, **BigSoundBank.com** — free of rights (CC0)
 |----|-----------|----------|
 | 1906 | Birds Waking #4 | dawn chorus in the orchard |
 | 0912 | Campaign Morning | spring air |
-| 1353 | Cherry blossom and Goats | bees in the blossom |
+| 1353 | Cherry blossom and Goats | bees in the blossom, and in the flower beds |
 | 3476, 3486, 3494, 3499 | Common Blackbird | blackbirds, one after another |
 | 1667, 1670 | Robin | a robin in the apple trees |
 | 3136, 3137 | Watercourse 5.1 / 5.2 | the river |

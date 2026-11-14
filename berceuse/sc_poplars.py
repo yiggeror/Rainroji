@@ -150,6 +150,8 @@ def bush(rng, x, z, r, h, psh, pli, size=0.34, blossom=False):
     return out
 
 
+APPLE_LI = pal((236, 60, 50), (250, 110, 60), (246, 196, 80), (220, 40, 52))
+APPLE_SH = pal((150, 30, 60), (170, 50, 50), (160, 110, 60))
 FRUIT = []            # (x, z, crown height, radius) of the fruit trees, for their shade in spring
 
 
@@ -183,6 +185,7 @@ def fruit_tree(rng, x, z, s=1.0, dens=1.0):
                 e = c + rng.normal(0, 0.42, 3) * s
                 limb(sb, top + (tip - top) * f * 0.92, e, 0.035 * s, 0.018 * s, BSH, BLI, rng, bend=rng.uniform(-0.35, 0.35), n=5, smin=3.0, flex1=0.06)
             crown(sa, c, rad, int(150 * dens), RUST_SH, RUST_LI, 0.22 * s, rng, flex=0.10, smin=5.5)
+            crown(sa, c - [0, 0.25 * s, 0], rad * 0.85, int(16 * dens), APPLE_SH, APPLE_LI, 0.13 * s, rng, flex=0.05, smin=3.0, aspect=0.9, occ_lo=0.8)
             crown(sp, c, rad * 0.9, int(60 * dens), NEW_SH, NEW_LI, 0.20 * s, rng, flex=0.08, smin=5.0)
             crown(sp, c, rad, int(230 * dens), BLOS_SH, BLOS_LI, 0.23 * s, rng, flex=0.10, smin=5.5, wli=[3, 3, 2.5, 2, 1.2, 1.5], occ_lo=0.35)
     c = top + [0, 2.3 * s, 0]
@@ -255,7 +258,7 @@ _TRUNKS = []          # (x, z, width, length factor)
 def long_shadows(env, x, z):
     """Low sun: the poplars lay long blue bars across the field, the fence a broken band."""
     t = env.t
-    if t < 80:
+    if env.C[2] < 140.0:
         return None
     S = env.sun
     if S[1] < 0.004:
@@ -287,11 +290,119 @@ def long_shadows(env, x, z):
         gatebars = (np.abs(zsrc - GATE_Z) < 1.3)
         dens = np.where(gatebars, 0.35 + 0.4 * np.sin(dd / flen * 30.0), 0.82 + 0.1 * np.sin(zsrc * 4.6))
         out = np.maximum(out, w * infence * dens * smooth(flen, flen * 0.82, dd))
-    return out * float(smooth(80.0, 84.0, t)) * float(smooth(0.004, 0.03, S[1]))
+    return out * float(smooth(0.004, 0.03, S[1]))
 
 
 def water_tone(env, x, z, rnd, rgb, d):
     return rgb
+
+
+def farmyard(rng):
+    """What lies about an orchard at apple time: baskets, a ladder against a tree, a heap of leaves."""
+    out = []
+    WK_SH = pal((110, 80, 70), (124, 90, 74))
+    WK_LI = pal((214, 170, 110), (226, 186, 124))
+    for (zz, back) in ((222.5, 16.0), (224.0, 15.0), (245.0, 16.5), (248.5, 7.5)):
+        sb = SB(rng)
+        x = edge_x(zz, back)
+        y0 = props.gy(x, zz)
+        crown(sb, (x, y0 + 0.2, zz), (0.3, 0.2, 0.3), 0, WK_SH, WK_LI, 0.11, rng, flex=0.0, smin=2.5, cover=2.0, aspect=0.5, spr=DASH)
+        crown(sb, (x, y0 + 0.4, zz), (0.24, 0.08, 0.24), 0, APPLE_SH, APPLE_LI, 0.11, rng, flex=0.0, smin=2.5, cover=1.8, aspect=0.9, occ_lo=0.9)
+        out.append(_grp(sb, 'basket', f_autumn))
+    sb = SB(rng)                                   # the ladder
+    x, zz = edge_x(221.6, 16.6), 221.6
+    y0 = props.gy(x, zz)
+    for dz in (-0.25, 0.25):
+        limb(sb, (x - 1.5, y0, zz + dz), (x - 0.2, y0 + 3.3, zz + dz), 0.06, 0.05, WK_SH, WK_LI, rng, n=8, smin=2.5)
+    for k in range(8):
+        f = (k + 0.7) / 8.6
+        limb(sb, (x - 1.5 + 1.3 * f, y0 + 3.3 * f, zz - 0.25), (x - 1.5 + 1.3 * f, y0 + 3.3 * f, zz + 0.25), 0.04, 0.04, WK_SH, WK_LI, rng, n=2, smin=2.5)
+    out.append(_grp(sb, 'ladder', f_autumn))
+    sb = SB(rng)                                   # the heap of leaves that is burning
+    x, zz = BONFIRE[0], BONFIRE[2]
+    crown(sb, (x, props.gy(x, zz) + 0.3, zz), (1.1, 0.4, 1.1), 0, RUST_SH, RUST_LI, 0.2, rng, flex=0.0, smin=3.0, cover=1.6)
+    out.append(_grp(sb, 'leafheap', f_autumn))
+    return out
+
+
+def flock(rng, n=9):
+    """White geese about the yard: they wander, stop, stretch a neck, put a head down to the grass."""
+    home = np.array([edge_x(238.0, 5.0), 0.0, 238.0])
+    off = np.stack([rng.uniform(-2.2, 2.6, n), np.zeros(n), rng.uniform(-9.0, 8.0, n)], axis=1)
+    ph = rng.uniform(0, 100, n)
+
+    def act(env):
+        t = env.t
+        w = max(1.0 - W.winter(), W.bloom())
+        if w <= 0.02 or env.C[2] < 150:
+            return []
+        P, D, L, Wd, cs, cl = [], [], [], [], [], []
+        WH, WHL, OR = (0.70, 0.72, 0.90), (1.0, 0.98, 0.94), (0.95, 0.55, 0.15)
+        for i in range(n):
+            def at(tt):
+                return home + off[i] + np.array([2.2 * (noise(tt * 0.045 + ph[i], 0.3, 0) - 0.5) * 2, 0, 2.2 * (noise(tt * 0.04 + ph[i], 5.0, 1) - 0.5) * 2])
+            p = at(t)
+            v = at(t + 0.5) - p
+            sp = np.linalg.norm(v) / 0.5
+            hd = v / (np.linalg.norm(v) + 1e-6)
+            p[1] = props.gy(p[0], p[2])
+            wad = 0.03 * np.sin(t * 7.0 + ph[i]) * min(sp * 4, 1.0)
+            peck = max(0.0, np.sin(t * 0.5 + ph[i])) ** 6
+            b = p + [0, 0.30 + abs(wad) * 0.3, 0]
+            sd = np.array([-hd[2], 0, hd[0]])
+            nk0 = b + hd * 0.20 + [0, 0.08, 0]
+            nk1 = b + hd * (0.30 + 0.25 * peck) + np.array([0, 0.42 - 0.62 * peck, 0])
+            P += [b + sd * wad, b - hd * 0.22 + [0, 0.05, 0], (nk0 + nk1) / 2, nk1 + hd * 0.03, nk1 + hd * 0.11, p + [0, 0.09, 0]]
+            D += [hd + [0, 0.15, 0], hd + [0, 0.5, 0], nk1 - nk0, hd, hd, [0, 1, 0]]
+            L += [0.52, 0.24, float(np.linalg.norm(nk1 - nk0)) + 0.06, 0.12, 0.09, 0.18]
+            Wd += [0.30, 0.16, 0.09, 0.10, 0.04, 0.05]
+            cs += [WH, WH, WH, WH, OR, OR]
+            cl += [WHL, WHL, WHL, WHL, OR, OR]
+        A = life.strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), DAB + (np.arange(len(P)) % 4), np.array(cs), np.array(cl),
+                         N=np.tile([0.2, 0.9, 0.1], (len(P), 1)), r=0.05, smin=1.8, haze=0.6, a=0.96 * w)
+        return [(A, dict(reflect=False))]
+    return act
+
+
+def sails(rng):
+    """Sailing boats on the wide water below the poplars, as at Argenteuil."""
+    boats = []
+    for (z0, dx, v, hgt) in ((196.0, 3.0, -0.45, 7.5), (224.0, -5.0, -0.6, 8.5), (252.0, 6.0, -0.35, 7.0), (286.0, -9.0, -0.5, 8.0)):
+        m = 70
+        u, w_ = rng.random(m), rng.random(m)
+        w_ = w_ * (1 - u)                                   # a triangle: tall at the mast, running out to the boom end
+        boats.append((z0, dx, v, hgt, u, w_, rng.random(m), rng.uniform(0, 6.28)))
+
+    def act(env):
+        t = env.t
+        w = 1.0 - W.fall()
+        if w <= 0.02 or env.C[2] < 120:
+            return []
+        out = []
+        for (z0, dx, v, hgt, u, w_, rr, ph) in boats:
+            z = z0 + v * (t - 100.0)
+            x = float(W.rx(z)) + dx + 2.0 * np.sin(t * 0.05 + ph)
+            heel = 0.10 + 0.05 * np.sin(t * 0.6 + ph)
+            base = np.array([x, 0.0, z])
+            fw = np.array([0.25, 0.0, -1.0]); fw /= np.linalg.norm(fw)
+            sd = np.array([-fw[2], 0, fw[0]])
+            up = np.array([0, 1.0, 0]) * np.cos(heel) + sd * np.sin(heel)
+            k = len(u)
+            S_ = base[None] + up[None] * (0.7 + (hgt - 0.9) * w_)[:, None] - fw[None] * (0.15 + 3.4 * u)[:, None] + sd[None] * (0.25 * np.sin(np.pi * u))[:, None]
+            sail = life.strokes(S_, np.tile(up, (k, 1)), 1.25, 0.62, DASH + (rr * 8).astype(np.int32), (0.72, 0.72, 0.90), (1.0, 0.97, 0.90),
+                                N=np.tile(sd + [0, 0.2, 0], (k, 1)), r=rr * 0.5, ph=rr * 6.28, smin=2.5, haze=0.8, flex=0.03, a=0.96 * w)
+            hs = np.linspace(-2.2, 2.2, 9)
+            hull = life.strokes(base[None] + fw[None] * hs[:, None] + [0, 0.22, 0], np.tile(fw, (9, 1)), 0.9, 0.34, DASH, (0.50, 0.40, 0.52), (0.98, 0.94, 0.86),
+                                N=np.tile(sd + [0, 0.6, 0], (9, 1)), r=0.1, smin=2.5, haze=0.8, a=0.96 * w)
+            ms = np.linspace(0.3, hgt, 8)
+            mast = life.strokes(base[None] + up[None] * ms[:, None], np.tile(up, (8, 1)), hgt / 8 * 1.6, 0.07, DASH, (0.36, 0.28, 0.34), (0.70, 0.56, 0.46), r=0.1,
+                                smin=2.0, haze=0.8, a=0.96 * w)
+            out.append((life.merge([hull, sail, mast]), dict(reflect=True)))
+        return out
+    return act
+
+
+BONFIRE = (0.0, 0.0, 0.0)
 
 
 TREE_Z = 238.0         # the old apple tree on the bank, in a gap of the poplar line: the film ends in it
@@ -299,6 +410,8 @@ TREE_BACK = 2.6
 
 
 def build(rng):
+    global BONFIRE
+    BONFIRE = (edge_x(253.0, 17.5), 0.0, 253.0)
     G = []
     surf.SHADOWS.append(long_shadows)
     surf.SHADOWS.append(fruit_shade)
@@ -310,6 +423,9 @@ def build(rng):
             continue
         x = edge_x(z, rng.uniform(3.0, 4.6))
         h = rng.uniform(22.0, 27.0)
+        from shots import clear_of_path as _cop
+        if not _cop(x, z, 3.2):
+            continue
         G += poplar(rng, x, z, h)
         POPLARS.append((x, z, h))
         _TRUNKS.append((x, z, 0.35, h))
@@ -334,6 +450,8 @@ def build(rng):
         if abs(z - TREE_Z) < 6.0:
             continue
         x = edge_x(z, rng.uniform(1.0, 3.0))
+        if not _cop(x, z, 9.0):
+            continue
         G += bush(rng, x, z, rng.uniform(1.0, 2.2), rng.uniform(1.2, 2.6), RUST_SH, RUST_LI, size=0.3, blossom=rng.random() < 0.6)
     # ---- woods closing the west and the north: autumn, frost, spring
     far_sh = pal((132, 104, 150), (150, 110, 140), (118, 110, 160))
@@ -355,13 +473,16 @@ def build(rng):
 
     # ---- fruit trees: the old one on the bank, and a few by the farm
     G += fruit_tree(rng, edge_x(TREE_Z, TREE_BACK), TREE_Z, s=1.7, dens=1.6)
-    for (zz, back, sc_) in ((226.5, 13.0, 1.15), (251.0, 14.5, 1.2), (263.0, 26.0, 1.1), (270.0, 15.0, 1.25), (216.0, 30.0, 1.1), (247.5, 33.0, 1.0)):
-        G += fruit_tree(rng, edge_x(zz, back), zz, s=sc_)
+    from shots import clear_of_path
+    for (zz, back, sc_) in ((205.0, 17.5, 1.2), (216.5, 3.5, 1.15), (221.0, 18.5, 1.25), (229.0, 4.0, 1.1), (250.0, 5.0, 1.2), (246.5, 19.0, 1.25),
+                            (263.0, 26.0, 1.1), (272.0, 14.0, 1.25), (214.0, 32.0, 1.1), (251.0, 36.0, 1.0), (268.0, 5.0, 1.1)):
+        if clear_of_path(edge_x(zz, back), zz, 9.5):
+            G += fruit_tree(rng, edge_x(zz, back), zz, s=sc_)
+    G += farmyard(rng)
 
     # ---- the fence and its gate, the farm, the village over the river (they stand clear when the mist lifts)
     def built(g, snow=None):
         if g is not None:
-            g.fade = f_built
             G.append(g)
         if snow is not None:
             snow.fade = f_snow
@@ -446,14 +567,14 @@ def fruit_shade(env, x, z):
 
 LEAF_LI = pal((255, 214, 90), (250, 186, 70), (255, 232, 130), (240, 150, 64), (226, 110, 60))
 LEAF_SH = pal((190, 120, 80), (170, 100, 100), (204, 140, 70), (150, 90, 90))
-T_FLY = 118.2
+T_FLY = 154.2
 
 
 def leaves(env):
     """Gold leaves let go from the poplars: a few on every gust, and then the wind takes them all."""
     t = env.t
     fl = W.fall()
-    if t < 76 or fl >= 0.999:
+    if env.C[2] < 120.0 or fl >= 0.999:
         return []
     storm = math.sin(math.pi * fl) ** 0.7 if fl > 0 else 0.0        # thickest while the trees are being stripped
 
@@ -461,7 +582,7 @@ def leaves(env):
         d = W.edge(x, z)
         east = x > W.rx(z)
         near = np.where(east, smooth(34.0, 6.0, np.abs(d - 4.0)), 0.25 * smooth(-30.0, 0.0, d))
-        return (0.10 + 0.5 * env.wind(x, z) + 0.55 * storm) * near * smooth(158.0, 172.0, z) * float(smooth(76.0, 84.0, t)) * (1 - fl ** 3)
+        return (0.10 + 0.5 * env.wind(x, z) + 0.55 * storm) * near * smooth(158.0, 172.0, z) * (1 - fl ** 3)
     A = life.falling(env, 421, 1.25, 38.0, 27.0, 1.25 + 1.0 * storm, (1.2 + 2.2 * storm, 0.5 + 0.8 * storm), 0.13, LEAF_SH, LEAF_LI, dens,
                      layers=3, tumble=4.2 + 2.0 * storm, sway=0.6, swirl=0.9 + 0.8 * storm, smin=2.2, aspect=0.62)
     return [(A, dict(reflect=True))]
@@ -591,14 +712,14 @@ def mist(env):
     return out
 
 
-def smoke(tops):
+def smoke(tops, gain=None):
     tops = [np.asarray(p, np.float64) for p in tops]
 
     def act(env):
         t = env.t
-        wb = W.winter()
-        if wb <= 0.05:
+        if env.C[2] < 150.0:
             return []
+        wb = 0.55 + 0.45 * W.winter()
         out = []
         n = 16
         for j, top in enumerate(tops):
@@ -606,7 +727,7 @@ def smoke(tops):
             wob = np.sin(age * 0.9 + j) * 0.25 * age ** 0.7
             P = top[None] + np.stack([0.42 * age + wob, 0.85 * age ** 0.92, 0.2 * age + 0.5 * wob], axis=1)
             L = 0.7 + 0.42 * age
-            a = 0.55 * smooth(0.0, 0.8, age) * (1 - age / 9.0) ** 1.3 * wb * (1 - 0.6 * W.bloom())
+            a = 0.55 * smooth(0.0, 0.8, age) * (1 - age / 9.0) ** 1.3 * (wb * (1 - 0.6 * W.bloom()) if gain is None else gain(t))
             D = unit(np.stack([0.5 + 0 * age, np.ones(n), 0.2 * np.sin(age + j)], axis=1))
             out.append(life.strokes(P, D, L, L * 0.6, SCUM + (np.arange(n) % 4), (0.56, 0.56, 0.74), (0.96, 0.84, 0.80),
                                     N=np.tile(-env.sun * [1, 0, 1] + [0, 0.5, 0], (n, 1)), r=0.2, a=a, smin=2.0, haze=0.6))
@@ -630,9 +751,9 @@ def lamps(frames, rng):
     def act(env):
         lv = float(env.L['lamps'])
         t = env.t
-        wb = W.winter()
-        if wb <= 0.05:
+        if env.C[2] < 150.0:
             return []
+        wb = 1.0
         lit = smooth(order * 0.8, order * 0.8 + 0.2, lv) * on
         flick = 0.9 + 0.1 * np.sin(t * 3.0 + fl)
         dark = life.strokes(pts, (0, 1, 0), 0.8, 0.5, DAB, (0.24, 0.23, 0.38), (0.34, 0.31, 0.44), N=nrm, r=0.2, a=0.8 * (1 - lit) * wb, smin=2.0, bias=0.05)
@@ -755,7 +876,7 @@ def actors(rng):
     PL = pal((255, 250, 246), (255, 240, 242), (252, 224, 232))
     PS = pal((206, 200, 232), (214, 196, 224))
     acts = [leaves,
-            sc_summer.floaters(431, 0.5, 0.11, LEAF_SH, LEAF_LI, leaf_dens, speed=0.3, tmin=76.0, tmax=W.T_WINTER[1] + 1),
+            sc_summer.floaters(431, 0.5, 0.11, LEAF_SH, LEAF_LI, leaf_dens, speed=0.3, tmax=W.T_WINTER[1] + 1),
             sc_summer.floaters(641, 2.3, 1.9, ICE_SH, ICE_LI, ice_dens, speed=0.12, tmin=W.T_WINTER[0], tmax=W.T_THAW[1] + 0.5, aspect=0.6, R=170.0, sunny=2.2),
             sc_summer.floaters(643, 0.9, 0.6, ICE_SH, ICE_LI, ice_dens, speed=0.12, tmin=W.T_WINTER[0], tmax=W.T_THAW[1] + 0.5, aspect=0.62, R=60.0, sunny=2.2),
             sc_summer.floaters(645, 0.42, 0.085, PS, PL, petal_dens, speed=0.3, tmin=W.T_BLOOM[0] + 3),
@@ -763,8 +884,10 @@ def actors(rng):
     tops = [build.farm.top] + [h.top for h in build.village[::3] if hasattr(h, 'top')]
     acts.append(smoke(tops))
     acts.append(lamps([build.farm.frame] + [h.frame for h in build.village], rng))
+    acts.append(smoke([np.array([BONFIRE[0], props.gy(BONFIRE[0], BONFIRE[2]) + 0.5, BONFIRE[2]])], gain=lambda t: 1.3 * (1 - W.fall())))
+    acts += [flock(rng), sails(rng)]
     acts += [snow, rain_rings, rain, blossom_fall]
     # wild geese going south, high over the poplars
-    acts.append(life.geese(84.5, 101.0, (edge_x(250.0, 150.0), 62.0, 330.0), (-13.0, 0.25, -6.0)))
-    acts.append(life.swallows([(edge_x(TREE_Z, -14.0), 5.0, TREE_Z + 4.0), (edge_x(TREE_Z, -30.0), 7.0, TREE_Z - 12.0)], 140.5, 149.0))
+    acts.append(life.geese(101.0, 121.0, (edge_x(250.0, 170.0), 60.0, 350.0), (-13.0, 0.2, -6.0)))
+    acts.append(life.swallows([(edge_x(TREE_Z, -14.0), 5.0, TREE_Z + 4.0), (edge_x(TREE_Z, -30.0), 7.0, TREE_Z - 12.0)], 179.0, 205.0))
     return acts

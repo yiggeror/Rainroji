@@ -18,6 +18,17 @@ BARK_LI = pal((150, 132, 110), (170, 150, 116), (128, 124, 120))
 TREES = []
 
 
+def open_bank(sd, z):
+    """True where a bank of the summer reach is left open (garden on the west, meadow on the east)."""
+    return (sd < 0 and z < 131.0) or (sd > 0 and z < 97.0)
+
+
+def OPEN(x, z):
+    """0 over the open banks, 1 under the trees (for the green shade)."""
+    west = x < W.rx(z)
+    return np.where(west, smooth(128.0, 133.0, z), smooth(93.0, 99.0, z))
+
+
 def river_tree(rng, x, z, h, toward, willow=False, dens=1.0):
     """A tall waterside tree leaning out over the river; `toward` is +1/-1 (x direction of the water)."""
     sb = SB(rng)
@@ -59,9 +70,9 @@ def river_tree(rng, x, z, h, toward, willow=False, dens=1.0):
 
 def summer_shade(env, x, z):
     """Under the trees the banks and the water lie in green shade, pierced by spots of sun."""
-    if env.t < 30 or env.t > 90:
+    if env.C[2] > 200.0:
         return None
-    w = smooth(60.0, 84.0, z) * smooth(151.0, 144.0, z)
+    w = smooth(60.0, 84.0, z) * smooth(151.0, 144.0, z) * OPEN(x, z)
     if w.max() <= 0:
         return None
     sun = smooth(0.60, 0.74, noise(x / 4.2 + 0.25 * np.sin(env.t * 0.5), z / 4.2, 3))
@@ -87,8 +98,6 @@ def water_colour(env, x, z, rnd, rgb, d):
 def reeds(env):
     """Reeds, rushes and yellow flag at the water's edge."""
     t = env.t
-    if t > 100:
-        return []
     out = []
     X, Z, Rn = scatter(env, 771, 0.55, 46.0, 0.2)
     if len(X) == 0:
@@ -96,7 +105,8 @@ def reeds(env):
     d = W.edge(X, Z)
     s = W.season(Z)
     clump = noise(X / 4.0, Z / 4.0, 0)
-    keep = (np.abs(d + 0.1) < 0.9) & (Rn[:, 0] < (0.30 + 0.3 * smooth(0.5, 1.0, s)) * smooth(0.25, 0.6, clump) * 1.6) & (s < 2.3)
+    lawn = np.where(X < W.rx(Z), 1 - 0.85 * smooth(88.0, 94.0, Z) * smooth(130.0, 126.0, Z), 1.0)
+    keep = (np.abs(d + 0.1) < 0.9) & (Rn[:, 0] < lawn * (0.30 + 0.3 * smooth(0.5, 1.0, s)) * smooth(0.25, 0.6, clump) * 1.6) & (s < 2.05 + 0.9 * Rn[:, 4])
     if not keep.any():
         return []
     X, Z, Rn, d, s, clump = X[keep], Z[keep], Rn[keep], d[keep], s[keep], clump[keep]
@@ -112,8 +122,9 @@ def reeds(env):
         aut = (s > 1.5 + 0.5 * Rn[:, 5])[:, None]
         csh = np.where(aut, pick(pal((120, 96, 84), (140, 104, 80)), Rn[:, 4]), pick(pal((30, 92, 80), (44, 106, 76), (28, 76, 96)), Rn[:, 4]))
         cli = np.where(aut, pick(pal((230, 180, 96), (214, 150, 84), (246, 210, 130)), Rn[:, 5]), pick(pal((130, 186, 96), (172, 206, 104), (104, 164, 110)), Rn[:, 5]))
+        nr = smooth(2.2, 5.0, np.sqrt((X - env.C[0]) ** 2 + (Z - env.C[2]) ** 2))      # none right under the lens
         out.append(life.strokes(P, D, hh * 1.05, 0.055 + 0.03 * Rn[:, 2], LENS + (Rn[:, 3] * 4).astype(np.int32), csh, cli,
-                                N=np.tile([0.3, 0.7, -0.2], (n, 1)), r=Rn[:, 1], ph=Rn[:, 5] * 6.28, flex=0.22 * hh, smin=4.0))
+                                N=np.tile([0.3, 0.7, -0.2], (n, 1)), r=Rn[:, 1], ph=Rn[:, 5] * 6.28, flex=0.22 * hh, smin=4.0, a=0.96 * nr))
     # yellow flag iris here and there (spring into summer)
     fl = (Rn[:, 2] < 0.16) & (s < 1.4)
     if fl.any():
@@ -128,7 +139,7 @@ def weeds(env):
     """Long water-weeds streaming in the current, seen when the camera looks down into the river."""
     t = env.t
     h = env.C[1]
-    if h > 9 or t < 34 or t > 84 or env.fw[1] > -0.12:
+    if h > 9 or env.C[2] > 160 or env.fw[1] > -0.12:
         return []
     X, Z, Rn = scatter(env, 551, 0.8, 17.0, 0.0)
     if len(X) == 0:
@@ -165,7 +176,7 @@ def floaters(seed, cell, size, csh, cli, dens, speed=0.38, tmin=0.0, tmax=1e9, a
     """Things lying on the water and going with the current: petals, leaves, ice."""
     def act(env):
         t = env.t
-        if t < tmin or t > tmax or env.C[1] > 45:
+        if t < tmin or t > tmax or env.C[1] > 60:
             return []
         sh = speed * t
         C0 = env.C.copy()
@@ -203,12 +214,13 @@ def ducks(rng, z0, t0, t1):
 
     def act(env):
         t = env.t
-        if t < t0 or t > t1:
+        zc = z0 + 0.22 * (t - t0)
+        far = abs(zc - env.C[2])
+        if far > 110:
             return []
-        u = (t - t0) / (t1 - t0)
-        zc = z0 + 9.0 * u
-        xc = float(W.rx(zc)) - 5.2 + 9.0 * u + 0.5 * np.sin(u * 7.0)
-        hd = np.array([0.72, 0.0, 0.69])
+        xc = float(W.rx(zc)) - 3.6 + 0.9 * np.sin(t * 0.11)
+        hd = np.array([0.22 * np.cos(t * 0.11), 0.0, 1.0])
+        hd /= np.linalg.norm(hd)
         sd = np.array([-hd[2], 0.0, hd[0]])
         P, D, L, Wd, cs, cl = [], [], [], [], [], []
         wk = []
@@ -227,7 +239,7 @@ def ducks(rng, z0, t0, t1):
             for sgn in (-1, 1):
                 wk.append((p - hd * (0.25 * s_ + 0.12) + sd * sgn * 0.10 * s_, hd + sd * sgn * 0.45, 0.42 * s_ + 0.1))
         A = life.strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), DAB + (np.arange(len(P)) % 4), np.array(cs), np.array(cl),
-                         N=np.tile([0.3, 0.8, 0.0], (len(P), 1)), r=0.05, smin=1.6, haze=0.5, bias=0.05)
+                         N=np.tile([0.3, 0.8, 0.0], (len(P), 1)), r=0.05, smin=1.6, haze=0.5, bias=0.05, a=0.96 * float(smooth(110.0, 80.0, far)))
         Wk = life.strokes(np.array([w_[0] for w_ in wk]) + [0, 0.012, 0], np.array([w_[1] for w_ in wk]), np.array([w_[2] for w_ in wk]), 0.03, LENS,
                           (0.80, 0.90, 0.86), (0.86, 0.94, 0.90), r=0.05, a=0.45, smin=1.4, emis=0.6, bias=0.4)
         return [(A, dict(reflect=True)), (Wk, dict(passid=RIPPLE, reflect=False))]
@@ -237,7 +249,7 @@ def ducks(rng, z0, t0, t1):
 def fish_rings(env):
     """A fish rises: a ring opens on the still water and is gone."""
     t = env.t
-    if t < 36 or t > 100 or env.C[1] > 12:
+    if env.C[1] > 12 or W.winter() > 0.5:
         return []
     X, Z, Rn = scatter(env, 577, 5.5, 46.0, 0.0)
     if len(X) == 0:
@@ -245,7 +257,7 @@ def fish_rings(env):
     d = W.edge(X, Z)
     per = 5.0 + 6.0 * Rn[:, 1]
     ph = np.mod(t / per + Rn[:, 2], 1.0)
-    keep = (d < -1.5) & (ph < 0.42) & (Rn[:, 0] < 0.6)
+    keep = (d < -1.5) & (ph < 0.42) & (Rn[:, 0] < 0.6 * (1 - W.winter()))
     if not keep.any():
         return []
     X, Z, Rn, ph = X[keep], Z[keep], Rn[keep], ph[keep] / 0.42
@@ -266,7 +278,7 @@ def fish_rings(env):
 def sunshafts(rng):
     """Sun coming down through the gaps in the leaves: slanting veils of light over the water,
     and in them the dust and midges of a summer noon, turning."""
-    zs = np.arange(74.0, 148.0, 5.2)
+    zs = np.arange(100.0, 148.0, 4.6)
     base = []
     for z in zs:
         z = z + rng.uniform(-1.5, 1.5)
@@ -275,15 +287,17 @@ def sunshafts(rng):
 
     def act(env):
         t = env.t
-        if t < 40 or t > 86:
+        if env.C[2] > 215 or env.C[2] < 20:
             return []
         S = env.sun
         out = []
         m = 7
         f = (np.arange(m) + 0.5) / m
         for (bx, bz, ph, k) in base:
-            if abs(bz - env.C[2]) > 70:
+            dz = abs(bz - env.C[2])
+            if dz > 85:
                 continue
+            k = k * float(smooth(85.0, 45.0, dz))
             top = np.array([bx, 0.0, bz]) + S * (10.5 / max(S[1], 0.3))
             P = top[None] * f[:, None] + np.array([bx, 0.0, bz])[None] * (1 - f[:, None])
             wob = 0.5 + 0.5 * np.sin(t * 0.45 + ph)
@@ -295,11 +309,11 @@ def sunshafts(rng):
 
     def motes(env):
         t = env.t
-        if t < 44 or t > 84:
+        if env.C[2] > 170 or env.C[2] < 40:
             return []
 
         def dens(x, z):
-            return 0.9 * smooth(66.0, 80.0, z) * smooth(150.0, 140.0, z) * smooth(0.45, 0.7, noise(x / 4.2 + 0.25 * np.sin(t * 0.5), z / 4.2, 3))
+            return 0.9 * smooth(96.0, 112.0, z) * smooth(150.0, 140.0, z) * smooth(0.45, 0.7, noise(x / 4.2 + 0.25 * np.sin(t * 0.5), z / 4.2, 3))
         A = life.falling(env, 739, 0.9, 15.0, 5.0, 0.05, (0.12, 0.05), 0.045, pal((250, 236, 170)), pal((255, 250, 210)), dens, layers=3,
                          tumble=1.0, sway=0.5, swirl=0.6, smin=1.2, aspect=0.9, emis=1.0, haze=0.0, round_=True, ground=False, a=0.8)
         return [(A, dict(reflect=False))]
@@ -314,8 +328,10 @@ def dragonflies(pts):
 
     def act(env):
         t = env.t
-        if t < 40 or t > 86:
+        dz = float(np.min(np.abs(pts[:, 2] - env.C[2])))
+        if dz > 60:
             return []
+        dfade = float(smooth(60.0, 35.0, dz))
         k = np.floor(t / 1.6 + ph)                       # a new perch every 1.6 s
         fr = (t / 1.6 + ph) - k
         e = smooth(0.0, 0.22, fr)                        # the dash is quick, then it hangs in the air
@@ -327,9 +343,9 @@ def dragonflies(pts):
         hov = 0.03 * np.sin(t * 30 + ph)
         p = p + [0, 1, 0] * hov[:, None]
         side = unit(np.cross(hd, [0, 1.0, 0]))
-        body = life.strokes(p, hd, 0.11, 0.022, LENS, (0.12, 0.3, 0.62), (0.3, 0.62, 0.92), r=0.1, smin=1.6, haze=0.3)
+        body = life.strokes(p, hd, 0.11, 0.022, LENS, (0.12, 0.3, 0.62), (0.3, 0.62, 0.92), r=0.1, smin=1.6, haze=0.3, a=0.95 * dfade)
         wings = life.strokes(np.concatenate([p + side * 0.05, p - side * 0.05]), np.concatenate([side, side]), 0.11, 0.035, LENS + 1,
-                             (0.8, 0.86, 0.92), (0.96, 0.98, 1.0), r=0.1, smin=1.6, a=0.45 + 0.25 * np.tile(np.sin(t * 40 + ph), 2), haze=0.3)
+                             (0.8, 0.86, 0.92), (0.96, 0.98, 1.0), r=0.1, smin=1.6, a=(0.45 + 0.25 * np.tile(np.sin(t * 40 + ph), 2)) * dfade, haze=0.3)
         return [(life.merge([body, wings]), dict(reflect=True))]
     return act
 
@@ -425,10 +441,11 @@ def caustics(rng):
 
     def act(env):
         t = env.t
-        if abs(env.C[2] - ZB) > 45:
+        dz = abs(env.C[2] - ZB)
+        if dz > 60:
             return []
         w = np.sin(t * 1.7 + ph) * np.sin(t * 0.9 + ph * 2.1 + P[:, 2])
-        al = 0.7 * smooth(0.15, 0.8, w)
+        al = 0.7 * smooth(0.15, 0.8, w) * float(smooth(60.0, 30.0, dz))
         A = life.strokes(P, D, 0.75, 0.16, LENS + (rr * 4).astype(np.int32), (0.72, 0.8, 0.56), (0.9, 0.92, 0.62), r=rr * 0.3,
                          a=al, emis=1.0, smin=3.0, bias=0.06)
         return [(A, dict(reflect=False))]
@@ -444,6 +461,8 @@ def build(rng):
         z = 62.0
         while z < 147.0:
             z += rng.uniform(5.5, 8.5)
+            if open_bank(sd, z):
+                continue
             back = rng.uniform(1.8, 4.5)
             x = float(W.rx(z)) + sd * (float(W.hw(z)) + back)
             h = rng.uniform(10.0, 15.5)
@@ -452,7 +471,7 @@ def build(rng):
             if rng.random() < 0.8:
                 G.append(river_tree(rng, x + sd * rng.uniform(7, 12), z + rng.uniform(-3, 3), rng.uniform(12, 18), -sd, dens=0.8))
     for sd in (-1, 1):
-        ptsl = [(float(W.rx(z)) + sd * (float(W.hw(z)) + 22 + 4 * np.sin(z * 0.2)), z) for z in np.arange(56, 160, 13.0)]
+        ptsl = [(float(W.rx(z)) + sd * (float(W.hw(z)) + (22 if not open_bank(sd, z) else 62) + 4 * np.sin(z * 0.2)), z) for z in np.arange(56, 160, 13.0)]
         G += props.treeline(rng, ptsl, h=17.0, wid=11.0, psh=G_SH, pli=G_LI, size=0.8, dens=0.8, flex=0.15)
     # undergrowth between the trunks, so that the reach is a closed green room
     U_SH = pal((18, 60, 58), (26, 74, 62), (20, 54, 78), (34, 84, 58))
@@ -460,6 +479,10 @@ def build(rng):
     for sd in (-1, 1):
         for back, hh in ((5.5, 4.5), (11.0, 7.5)):
             ptsl = [(float(W.rx(z)) + sd * (float(W.hw(z)) + back + 1.5 * np.sin(z * 0.4)), z) for z in np.arange(60, 150, 7.0)]
+            segs = [(ptsl[i], ptsl[i + 1]) for i in range(len(ptsl) - 1) if not open_bank(sd, ptsl[i][1]) and not open_bank(sd, ptsl[i + 1][1])]
+            for sg in segs:
+                G += props.treeline(rng, list(sg), h=hh * 1.25, wid=6.5, psh=U_SH, pli=U_LI, size=0.46, dens=1.25, flex=0.12)
+            continue
             G += props.treeline(rng, ptsl, h=hh * 1.25, wid=6.5, psh=U_SH, pli=U_LI, size=0.46, dens=1.25, flex=0.12)
     G += bridge(rng)
     return [g for g in G if g is not None]
@@ -471,7 +494,7 @@ def actors(rng):
 
     def pdens(x, z, d):
         return 0.5 * smooth(-10.0, 25.0, z) * smooth(118.0, 70.0, z) * (0.4 + 0.6 * noise(x / 3.0, z / 6.0, 2))
-    acts = [reeds, weeds, floaters(881, 0.42, 0.085, P_SH, P_LI, pdens, tmax=74.0), caustics(rng)]
+    acts = [reeds, weeds, floaters(881, 0.42, 0.085, P_SH, P_LI, pdens), caustics(rng)]
     df = [(float(W.rx(z)) + dx, 0.5 + 0.4 * (i % 3), z) for i, (z, dx) in enumerate(((84, -2), (96, 2.5), (108, -1), (118, 3), (128, -2.5), (138, 1)))]
     acts.append(dragonflies(df))
     PAD_SH = pal((30, 96, 80), (40, 110, 76), (26, 84, 92))
@@ -483,12 +506,12 @@ def actors(rng):
 
     def lily_dens(x, z, d):
         return 0.10 * pad_dens(x, z, d)
-    acts.append(floaters(883, 0.36, 0.36, PAD_SH, PAD_LI, pad_dens, speed=0.0, tmin=30.0, tmax=90.0, aspect=0.78, sunny=0.3))
+    acts.append(floaters(883, 0.36, 0.36, PAD_SH, PAD_LI, pad_dens, speed=0.0, aspect=0.78, sunny=0.3))
     acts.append(floaters(885, 0.36, 0.20, pal((214, 190, 226), (230, 200, 220)), pal((255, 250, 244), (255, 226, 232), (255, 240, 200)), lily_dens,
-                         speed=0.0, tmin=30.0, tmax=90.0, aspect=0.8, sunny=0.3))
+                         speed=0.0, aspect=0.8, sunny=0.3))
     acts.append(fish_rings)
     acts += sunshafts(rng)
-    acts.append(ducks(rng, 93.0, 50.0, 66.0))
+    acts.append(ducks(rng, 104.0, 66.0, 0.0))
     import boat
     acts.append(boat.make(rng))
     return acts

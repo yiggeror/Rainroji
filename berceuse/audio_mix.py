@@ -139,85 +139,108 @@ def build(src):
     mix = np.zeros((N, 2), np.float32)
     ts, C, gust = camera_track()
     gT = np.interp(T, ts, gust).astype(np.float32)
+    TL = shots.TL
+    D = DUR
+
+    def near(point, r0, r1):
+        """Film-time envelope: 1 while the camera is within r0 metres of a place, 0 beyond r1."""
+        d = np.linalg.norm(C[:, [0, 2]] - np.asarray(point)[None, :], axis=1)
+        return np.interp(T, ts, np.clip((r1 - d) / (r1 - r0), 0, 1)).astype(np.float32)
+
+    def blackbirds(times, g0=1.0):
+        ids = ['3476', '3486', '1667', '3494', '1670', '3499']
+        for i, (t0, pan) in enumerate(times):
+            sid = ids[i % len(ids)]
+            place(mix, fade(sfx(src, sid), 0.02, 0.2), t0, (0.05 if sid.startswith('16') else 0.075) * g0, pan)
 
     # ------------------------------------------------------------- music
     mus = load(os.path.join(src, 'music', 'berceuse_edit.wav'))
-    place(mix, mus * 1.9, M0)
+    place(mix, mus * (0.80 / np.abs(mus).max()), M0)          # the loudest bar of the piece sits just under full scale
 
     # ------------------------------------------------------------- spring: an orchard on an April morning
-    spring = env([(0, 0), (2.5, 1), (36, 1), (47, 0.35), (58, 0.0), (DUR, 0)])
+    sp0 = TL['spring_out']
+    spring = env([(0, 0), (2.5, 1), (sp0 - 2, 1), (sp0 + 8, 0.35), (sp0 + 18, 0.0), (D, 0)])
     bed(mix, tame(level(filt(sfx(src, '1906'), 300), -35)), spring, offset=40)
     bed(mix, tame(level(filt(sfx(src, '0912'), 200), -38)), spring, offset=10)
-    bed(mix, tame(level(filt(sfx(src, '1353'), 250, 7000), -41), -18), env([(0, 0), (3, 1), (30, 1), (40, 0), (DUR, 0)]), offset=20)
-    for (sid, t0, g, pan) in (('3476', 5.2, 0.085, -0.5), ('3486', 13.4, 0.07, 0.45), ('1667', 18.6, 0.05, -0.2), ('3494', 23.9, 0.075, 0.6),
-                              ('1670', 29.5, 0.05, -0.6), ('3499', 34.2, 0.055, 0.3)):
-        place(mix, fade(sfx(src, sid), 0.02, 0.2), t0, g, pan)
+    bed(mix, tame(level(filt(sfx(src, '1353'), 250, 7000), -41), -18), env([(0, 0), (3, 1), (sp0 - 8, 1), (sp0 + 2, 0), (D, 0)]), offset=20)
+    blackbirds([(4.6, -0.5), (11.8, 0.45), (17.6, -0.2), (23.4, 0.6), (29.5, -0.6), (34.6, 0.3)])
 
-    # ------------------------------------------------------------- the river
-    river = env([(0, 0), (30, 0), (37, 0.6), (41, 1.0), (49, 1.0), (54, 0.55), (76, 0.5), (79.5, 0.75), (83, 0.6), (98, 0.45),
-                 (104, 0.0), (DUR, 0)])
+    # ------------------------------------------------------------- the river (wherever the camera is low over water)
+    br, au = TL['bridge'], TL['autumn']
+    river = env([(0, 0), (sp0 - 6, 0), (sp0 + 2, 0.7), (TL['summer'], 0.6), (TL['follow'], 0.55), (br - 3, 0.5), (br, 0.75), (au + 2, 0.6),
+                 (TL['ashore'] - 2, 0.45), (TL['ashore'] + 4, 0.12), (TL['wind'], 0.1), (TL['mist'], 0.0), (D, 0)])
     bed(mix, tame(level(filt(sfx(src, '3136'), 150, 9000), -31)), river)
     bed(mix, tame(level(filt(sfx(src, '3137'), 150, 9000), -34)), river, offset=20)
 
-    # ------------------------------------------------------------- summer: the green reach
-    summer = env([(0, 0), (46, 0), (53, 1), (76, 1), (80, 0.25), (84, 0.0), (DUR, 0)])
+    # ------------------------------------------------------------- summer: meadow, garden, the green reach
+    su = TL['summer']
+    summer = env([(0, 0), (su - 6, 0), (su + 2, 1), (br - 4, 1), (br, 0.25), (au + 3, 0.0), (D, 0)])
     bed(mix, tame(level(filt(sfx(src, '2749'), 300), -37)), summer, offset=30)
-    bed(mix, tame(level(filt(sfx(src, '0097'), 300), -40)), summer, offset=5)
+    bed(mix, tame(level(filt(sfx(src, '0097'), 300), -39)), summer, offset=5)
+    import sc_garden
+    garden = near((sc_garden.wb(110.0, 12.0), 110.0), 30.0, 60.0)
+    bed(mix, tame(level(filt(sfx(src, '1353'), 250, 7000), -39), -18), garden, offset=70)          # bees in the flower beds
+    blackbirds([(su + 4.0, 0.5), (su + 12.5, -0.4), (su + 21.0, -0.6), (su + 29.0, 0.3)], 0.8)
     # the oars: one recorded stroke for every stroke of the animated rower
     row = sfx(src, '1514')
     picks = [5.95, 14.95, 19.9, 24.6, 31.1, 37.6, 44.75, 51.45, 57.75, 61.25]
     clips = []
     for p in picks:
-        c = fade(row[int((p - 0.45) * SR):int((p + 2.1) * SR)], 0.15, 0.8)
-        clips.append(filt(c / (np.abs(c).max() + 1e-9), 120))
-    n0 = int(math.ceil((47.0 - boat.T_REF) / boat.T_STROKE))
+        c_ = fade(row[int((p - 0.45) * SR):int((p + 2.1) * SR)], 0.15, 0.8)
+        clips.append(filt(c_ / (np.abs(c_).max() + 1e-9), 120))
+    t_a, t_b = sp0 + 2.0, br - 1.5
+    n0 = int(math.ceil((t_a - boat.T_REF) / boat.T_STROKE))
     k = 0
     while True:
         tc = boat.T_REF + (n0 + k) * boat.T_STROKE
-        if tc > 78.5:
+        if tc > t_b:
             break
         e = Env(tc, shots.PATH, LK.look)
         pos, _ = boat.boat_pose(tc)
         d = float(np.linalg.norm(pos + [0, 0.3, 0] - e.C))
         sx, _, zf, _ = e.project(pos[None])
         pan = float(np.clip((sx[0] - 960) / 960, -1, 1)) * 0.7 if zf[0] > 0 else 0.0
-        g = 0.34 * min(6.0 / max(d, 3.0), 1.3) * float(np.interp(tc, [47, 52, 74, 78.5], [0, 1, 1, 0]))
-        place(mix, clips[k % len(clips)], tc - 0.30, g, pan)
+        g = 0.34 * min(6.0 / max(d, 3.0), 1.3) * float(np.interp(tc, [t_a, t_a + 5, t_b - 4, t_b], [0, 1, 1, 0]))
+        if g > 0.01:
+            place(mix, clips[k % len(clips)], tc - 0.30, g, pan)
         k += 1
 
     # ------------------------------------------------------------- under the bridge: drips, and the arch answering
     drops = sfx(src, '1385')
     dr = np.zeros((int(6.0 * SR), 2), np.float32)
     for (td, src_t, g) in ((0.3, 0.05, 0.5), (1.15, 2.95, 0.8), (1.9, 5.8, 0.4), (2.7, 8.65, 0.9), (3.3, 11.55, 0.5), (4.2, 14.45, 0.7)):
-        c = fade(drops[int(src_t * SR):int((src_t + 0.9) * SR)], 0.01, 0.3)
+        c_ = fade(drops[int(src_t * SR):int((src_t + 0.9) * SR)], 0.01, 0.3)
         i0 = int(td * SR)
-        dr[i0:i0 + len(c)] += c[:len(dr) - i0] * g
+        dr[i0:i0 + len(c_)] += c_[:len(dr) - i0] * g
     dr = filt(dr, 300)
-    place(mix, dr * 0.16 + reverb(dr, 1.5, 0.30, seed=3)[:len(dr)], 78.6)
-    arch = env([(0, 0), (79.0, 0), (80.6, 1), (81.8, 1), (83.2, 0), (DUR, 0)])
+    place(mix, dr * 0.16 + reverb(dr, 1.5, 0.30, seed=3)[:len(dr)], br - 2.0)
+    arch = env([(0, 0), (br - 1.6, 0), (br, 1), (br + 1.2, 1), (br + 2.6, 0), (D, 0)])
     wat = np.zeros((N, 2), np.float32)
     bed(wat, level(filt(sfx(src, '3137'), 200, 6000), -33), arch, offset=8)
-    a0, a1 = int(78.5 * SR), int(86.0 * SR)
-    wet = reverb(wat[a0:a1], 1.4, 0.55, seed=4)
-    place(mix, wet, 78.5)
+    a0, a1 = int((br - 2.1) * SR), int((br + 5.4) * SR)
+    place(mix, reverb(wat[a0:a1], 1.4, 0.55, seed=4), br - 2.1)
 
-    # ------------------------------------------------------------- autumn: wind in the poplars, rooks far off
-    autumn = env([(0, 0), (81.5, 0), (84.5, 1), (98, 1), (103, 1.5), (107, 0.6), (110.5, 0.0), (DUR, 0)])
+    # ------------------------------------------------------------- autumn: wind in the poplars, rooks, the yard
+    wi, mi = TL['wind'], TL['mist']
+    autumn = env([(0, 0), (au - 2, 0), (au + 1.5, 1), (wi, 1), (wi + 6, 1.6), (mi - 1, 0.6), (mi + 4, 0.0), (D, 0)])
     gain = autumn * (0.30 + 1.0 * np.minimum(gT, 1.2))
     bed(mix, tame(level(filt(sfx(src, '0904'), 180), -30)), gain, offset=15)
     bed(mix, tame(level(filt(sfx(src, '0659'), 250), -34)), gain, offset=30)
-    for (sid, t0, g, pan) in (('3464', 88.4, 0.035, -0.5), ('3465', 95.6, 0.03, 0.4)):
+    for (sid, t0, g, pan) in (('3464', au + 5.0, 0.035, -0.5), ('3465', au + 16.0, 0.03, 0.4), ('3464', au + 27.0, 0.028, 0.2)):
         place(mix, filt(fade(sfx(src, sid), 0.02, 0.3), 300, 2600), t0, g, pan)
+    yard = env([(0, 0), (TL['ashore'], 0), (TL['ashore'] + 5, 1), (wi + 2, 1), (wi + 8, 0), (D, 0)])
+    bed(mix, tame(level(filt(sfx(src, '0097'), 400), -42)), yard, offset=40)
 
     # ------------------------------------------------------------- the mist, and winter: almost nothing
-    winter = env([(0, 0), (103, 0), (108, 0.8), (113, 0.6), (128, 0.7), (134, 0.3), (140, 0.0), (DUR, 0)])
+    w0, ss, rn = TL['winter'], TL['sunset'], TL['rain']
+    winter = env([(0, 0), (mi - 3, 0), (mi + 2, 0.8), (w0, 0.6), (ss, 0.7), (rn + 1, 0.3), (rn + 7, 0.0), (D, 0)])
     bed(mix, tame(level(filt(sfx(src, '0147'), 150, 3500), -41)), winter, offset=10)
     bed(mix, tame(level(filt(sfx(src, '0595'), 120, 1800), -40)), winter * (0.5 + 0.6 * gT), offset=5)
     # the magpie: a chatter from the gate, again as it goes, and its wings
     TF = sc_poplars.T_FLY
-    for (sid, dt, g) in (('2764', -5.1, 0.11), ('2766', -4.65, 0.09), ('2767', -0.85, 0.12), ('2765', -0.45, 0.10), ('2764', 0.55, 0.07), ('2766', 2.4, 0.035)):
-        c = fade(sfx(src, sid), 0.005, 0.08)
-        place(mix, filt(c, 400, 7000) + reverb(filt(c, 400, 5000), 0.9, 0.10, seed=6)[:len(c)], TF + dt, g, -0.05)
+    for (sid, dt, g) in (('2764', -4.2, 0.11), ('2766', -3.75, 0.09), ('2767', -0.85, 0.12), ('2765', -0.45, 0.10), ('2764', 0.55, 0.07), ('2766', 2.4, 0.035)):
+        c_ = fade(sfx(src, sid), 0.005, 0.08)
+        place(mix, filt(c_, 400, 7000) + reverb(filt(c_, 400, 5000), 0.9, 0.10, seed=6)[:len(c_)], TF + dt, g, -0.05)
     wings = fade(sfx(src, '0476', 0.25, 2.2), 0.03, 0.5)
     place(mix, filt(wings, 200, 6000), TF - 0.05, 0.9, 0.0)
     # five o'clock from the church across the river - retuned so that it sits inside the music's D flat
@@ -232,31 +255,29 @@ def build(src):
     tgt = min(targets, key=lambda n: abs(n - midi))
     ratio = 2 ** ((tgt - midi) / 12.0)
     up, down = 1000, int(round(1000 * ratio))
-    bell = np.stack([resample_poly(bell[:, c], up, down) for c in (0, 1)], axis=1).astype(np.float32)
+    bell = np.stack([resample_poly(bell[:, c_], up, down) for c_ in (0, 1)], axis=1).astype(np.float32)
     print('bell partial %.1f Hz (midi %.2f) -> %d, ratio %.4f' % (f0, midi, tgt, ratio))
     bell = filt(fade(bell, 0.005, 1.5), 180, 2400)
-    place(mix, bell * 0.10 + reverb(bell, 2.6, 0.12, hi=2500, seed=8)[:len(bell)], 123.2, 1.0, -0.25)
+    place(mix, bell * 0.10 + reverb(bell, 2.6, 0.12, hi=2500, seed=8)[:len(bell)], ss - 3.5, 1.0, -0.25)
 
     # ------------------------------------------------------------- the spring rain, the thaw, and morning again
     rainT = np.array([float(LK.look(t)['rain']) for t in ts])
     rain_env = np.interp(T, ts, rainT).astype(np.float32)
     bed(mix, tame(level(filt(sfx(src, '2679'), 200, 9000), -29), -14), rain_env, offset=2)
     bed(mix, tame(level(filt(sfx(src, '1290'), 250, 8000), -34), -16), rain_env, offset=6)
-    # meltwater falling from the boughs
-    drops = sfx(src, '1384')
-    for (td, src_t, g, pan) in ((136.4, 0.2, 0.10, -0.4), (137.6, 3.05, 0.14, 0.3), (138.5, 5.9, 0.10, -0.1), (139.7, 8.75, 0.16, 0.5), (140.6, 11.65, 0.12, -0.5),
-                                (141.8, 14.55, 0.14, 0.2), (143.1, 17.45, 0.10, -0.3)):
-        c = filt(fade(drops[int(src_t * SR):int((src_t + 0.9) * SR)], 0.01, 0.3), 300)
-        place(mix, c + reverb(c, 0.8, 0.12, seed=11)[:len(c)], td, g, pan)
-    # and the birds that opened the film
-    dawn = env([(0, 0), (138.5, 0), (142.5, 0.9), (146.5, 1.0), (DUR, 0.8)])
+    drops = sfx(src, '1384')                                   # meltwater falling from the boughs
+    for i, (dt, src_t, g, pan) in enumerate(((3.4, 0.2, 0.10, -0.4), (4.6, 3.05, 0.14, 0.3), (5.5, 5.9, 0.10, -0.1), (6.7, 8.75, 0.16, 0.5), (7.6, 11.65, 0.12, -0.5),
+                                              (8.8, 14.55, 0.14, 0.2), (10.1, 17.45, 0.10, -0.3))):
+        c_ = filt(fade(drops[int(src_t * SR):int((src_t + 0.9) * SR)], 0.01, 0.3), 300)
+        place(mix, c_ + reverb(c_, 0.8, 0.12, seed=11)[:len(c_)], rn + dt, g, pan)
+    mo = TL['morning']
+    dawn = env([(0, 0), (mo - 2.5, 0), (mo + 2.5, 0.9), (mo + 8, 1.0), (D - 3, 1.0), (D, 0.8)])
     bed(mix, tame(level(filt(sfx(src, '1906'), 300), -34)), dawn, offset=120)
     bed(mix, tame(level(filt(sfx(src, '0912'), 200), -38)), dawn, offset=60)
-    for (sid, t0, g, pan) in (('3486', 141.6, 0.07, 0.4), ('1667', 143.8, 0.05, -0.3), ('3476', 145.4, 0.075, -0.5)):
-        place(mix, fade(sfx(src, sid), 0.02, 0.2), t0, g, pan)
+    blackbirds([(mo + 1.6, 0.4), (mo + 5.2, -0.3), (mo + 9.4, -0.5), (mo + 13.5, 0.5), (mo + 17.5, -0.2)])
 
     # ------------------------------------------------------------- master
-    mix *= env([(0, 0), (0.4, 1), (DUR - 1.6, 1), (DUR - 0.1, 0), (DUR, 0)])[:, None]
+    mix *= env([(0, 0), (0.4, 1), (D - 2.0, 1), (D - 0.1, 0), (D, 0)])[:, None]
     mix = filt(mix, 28)
     pk = np.abs(mix).max()
     print('peak before limiting %.3f' % pk)

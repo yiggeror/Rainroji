@@ -51,7 +51,7 @@ def apple_tree(rng, x, z, s=1.0, lean=None, dens=1.0):
 
 def orchard_shadow(env, x, z):
     """Dappled shade under the apple trees: each crown throws a soft, broken patch."""
-    if env.t > 62:
+    if env.C[2] > 150.0:
         return None
     S = env.sun
     out = np.zeros(len(x), F)
@@ -69,15 +69,17 @@ def orchard_shadow(env, x, z):
 
 VILLAGE = []
 FIGS = []          # (x, z, radius) of the figures, for their shadows
+SWING_TREE = (-6.4, -1.2)          # the big apple tree with the swing in it
+SWING = (-4.2, -2.6)
 
 PETAL_LI = pal((255, 250, 246), (255, 240, 242), (252, 224, 232), (255, 246, 230))
 PETAL_SH = pal((206, 200, 232), (214, 196, 224), (196, 196, 230), (220, 204, 220))
 
 
 def fig_shadow(env, x, z):
-    if env.t > 60:
-        return None
     S = env.sun
+    if S[1] < 0.2:
+        return None
     out = np.zeros(len(x), F)
     for (fx, fz, r) in FIGS:
         dx = x - (fx - S[0] / S[1] * 0.5)
@@ -88,13 +90,13 @@ def fig_shadow(env, x, z):
 
 def petals(env):
     """Blossom let go by the wind: thick under the trees, carried out over the river."""
-    if env.t > 66:
+    if env.C[2] > 150.0:
         return []
     def dens(x, z):
         g = env.wind(x, z)
         d = W.edge(x, z)
         orch = smooth(70.0, 45.0, z) * np.where(x < W.rx(z), 1.0, 0.25)
-        return (0.22 + 0.5 * g) * orch * float(smooth(1.0, 7.0, env.t))
+        return (0.22 + 0.5 * g) * orch
     A = life.falling(env, 311, 1.0, 30.0, 7.5, 0.55, (0.75, 0.42), 0.10, PETAL_SH, PETAL_LI, dens, layers=3,
                      tumble=3.4, sway=0.45, smin=2.2)
     return [(A, dict(reflect=True))]
@@ -109,19 +111,19 @@ def build(rng):
         for xi in np.arange(5.0, 84.0, 7.4):
             x = W.rx(zi) - W.hw(zi) - xi + rng.normal(0, 1.6)
             z = zi + rng.normal(0, 1.6) + (3.8 if int(xi / 7.4) % 2 else 0.0)
-            if clear_of_path(x, z, 4.3) and W.edge(np.array([x]), np.array([z]))[0] > 2.5 and (x + 3.0) ** 2 + (z + 2.0) ** 2 > 4.6 ** 2:
+            if clear_of_path(x, z, 7.5) and W.edge(np.array([x]), np.array([z]))[0] > 2.5 and (x + 2.5) ** 2 + (z + 4.5) ** 2 > 6.0 ** 2:
                 pts.append((x, z))
-    # the tree the film opens in
-    G.append(apple_tree(rng, -21.5, -45.0, s=1.25, lean=np.array([0.2, 0.3]), dens=1.5))
+    # the big tree with the swing
+    G.append(apple_tree(rng, SWING_TREE[0], SWING_TREE[1], s=1.55, lean=np.array([0.2, 0.1]), dens=1.3))
     for (x, z) in pts:
-        if (x + 21.5) ** 2 + (z + 45.0) ** 2 < 7.0 ** 2:
+        if (x - SWING_TREE[0]) ** 2 + (z - SWING_TREE[1]) ** 2 < 8.0 ** 2:
             continue
         G.append(apple_tree(rng, x, z, s=rng.uniform(0.85, 1.2)))
     surf.SHADOWS.append(orchard_shadow)
     # ---- the far bank: poplars and willows in new leaf, a village and its church
     far_sh = pal((120, 150, 150), (104, 138, 160), (136, 150, 170))
     far_li = pal((186, 214, 130), (206, 224, 150), (164, 200, 128), (226, 230, 170))
-    ptsl = [(W.rx(z) + W.hw(z) + 5 + 3 * np.sin(z * 0.11), z) for z in np.arange(-110, 70, 14.0)]
+    ptsl = [(W.rx(z) + W.hw(z) + 5 + 3 * np.sin(z * 0.11), z) for z in np.arange(-110, 48, 14.0)]
     G += props.treeline(rng, ptsl, h=8.0, wid=6.5, psh=far_sh, pli=far_li, size=0.55, dens=0.9, trunks=(BARK_SH, BARK_LI))
     ptsl = [(W.rx(z) + W.hw(z) + 70 + 10 * np.sin(z * 0.05), z) for z in np.arange(-140, 200, 22.0)]
     G += props.treeline(rng, ptsl, h=13.0, wid=10.0, psh=far_sh, pli=far_li, size=0.9, dens=0.8)
@@ -150,11 +152,11 @@ def build(rng):
 
 
 def actors(rng):
-    a1, f1 = people.reader(rng, -3.9, -3.4, 3.6)
-    a2, f2 = people.child(rng, -1.6, -4.6, 3.3)
+    a1, f1 = people.reader(rng, -0.6, -6.2, -1.0)
+    a2, f2 = people.swinger(rng, SWING[0], SWING[1], 1.5708)
     FIGS.extend([f1, f2])
     surf.SHADOWS.append(fig_shadow)
     homes = [(-10.0, props.gy(-10, -12) + 0.9, -12.0), (-4.0, props.gy(-4, 2) + 0.8, 2.0), (-16.0, props.gy(-16, -22) + 1.1, -22.0),
              (3.0, props.gy(3, 12) + 0.7, 12.0), (-13.0, props.gy(-13, -4) + 1.3, -4.0)]
     sw = [(-2.0, props.gy(-2, -8) + 4.5, -8.0), (8.0, 4.0, 14.0), (-12.0, props.gy(-12, -24) + 5.5, -24.0), (14.0, 3.2, 40.0)]
-    return [a1, a2, petals, life.butterflies(homes), life.swallows(sw, 6.0, 52.0)]
+    return [a1, a2, petals, life.butterflies(homes), life.swallows(sw, 2.0, 44.0)]

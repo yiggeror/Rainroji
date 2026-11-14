@@ -64,7 +64,8 @@ def falling(env, seed, cell, R, H, vy, drift, size, csh, cli, dens, layers=2, tu
         L = size * (0.7 + 0.6 * Rn[:, 1])
         Wd = L * aspect * (1.0 if round_ else (0.35 + 0.65 * np.abs(np.sin(phi * 1.3 + 0.5))))
         N = unit(np.stack([0.6 * np.sin(phi), 0.6 + 0.4 * np.cos(phi * 1.3), 0.6 * np.cos(phi)], axis=1))
-        al = a * smooth(0.0, 0.06, u) * smooth(1.0, 0.94, u)
+        near = np.sqrt((X - env.C[0]) ** 2 + (Y - env.C[1]) ** 2 + (Z - env.C[2]) ** 2)
+        al = a * smooth(0.0, 0.06, u) * smooth(1.0, 0.94, u) * smooth(1.6, 4.0, near) * smooth(R, R * 0.8, near)
         out.append(strokes(np.stack([X, Y, Z], axis=1), D, L, Wd, spr + (Rn[:, 4] * 4).astype(np.int32),
                            pick(csh, Rn[:, 2]), pick(cli, Rn[:, 2]), N=N, r=Rn[:, 1], ph=ph, a=al, smin=smin,
                            emis=emis, haze=haze, bias=0.0))
@@ -79,7 +80,8 @@ def butterflies(homes, col=(1.0, 0.99, 0.94), col2=(0.86, 0.88, 0.97)):
 
     def act(env):
         t = env.t
-        if np.min((homes[:, 0] - env.C[0]) ** 2 + (homes[:, 2] - env.C[2]) ** 2) > 70.0 ** 2:
+        dmin = float(np.sqrt(np.min((homes[:, 0] - env.C[0]) ** 2 + (homes[:, 2] - env.C[2]) ** 2)))
+        if dmin > 90.0:
             return []
         x = homes[:, 0] + 2.2 * (noise(t * 0.16 + ph, ph * 0.7, 0) - 0.5) * 2 + 0.3 * np.sin(t * 3.1 + ph)
         z = homes[:, 2] + 2.2 * (noise(t * 0.14 + ph * 1.3, 3.0 + ph, 1) - 0.5) * 2 + 0.3 * np.cos(t * 2.7 + ph)
@@ -129,8 +131,9 @@ def swallows(centres, t0=0.0, t1=60.0):
 
     def act(env):
         t = env.t
-        if t < t0 or t > t1:
+        if t < t0 - 3 or t > t1 + 3:
             return []
+        fade = float(smooth(t0 - 3, t0, t) * smooth(t1 + 3, t1, t))
         P, D, L, Wd, cs = [], [], [], [], []
         for i in range(n):
             a = t * (0.55 + 0.07 * i) + ph[i]
@@ -145,7 +148,7 @@ def swallows(centres, t0=0.0, t1=60.0):
             p, d, l, w, c = _bird(pos, fw, flap, 0.11, (0.10, 0.12, 0.26), (0.14, 0.16, 0.32), (0.92, 0.86, 0.80), tail=0.9)
             P += p; D += d; L += l; Wd += w; cs += c
         A = strokes(np.array(P), np.array(D), np.array(L), np.array(Wd), LENS + (np.arange(len(P)) % 4), np.array(cs), np.array(cs) * 1.6 + 0.05,
-                    N=np.tile([0.2, 0.9, 0.2], (len(P), 1)), r=0.05, smin=1.4, haze=0.5)
+                    N=np.tile([0.2, 0.9, 0.2], (len(P), 1)), r=0.05, smin=1.4, haze=0.5, a=0.95 * fade)
         return [(A, dict(reflect=True))]
     return act
 

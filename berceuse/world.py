@@ -14,10 +14,10 @@ NOW = 0.0                       # film time, set for every frame (the seasons tu
 Z_BRIDGE = 152.0
 
 # The year on the poplar reach (film seconds).  Nothing switches: every change is a slow one.
-T_FALL = (97.0, 108.0)          # a wind takes the leaves, a few at first and then all of them
-T_WINTER = (105.0, 110.5)       # frost on the twigs, snow on the ground
-T_THAW = (131.5, 139.5)         # the spring rain: ice and snow go
-T_BLOOM = (136.0, 145.0)        # leaf and blossom open
+T_FALL = (128.0, 140.5)          # a wind takes the leaves, a few at first and then all of them
+T_WINTER = (140.0, 146.5)       # frost on the twigs, snow on the ground
+T_THAW = (167.5, 175.5)         # the spring rain: ice and snow go
+T_BLOOM = (172.0, 181.0)        # leaf and blossom open
 
 
 def _ramp(T):
