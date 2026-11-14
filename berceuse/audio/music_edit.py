@@ -14,7 +14,7 @@ def onset_near(t, win=0.5):
     return (a + j) / sr
 bars = [0.2, 4.2, 8.6, 12.3, 15.9, 19.5, 23.1, 26.8, 30.3, 33.8, 37.1, 40.4, 43.9, 47.4, 51.1, 54.7, 58.1, 61.3, 64.7, 68.1, 71.4, 74.5, 78.0, 81.8, 85.3, 88.5, 91.8, 95.0, 98.2, 101.2, 104.5, 108.2, 111.6, 114.6, 117.9, 121.5, 125.5, 128.8, 132.2, 135.8, 139.4, 142.7, 146.2, 150.0, 154.3, 158.2, 162.2, 166.0, 169.9, 173.6, 177.5, 181.3, 184.9, 188.4, 192.1, 196.0, 199.7, 203.3, 206.9, 210.9, 214.4, 217.8, 221.6, 225.7, 229.5, 233.2, 237.1, 241.0]
 on = [onset_near(t, 0.45) for t in bars]
-A_end, B_start = on[30], on[46]      # bars 1-30, then 47 to the end: both are the first bar of a four-bar variation
+A_end, B_start = on[22], on[46]      # bars 1-22, then 47 to the end: each the first bar of a four-bar variation
 print('cut', A_end, '->', B_start)
 xf = int(0.050 * sr); pre = int(0.012 * sr)
 a1 = int(A_end * sr) - pre; b0 = int(B_start * sr) - pre
@@ -25,8 +25,8 @@ out = np.concatenate([A[:-xf], A[-xf:] * np.cos(np.linspace(0, np.pi / 2, xf))[:
 print('duration', len(out) / sr, 'peak', np.abs(out).max())
 out.astype(np.float32).tofile('music/edit48.raw')
 shift = B_start - A_end
-tl = [t for t in on[:30]] + [t - shift for t in on[46:]]
-names = list(range(1, 31)) + list(range(47, 47 + len(on[46:])))
+tl = [t for t in on[:22]] + [t - shift for t in on[46:]]
+names = list(range(1, 23)) + list(range(47, 47 + len(on[46:])))
 json.dump(dict(bars=[[n_, round(float(t), 3)] for n_, t in zip(names, tl)], cut=float(A_end), dur=len(out) / sr), open('music/timeline.json', 'w'))
 print([(n_, round(t, 1)) for n_, t in zip(names, tl)])
 mm = out.mean(1); k = sr * 3

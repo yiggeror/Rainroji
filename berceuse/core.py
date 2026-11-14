@@ -55,6 +55,8 @@ class Env:
     """Everything a shader needs to know about the current frame."""
 
     def __init__(self, t, path, look):
+        if getattr(path, 'warp', None) is not None:
+            t = path.warp(t)                 # film time -> story time (see shots.py, 'pace')
         self.t = float(t)
         v = path.at(t)
         # the camera floats a little, like something carried on air or water

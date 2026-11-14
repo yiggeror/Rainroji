@@ -19,7 +19,7 @@ from core import Env
 import world as W
 
 SR = 48000
-DUR = shots.DUR
+DUR = shots.FILM_DUR            # the soundtrack is laid out in film time; the picture's own clock is story time
 N = int(DUR * SR)
 T = np.arange(N) / SR
 M0 = shots.MUSIC_T0
@@ -139,7 +139,7 @@ def build(src):
     mix = np.zeros((N, 2), np.float32)
     ts, C, gust = camera_track()
     gT = np.interp(T, ts, gust).astype(np.float32)
-    TL = shots.TL
+    TL = {k_: shots.to_film(v_) for k_, v_ in shots.TL.items()}
     D = DUR
 
     def near(point, r0, r1):
@@ -189,14 +189,15 @@ def build(src):
         c_ = fade(row[int((p - 0.45) * SR):int((p + 2.1) * SR)], 0.15, 0.8)
         clips.append(filt(c_ / (np.abs(c_).max() + 1e-9), 120))
     t_a, t_b = sp0 + 2.0, br - 1.5
-    n0 = int(math.ceil((t_a - boat.T_REF) / boat.T_STROKE))
+    n0 = int(math.ceil((shots.to_story(t_a) - boat.T_REF) / boat.T_STROKE))
     k = 0
     while True:
-        tc = boat.T_REF + (n0 + k) * boat.T_STROKE
+        ts_ = boat.T_REF + (n0 + k) * boat.T_STROKE          # story time of this stroke's catch
+        tc = shots.to_film(ts_)
         if tc > t_b:
             break
         e = Env(tc, shots.PATH, LK.look)
-        pos, _ = boat.boat_pose(tc)
+        pos, _ = boat.boat_pose(ts_)
         d = float(np.linalg.norm(pos + [0, 0.3, 0] - e.C))
         sx, _, zf, _ = e.project(pos[None])
         pan = float(np.clip((sx[0] - 960) / 960, -1, 1)) * 0.7 if zf[0] > 0 else 0.0
@@ -237,7 +238,7 @@ def build(src):
     bed(mix, tame(level(filt(sfx(src, '0147'), 150, 3500), -41)), winter, offset=10)
     bed(mix, tame(level(filt(sfx(src, '0595'), 120, 1800), -40)), winter * (0.5 + 0.6 * gT), offset=5)
     # the magpie: a chatter from the gate, again as it goes, and its wings
-    TF = sc_poplars.T_FLY
+    TF = shots.to_film(sc_poplars.T_FLY)
     for (sid, dt, g) in (('2764', -4.2, 0.11), ('2766', -3.75, 0.09), ('2767', -0.85, 0.12), ('2765', -0.45, 0.10), ('2764', 0.55, 0.07), ('2766', 2.4, 0.035)):
         c_ = fade(sfx(src, sid), 0.005, 0.08)
         place(mix, filt(c_, 400, 7000) + reverb(filt(c_, 400, 5000), 0.9, 0.10, seed=6)[:len(c_)], TF + dt, g, -0.05)
@@ -261,7 +262,7 @@ def build(src):
     place(mix, bell * 0.10 + reverb(bell, 2.6, 0.12, hi=2500, seed=8)[:len(bell)], ss - 3.5, 1.0, -0.25)
 
     # ------------------------------------------------------------- the spring rain, the thaw, and morning again
-    rainT = np.array([float(LK.look(t)['rain']) for t in ts])
+    rainT = np.array([float(LK.look(shots.to_story(t))['rain']) for t in ts])
     rain_env = np.interp(T, ts, rainT).astype(np.float32)
     bed(mix, tame(level(filt(sfx(src, '2679'), 200, 9000), -29), -14), rain_env, offset=2)
     bed(mix, tame(level(filt(sfx(src, '1290'), 250, 8000), -34), -16), rain_env, offset=6)

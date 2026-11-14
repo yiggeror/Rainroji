@@ -19,7 +19,7 @@ Recorded and released by Musopen ("The Complete Works of Frédéric Chopin", 201
 **CC0 1.0 / public domain**.
 Source: https://archive.org/details/musopen-chopin-complete-works-flac
 
-The film uses bars 1–30 and bars 47–70 of the recording, joined on the downbeat of a bar, where one
+The film uses bars 1–22 and bars 47–70 of the recording, joined on the downbeat of a bar, where one
 four-bar variation ends and another begins
 (`audio/music_edit.py`); nothing else is altered.
 

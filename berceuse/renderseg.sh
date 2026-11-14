@@ -4,7 +4,7 @@
 # passages then even out), encoded, and joined without re-encoding.
 OUT=$1; H=$2; N=$3; CRF=${4:-14}; P=${5:-4}
 W=$((H*16/9))
-TOTAL=$(python3 -c "import shots; print(int(round(30*shots.DUR)))")
+TOTAL=$(python3 -c "import shots; print(int(round(30*shots.FILM_DUR)))")
 mkdir -p $OUT
 one() {
   i=$1; A=$((TOTAL*i/N)); B=$((TOTAL*(i+1)/N)); f=$OUT/seg_$(printf %02d $i).mp4

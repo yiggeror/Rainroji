@@ -16,7 +16,7 @@ from core import Path
 import look as LK
 from look import c, sundir, key
 
-MUSIC_T0 = 1.0
+MUSIC_T0 = 0.6
 DUR = 200.5
 TZ = 238.0           # the old apple tree on the bank (sc_poplars.TREE_Z)
 SH = 16.0            # the skiff sequence is timed from the boat's own clock (boat.T_REF = 64 + SH)
@@ -67,8 +67,8 @@ KEYS = [
     [100.0, R(170, -2.0), 1.6, 170.0,            E(210, 2), 6.0, 210.0,             60],
     [105.5, E(186, -8), 1.7, 186.0,              E(222, 8), 5.0, 222.0,             60],
     [110.0, E(198, -1), 1.8, 198.0,              E(232, 12), 3.0, 232.0,            58],
-    [115.0, E(210, 9), 1.8, 210.0,               E(244, 13), 1.5, 244.0,            56],
-    [121.0, E(224, 11), 1.8, 224.0,              E(252, 13), 2.0, 252.0,            56],
+    [115.0, E(210, 9), 1.8, 210.0,               E(227, 17), 1.6, 227.0,            56],
+    [121.0, E(224, 11), 1.8, 224.0,              E(246, 8), 0.8, 246.0,             56],
     [127.0, E(233, 13), 2.2, 233.0,              E(256, 12), 3.5, 256.0,            56],
     # --- the wind; up over the yard into the mist
     [133.0, E(236, 18), 8.0, 236.0,              E(250, 6), 10.0, 256.0,            58],
@@ -256,3 +256,26 @@ def _rig(t, C, T):
 
 
 PATH.post = _rig
+
+
+# ------------------------------------------------------------------ pace
+# Everything above is written in "story time".  The film does not play the story at an even
+# speed: where the picture would only repeat itself (a long approach, a long retreat) it moves
+# on faster; where something is happening it takes its time.  (story seconds per film second)
+_PACE = [(0.0, 1.0), (6.0, 1.0), (8.0, 1.3), (20.0, 1.3), (22.0, 1.0), (33.0, 1.0), (36.0, 1.5), (49.0, 1.5), (52.0, 1.25), (59.0, 1.25),
+         (61.0, 1.0), (71.0, 1.0), (74.0, 1.3), (89.0, 1.3), (91.0, 1.0), (96.0, 1.0), (98.5, 1.4), (109.0, 1.4), (111.0, 1.5), (126.5, 1.5),
+         (129.0, 1.1), (148.0, 1.1), (150.0, 1.0), (162.0, 1.0), (164.0, 1.1), (176.0, 1.1), (177.5, 1.0), (182.5, 1.0), (185.0, 1.15), (DUR, 1.15)]
+_ps = np.linspace(0.0, DUR, 4011)
+_pf = np.concatenate([[0.0], np.cumsum(np.diff(_ps) / np.interp(_ps[:-1], [p[0] for p in _PACE], [p[1] for p in _PACE]))])
+FILM_DUR = float(np.round(_pf[-1] * 30) / 30)
+
+
+def to_story(t):
+    return float(np.interp(t, _pf, _ps))
+
+
+def to_film(tau):
+    return float(np.interp(tau, _ps, _pf))
+
+
+PATH.warp = to_story

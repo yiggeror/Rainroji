@@ -4,7 +4,7 @@ import film, shots
 import sc_spring, sc_summer, sc_garden, sc_poplars
 
 film.PATH = shots.PATH
-film.DUR = shots.DUR
+film.DUR = shots.FILM_DUR
 rng = np.random.default_rng(1872)
 film.GROUPS += sc_spring.build(rng)
 film.ACTORS += sc_spring.actors(rng)
