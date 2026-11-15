@@ -154,8 +154,20 @@ def build(rng):
 def actors(rng):
     a1, f1 = people.reader(rng, -0.6, -6.2, -1.0)
     a2, f2 = people.swinger(rng, SWING[0], SWING[1], 1.5708)
-    FIGS.extend([f1, f2])
+    FIGS.append(f1)
     surf.SHADOWS.append(fig_shadow)
+
+    def swing_shadow(env, x, z):
+        """The girl's shadow goes to and fro over the grass with her."""
+        S = env.sun
+        if S[1] < 0.2 or (env.C[0] - SWING[0]) ** 2 + (env.C[2] - SWING[1]) ** 2 > 90.0 ** 2:
+            return None
+        th = 0.46 * np.sin(np.sqrt(9.81 / 2.75) * env.t)
+        hgt = 3.5 - 2.75 * np.cos(th) + 0.3
+        cx = SWING[0] + 2.75 * np.sin(th) - S[0] / S[1] * hgt
+        cz = SWING[1] - S[2] / S[1] * hgt
+        return np.exp(-(((x - cx) / 0.55) ** 2 + ((z - cz) / 0.45) ** 2) ** 1.5).astype(F)
+    surf.SHADOWS.append(swing_shadow)
     homes = [(-10.0, props.gy(-10, -12) + 0.9, -12.0), (-4.0, props.gy(-4, 2) + 0.8, 2.0), (-16.0, props.gy(-16, -22) + 1.1, -22.0),
              (3.0, props.gy(3, 12) + 0.7, 12.0), (-13.0, props.gy(-13, -4) + 1.3, -4.0)]
     sw = [(-2.0, props.gy(-2, -8) + 4.5, -8.0), (8.0, 4.0, 14.0), (-12.0, props.gy(-12, -24) + 5.5, -24.0), (14.0, 3.2, 40.0)]
