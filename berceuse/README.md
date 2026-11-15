@@ -59,11 +59,15 @@ of poplars, turns in the mist, follows a bird.
 
 ```bash
 pip install numpy scipy numba opencv-python-headless
-python3 render.py still frame.png 66            # one 1080p frame at t = 66 s
+python3 render.py still frame.png 66            # one 1080p frame at film time 66 s
 ./renderseg.sh out 1080 16 14 4                 # the whole film: 16 segments, crf 14, 4 at a time -> out/video.mp4
 ./audio/get_sfx.sh SRC/sfx                      # field recordings (see CREDITS.md)
-python3 audio_mix.py SRC out/mix.wav            # needs SRC/music/berceuse_edit.wav (audio/music_edit.py)
-ffmpeg -i out/video.mp4 -i out/mix.wav -c:v copy -c:a aac -b:a 256k out/berceuse.mp4
+python3 audio/music_edit.py                     # cuts the Berceuse (see the paths at the top of the script)
+python3 audio_mix.py SRC out/mix.wav            # needs SRC/music/berceuse_edit.wav and SRC/sfx
+ffmpeg -i out/video.mp4 -i out/mix.wav -c:v libx264 -preset slow -crf 18 -c:a aac -b:a 256k out/berceuse.mp4
 ```
+
+The finished film is 1920x1080, 30 fps, 2 min 51 s (5124 frames); on four cores the picture takes
+about an hour to render.  The video itself is not kept in the repository.
 
 See `CREDITS.md` for music and sound sources.
