@@ -55,13 +55,13 @@ def petal_hook(sf, acc, rng):
     n1 = fbm2(P[:, 0] * 0.9, P[:, 2] * 0.9, 401, 3); n2 = hash2(P[:, 0] * 22.0, P[:, 2] * 22.0, 402)
     cover = np.clip(dn * 1.25 * (0.45 + 0.9 * n1), 0, 1) * (0.55 + 0.45 * (n2 > 0.35))
     cover = np.clip(cover + 0.10 * (n2 > 0.93) * (dn > 0.02), 0, 0.92)
-    tint = np.where((n2 > 0.7)[:, None], srgb('#fbeef2')[None], srgb('#f0bccb')[None])
+    tint = np.where((n2 > 0.7)[:, None], srgb('#fbdfe8')[None], srgb('#f2a4bd')[None])
     sf['alb'][ii] = sf['alb'][ii] * (1 - cover[:, None]) + tint * cover[:, None]
 
 def blossom_tree(w, x, z, h, rng, near=False):
     tips, n = pr.tree(w, (x, 0, z), h, 'plane', rng, col='#3a2f2c', trunk_r=h * 0.03, detail=1.15 if near else 0.9)
-    if near: pr.foliage(w, tips, n_per=150, size=0.085, col='#f7cedb', spread=0.7, rng=rng, col2='#fff6f8', p2=0.5, droop=0.25, glow=0.085)
-    else: pr.foliage(w, tips, n_per=36, size=0.2, col='#f5c8d6', spread=0.75, rng=rng, col2='#fff4f7', p2=0.45, droop=0.25, glow=0.07)
+    if near: pr.foliage(w, tips, n_per=150, size=0.085, col='#ffb4cb', spread=0.7, rng=rng, col2='#ffe6ee', p2=0.42, droop=0.25, glow=0.10)
+    else: pr.foliage(w, tips, n_per=36, size=0.2, col='#ffb0c8', spread=0.75, rng=rng, col2='#ffe2eb', p2=0.4, droop=0.25, glow=0.085)
 
 def gate(w):
     """courtyard gate in a wall along local x: two leaves, a little tiled roof, couplets"""
@@ -168,7 +168,7 @@ def camera():
 
 RENDER = dict(K=K, fog=FOG, hook=petal_hook, bounce_range=70.0, skyamb=1.0, amb_sky=amb_sky)
 GRADE = dict(exposure=3.3, contrast=1.16, sat=1.12, shoulder=1.0, lift=(0.022, 0.022, 0.05), tint_sh=(0.0, -0.004, 0.03))
-PAL = dict(k=96, chroma_w=4.5, extra=[(0.98, 0.86, 0.9), (0.9, 0.7, 0.78)])
+PAL = dict(k=96, chroma_w=5.0, extra=[(1.0, 0.80, 0.87), (0.98, 0.66, 0.78), (0.9, 0.55, 0.68)])
 DENOISE = dict(sl=0.10)
 
 def setup(plate, cam):
@@ -179,10 +179,10 @@ def setup(plate, cam):
     rng = np.random.default_rng(8)
     def petals(**k):
         p = fx.Particles(cam, plate, T=T, vjit=0.35, **k)
-        p.tint = np.array([[1.0, 0.80, 0.86], [1.0, 0.93, 0.95], [0.98, 0.72, 0.80]], np.float32)[rng.integers(0, 3, p.n)]
+        p.tint = np.array([[1.0, 0.60, 0.74], [1.0, 0.78, 0.85], [0.98, 0.52, 0.68]], np.float32)[rng.integers(0, 3, p.n)]
         return p
-    c['pet'] = [petals(n=5200, seed=1, near=24, far=110, vel=(0.30, -0.55, 0.10), size=0.06, dpow=1.0, sway=0.55),
-                petals(n=1500, seed=2, near=8, far=30, vel=(0.38, -0.62, 0.12), size=0.045, dpow=0.6, sway=0.5),
+    c['pet'] = [petals(n=3800, seed=1, near=24, far=110, vel=(0.30, -0.55, 0.10), size=0.075, dpow=1.0, sway=0.6),
+                petals(n=1200, seed=2, near=8, far=30, vel=(0.38, -0.62, 0.12), size=0.055, dpow=0.6, sway=0.55),
                 petals(n=110, seed=3, near=2, far=9, vel=(0.42, -0.7, 0.14), size=0.03, dpow=0.5, sway=0.3, loops=1)]
     # extra petals shed by the big tree itself
     n = 900; tx, tz, th, tr = BLOSSOM[0]
@@ -190,12 +190,12 @@ def setup(plate, cam):
     base = np.stack([tx + r * np.cos(a), rng.uniform(1.5, th * 0.75, n), tz + r * np.sin(a)], 1)
     c['shed'] = fx.custom_particles(cam, plate, base, (0.3, -0.6, 0.1), T, 1, 0.05, seed=5)
     c['shed'].vel = c['shed'].vel * rng.uniform(0.7, 1.3, (n, 1)); c['shed'].sw_a = rng.uniform(0.2, 0.6, n); c['shed'].sw_f = rng.integers(1, 4, n); c['shed'].sw_p = rng.random(n) * 6.28
-    c['shed'].tint = np.array([[1.0, 0.80, 0.86], [1.0, 0.93, 0.95]], np.float32)[rng.integers(0, 2, n)]
+    c['shed'].tint = np.array([[1.0, 0.60, 0.74], [1.0, 0.78, 0.85]], np.float32)[rng.integers(0, 2, n)]
     c['smoke'] = [fx.Smoke(cam, plate, p, n=7, T=T, loops=1, rise=0.8, wind=(0.3, 0, 0.08), r0=0.3, grow=0.45, seed=20 + i, alpha=0.4) for i, p in enumerate(plate.get('chim', []))]
     c['fol'] = np.clip(plate.get('tag1', np.zeros((H, W), np.float32)) * 2.0, 0, 1)
     c['lamp_px'] = cam.project(np.array([L['pos'] for L in c['lamps']]) + np.array([[0, 0.15, 0]]))
     amb = sky(np.array([[0.2, 0.8, 0.1], [-0.4, 0.5, 0.3], [0.1, 0.3, -0.8]], np.float32)).mean(0)
-    c['amb'] = np.array([0.25, 0.15, 0.19], np.float32)
+    c['amb'] = np.array([0.34, 0.20, 0.25], np.float32)
     return c
 
 def gains(ph):

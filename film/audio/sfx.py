@@ -49,8 +49,6 @@ def build(src):
     S['autumn'] = loop(lp(hp(load(src, '0904'), 120), 3200), 30, -37) + loop(lp(load(src, '0080'), 600), 40, -43)
     # snow: wind muffled by snow
     S['snow'] = loop(lp(hp(load(src, '0595'), 70), 520), 30, -38) + loop(lp(load(src, '0080'), 450), 60, -44)
-    # campus (optional scene): summer-night insects, very low
-    S['school'] = loop(lp(load(src, '1470'), 4500), 20, -40)
     return S
 
 if __name__ == '__main__':
