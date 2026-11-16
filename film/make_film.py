@@ -2,14 +2,15 @@
 """Assemble the film and the per-scene loop clips from rendered loop frames + audio.
 make_film.py WORK_DIR OUT_DIR
   WORK_DIR/<scene>_frames.npy   palette-quantised loop frames [n,H,W,3] (run.py <scene> anim)
-  WORK_DIR/../audio/music.wav, WORK_DIR/../audio/sfx/<scene>.wav
+  WORK_DIR/../audio/sfx/<scene>.wav   ambience beds (audio/sfx.py);  the music is audio/music/<MUSIC>
 """
 import sys, os, subprocess
 import numpy as np, soundfile as sf
 
-ORDER = [('roof', 'fog'), ('school', 'campus'), ('rain', 'rain'), ('rail', 'train'), ('snow', 'snow')]   # (scene module, output name)
-FPS = 30; LOOPS = 3; XF = 1.0; FADE_IN = 1.5; TAIL = 3.0
-SR = 44100; SFX_GAIN = 1.0; MUSIC_GAIN = 1.0
+ORDER = [('spring', 'spring'), ('rain', 'summer'), ('autumn', 'autumn'), ('snow', 'winter')]   # (scene module, output name): one scene per season
+MUSIC = 'lullabies_1.mp3'        # audio/music/: HoliznaCC0, CC0
+FPS = 30; LOOPS = 4; XF = 1.0; FADE_IN = 1.5; TAIL = 3.0
+SR = 44100; SFX_GAIN = 1.0; LOOP_SFX_DB = 9.0; MUSIC_DB = -17.0       # the music carries the film; ambience sits well under it
 ENC = ['-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p', '-g', '60', '-movflags', '+faststart']
 
 def ss(x): x = np.clip(x, 0, 1); return x * x * (3 - 2 * x)
@@ -36,7 +37,7 @@ def main(work, out):
     # ---- loop clips: three periods of picture, the ambience bed (itself a seamless loop), no music
     for s, name in ORDER:
         bed, sr = sf.read(f'{aud}/sfx/{s}.wav')
-        tmp = f'{out}/loops/_{name}.wav'; sf.write(tmp, bed[: int(per / FPS * SR)], SR, subtype='PCM_24')
+        tmp = f'{out}/loops/_{name}.wav'; sf.write(tmp, np.tile(bed, (int(np.ceil(per / FPS * SR / len(bed))), 1))[: int(per / FPS * SR)] * 10 ** (LOOP_SFX_DB / 20), SR, subtype='PCM_24')   # on their own the beds can be a little louder
         encode((F[s][i % n0] for i in range(per)), per, W, H, tmp, f'{out}/loops/{name}.mp4', scale)
         os.remove(tmp); print('loop', name, flush=True)
     # ---- the film: scenes back to back with short dissolves, fade in / out
@@ -63,7 +64,11 @@ def main(work, out):
         idx = np.nonzero(env > 0)[0]
         src = (idx - int(t0 * SR)) % L
         mix[idx] += bed[src] * env[idx, None] * SFX_GAIN
-    music, sr = sf.read(f'{aud}/music.wav'); m = min(N, len(music)); mix[:m] += music[:m] * MUSIC_GAIN
+    here = os.path.dirname(os.path.abspath(__file__))
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', f'{here}/audio/music/{MUSIC}', '-ar', str(SR), '-ac', '2', '-c:a', 'pcm_s24le', f'{out}/_music.wav'], check=True)
+    music, sr = sf.read(f'{out}/_music.wav'); os.remove(f'{out}/_music.wav')
+    music = music * (10 ** (MUSIC_DB / 20) / np.sqrt((music ** 2).mean()))          # the track is used as it is, only levelled
+    m = min(N, len(music)); mix[:m] += music[:m]
     g = ss(t / FADE_IN) * ss((total / FPS - t) / TAIL)
     mix *= g[:, None]
     sf.write(f'{out}/_mix.wav', mix, SR, subtype='PCM_24'); loudnorm(f'{out}/_mix.wav', f'{out}/_mixn.wav')

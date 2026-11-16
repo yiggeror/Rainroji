@@ -1,5 +1,15 @@
 # 交接说明（第二轮修改，进行中）
 
+> **进度（随做随更新）**
+> - [x] 音乐选定并放进 `audio/music/`，`make_film.py` 已改为直接用成品曲（`MUSIC = 'lullabies_1.mp3'`）
+> - [x] 音效已做减法并压低（`audio/sfx.py`）
+> - [x] `scenes/spring.py` 春·落花：已定稿并渲染（`spring_frames.npy`）
+> - [x] `scenes/autumn.py` 秋·落叶：已写好、试渲满意，最终循环渲染中/已渲染（`autumn_frames.npy`）
+> - [ ] 先按**春夏秋冬四场**出片：`ORDER = spring, rain(=summer), autumn, snow(=winter)`，每场 4 个循环（36 秒），总长 2:27
+> - [ ] 校园（夏·傍晚火烧云）是**可选的第五场**：做得好再加进去（加进去后改回每场 3 个循环）；`scenes/school.py` 目前还是旧版
+> - [ ] 删除 `scenes/roof.py`、`scenes/rail.py`、`engine/dyn.py`、`audio/music.py`，更新 README / CREDITS / WORKFLOW，重新导出并推送
+
+
 给接手的 agent。先读 [`WORKFLOW.md`](WORKFLOW.md) 了解引擎和流程，再读这份。**这份说明的优先级高于 WORKFLOW.md 里与它冲突的内容。**
 
 ## 1. 用户对第一版（已推送的 `out/`）的评价

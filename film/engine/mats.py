@@ -316,7 +316,8 @@ def pave(S):
 @mat('leaf')
 def leaf(S):
     """leaf cards; col varies per card; faint light transmission is faked by lighting both sides equally (two-sided anyway)"""
-    return np.clip(S.col * (0.65 + 0.7 * S.seed)[:, None], 0, 1)
+    alb = np.clip(S.col * (0.65 + 0.7 * S.seed)[:, None], 0, 1)
+    return dict(alb=alb, emis=alb * S.prm[:, 0:1])       # prm0: a little self-glow (petals that seem to hold the light)
 
 @mat('gravel')
 def gravel(S):

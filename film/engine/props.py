@@ -622,7 +622,7 @@ def wall_text(w, text, x, y, size=1.5, fg='#9c342a', bg=None, vertical=True, fon
     else: W_, H_ = size * (1.08 * n + 0.4), size * 1.4
     w.quads((x, y - H_, z), (x + W_, y - H_, z), (x + W_, y, z), (x, y, z), mat='tex', prm=(tid, W_, H_, 0.0), tag=TAG_NOSNOW)
 
-def foliage(w, tips, n_per=10, size=0.16, col='#3f5a2e', spread=0.5, rng=None, droop=0.2, col2=None, p2=0.0):
+def foliage(w, tips, n_per=10, size=0.16, col='#3f5a2e', spread=0.5, rng=None, droop=0.2, col2=None, p2=0.0, glow=0.0):
     """leaf cards around twig tips (world coords)."""
     rng = rng or w.rng
     tips = np.asarray(tips); N = len(tips) * n_per
@@ -632,7 +632,7 @@ def foliage(w, tips, n_per=10, size=0.16, col='#3f5a2e', spread=0.5, rng=None, d
     cc = np.tile(srgb(col)[None], (N, 1))
     if col2 is not None:
         m = rng.random(N) < p2; cc[m] = srgb(col2)
-    w.quads(c - a * s - b * s * 0.7, c + a * s - b * s * 0.7, c + a * s + b * s * 0.7, c - a * s + b * s * 0.7, mat='leaf', col=cc, tag=TAG_FOLIAGE, mask=MASK_THIN, local=False)
+    w.quads(c - a * s - b * s * 0.7, c + a * s - b * s * 0.7, c + a * s + b * s * 0.7, c - a * s + b * s * 0.7, mat='leaf', col=cc, prm=(glow, 0, 0, 0), tag=TAG_FOLIAGE, mask=MASK_THIN | MASK_NOBOUNCE, local=False)
 
 def trike(w, col='#3a5a48'):
     """flatbed cargo tricycle, origin at ground centre, pointing +x"""
