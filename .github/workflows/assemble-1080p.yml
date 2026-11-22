@@ -1,0 +1,58 @@
+name: Assemble Rainroji 1080p four-season film
+
+on:
+  push:
+    branches:
+      - deliver/four-seasons-1080p
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  assemble-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Download original three segments (immutable commit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://raw.githubusercontent.com/yiggeror/Rainroji/740ff60453c8a8bd5eb61eddd6a242077827e346/film/out"
+          mkdir -p parts
+          for part in 1 2 3; do
+            curl -fLsS --retry 5 --retry-delay 3 "$base/film_${part}.mp4" -o "parts/film_${part}.mp4"
+            test -s "parts/film_${part}.mp4"
+          done
+          printf "file 'film_1.mp4'\nfile 'film_2.mp4'\nfile 'film_3.mp4'\n" > parts/concat.txt
+      - name: Losslessly join video and audio without transcoding
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v ffmpeg || sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffmpeg -hide_banner -v error -y -f concat -safe 0 -i parts/concat.txt -c copy -movflags +faststart Rainroji_Four_Seasons_1080p.mp4
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of default=noprint_wrappers=1:nokey=1 Rainroji_Four_Seasons_1080p.mp4)" = 1920
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=noprint_wrappers=1:nokey=1 Rainroji_Four_Seasons_1080p.mp4)" = 1080
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 Rainroji_Four_Seasons_1080p.mp4)" = 30/1
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 Rainroji_Four_Seasons_1080p.mp4
+          sha256sum Rainroji_Four_Seasons_1080p.mp4
+      - name: Preserve assembled MP4 as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rainroji_Four_Seasons_1080p
+          path: Rainroji_Four_Seasons_1080p.mp4
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Publish original-quality MP4 for direct download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "rainroji-four-seasons-1080p" Rainroji_Four_Seasons_1080p.mp4 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "740ff60453c8a8bd5eb61eddd6a242077827e346" \
+            --title "暂住 / only temporary — 四季像素短片 1080p" \
+            --notes "四场景（春、夏、秋、冬）完整版，1920×1080、30 fps、2分27秒，音视频均由仓库 film/out/film_1.mp4、film_2.mp4、film_3.mp4 采用 ffmpeg 流拷贝无损拼接，无重新编码。" \
+            --latest=false
